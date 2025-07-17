@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH -J run
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=40
+# 20 cpus per gpu
+#SBATCH --gres=gpu:0
+# 3GPUs for 1B+, 2GPUs for 760M
+#SBATCH --ntasks-per-node=3
+
+#! specify node
+#SBATCH -w ruapehu
+#SBATCH --output=tests_new/%x.%j.ans
+
+# Run the training script
+export CXX=g++
+MAX_JOBS=12 uv pip -v install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl --no-build-isolation
+# uv pip install "flash-attn==2.6.3" --no-build-isolation
