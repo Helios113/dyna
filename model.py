@@ -6,12 +6,13 @@ from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from dataclasses import dataclass
 from flash_attn.ops.triton.layer_norm import RMSNorm
 from composer.models import HuggingFaceModel
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
-
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig
+from omegaconf import DictConfig
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
 )
+
 
 @dataclass
 class AttentionMask:
@@ -24,13 +25,13 @@ def log_mean(x: torch.Tensor, dim: int = 0):
 
 
 def entropy_l(l: torch.Tensor) -> torch.Tensor:
-    return - (l * l.exp()).sum(-1)
+    return -(l * l.exp()).sum(-1)
 
 
 def entropy_reg(sel: torch.Tensor, dim: int) -> torch.Tensor:
     sel = F.log_softmax(sel, dim=-1)
     sel = log_mean(sel, dim)
-    return - entropy_l(sel).mean()
+    return -entropy_l(sel).mean()
 
 
 KVCache = Optional[Dict[str, torch.Tensor]]
@@ -45,14 +46,19 @@ class MoEUTOutput:
 
 
 class SigmaMoE(torch.nn.Module):
-    def __init__(self, dmodel: int, n_experts: int, expert_size: int, k: int,
-                 activation=F.relu,
-                 v_dim: Optional[int] = None,
-                 expert_dropout: float = 0.0):
-
+    def __init__(
+        self,
+        d_model: int,
+        n_experts: int,
+        expert_size: int,
+        k: int,
+        activation=F.relu,
+        v_dim: Optional[int] = None,
+        expert_dropout: float = 0.0,
+    ):
         super().__init__()
-        self.k_dim = dmodel
-        self.v_dim = v_dim if v_dim is not None else dmodel
+        self.k_dim = d_model
+        self.v_dim = v_dim if v_dim is not None else d_model
         self.n_experts = n_experts
         self.expert_size = expert_size
         self.size = self.n_experts * self.expert_size
@@ -63,15 +69,23 @@ class SigmaMoE(torch.nn.Module):
 
         self.sel_hist = []
 
-        self.keys = torch.nn.Parameter(torch.empty(self.n_experts, self.k_vec_dim, self.expert_size))
-        self.values = torch.nn.Parameter(torch.empty(self.n_experts, self.expert_size, self.v_dim))
-        self.expert_sel = torch.nn.Parameter(torch.empty(self.n_experts, self.k_vec_dim))
+        self.keys = torch.nn.Parameter(
+            torch.empty(self.n_experts, self.k_vec_dim, self.expert_size)
+        )
+        self.values = torch.nn.Parameter(
+            torch.empty(self.n_experts, self.expert_size, self.v_dim)
+        )
+        self.expert_sel = torch.nn.Parameter(
+            torch.empty(self.n_experts, self.k_vec_dim)
+        )
 
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
         torch.nn.init.normal_(self.expert_sel, 0, std_scale / math.sqrt(self.k_dim))
         torch.nn.init.normal_(self.keys, 0, std_scale / math.sqrt(self.k_dim))
-        torch.nn.init.normal_(self.values, 0, std_scale / math.sqrt(self.n_experts * self.expert_size))
+        torch.nn.init.normal_(
+            self.values, 0, std_scale / math.sqrt(self.n_experts * self.expert_size)
+        )
 
         self.renorm_keep_std(self.expert_sel, dim=1)
 
@@ -90,9 +104,13 @@ class SigmaMoE(torch.nn.Module):
         self.sel_hist = []
         return loss
 
-    def forward(self, input: torch.Tensor, sel_input: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, input: torch.Tensor, sel_input: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Selection score calculation
-        sel = F.linear(sel_input if sel_input is not None else input, self.expert_sel, None)
+        sel = F.linear(
+            sel_input if sel_input is not None else input, self.expert_sel, None
+        )
         if self.training:
             self.sel_hist.append(sel)
 
@@ -125,9 +143,16 @@ class SigmaMoE(torch.nn.Module):
 
 
 class SwitchHeadCore(torch.nn.Module):
-    def __init__(self, d_model: int, n_heads: int, n_experts: int, dropout: float = 0.0,
-                 projection_size: Optional[int] = None, expert_dropout: float = 0.0, moe_k: int = 2):
-
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        n_experts: int,
+        dropout: float = 0.0,
+        d_head: Optional[int] = None,
+        expert_dropout: float = 0.0,
+        moe_k: int = 2,
+    ):
         super().__init__()
 
         self.input_size = d_model
@@ -143,22 +168,46 @@ class SwitchHeadCore(torch.nn.Module):
 
         self.n_heads = n_heads
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
-        self.projection_size = projection_size or (d_model // n_heads)
+        self.d_head = d_head or (d_model // n_heads)
 
-        self.q = torch.nn.Linear(self.input_size, self.projection_size * self.n_heads, bias=False)
-        self.k = torch.nn.Linear(self.input_size, self.projection_size * self.n_heads, bias=False)
+        self.q = torch.nn.Linear(
+            self.input_size, self.d_head * self.n_heads, bias=False
+        )
+        self.k = torch.nn.Linear(
+            self.input_size, self.d_head * self.n_heads, bias=False
+        )
 
         if self.n_experts > 1:
-            self.v = torch.nn.Parameter(torch.empty(self.n_heads * self.n_experts, self.input_size, self.projection_size))
-            self.o = torch.nn.Parameter(torch.empty(self.n_heads * self.n_experts, self.projection_size, self.output_size))
-            self.sel_v = torch.nn.Parameter(torch.empty(self.n_heads * self.n_experts, self.input_size))
+            self.v = torch.nn.Parameter(
+                torch.empty(self.n_heads * self.n_experts, self.input_size, self.d_head)
+            )
+            self.o = torch.nn.Parameter(
+                torch.empty(
+                    self.n_heads * self.n_experts,
+                    self.d_head,
+                    self.output_size,
+                )
+            )
+            self.sel_v = torch.nn.Parameter(
+                torch.empty(self.n_heads * self.n_experts, self.input_size)
+            )
         else:
-            self.v = torch.nn.Parameter(torch.empty(self.n_heads * self.projection_size, self.input_size))
-            self.o = torch.nn.Parameter(torch.empty(self.output_size, self.n_heads * self.projection_size))
+            self.v = torch.nn.Parameter(
+                torch.empty(self.n_heads * self.d_head, self.input_size)
+            )
+            self.o = torch.nn.Parameter(
+                torch.empty(self.output_size, self.n_heads * self.d_head)
+            )
 
-        self.sel_o = torch.nn.Parameter(torch.empty(self.n_heads * self.n_experts, self.input_size))
+        self.sel_o = torch.nn.Parameter(
+            torch.empty(self.n_heads * self.n_experts, self.input_size)
+        )
 
-        self.register_buffer("scale", torch.full([1], 1.0 / math.sqrt(self.projection_size)), persistent=False)
+        self.register_buffer(
+            "scale",
+            torch.full([1], 1.0 / math.sqrt(self.d_head)),
+            persistent=False,
+        )
 
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
@@ -172,7 +221,9 @@ class SwitchHeadCore(torch.nn.Module):
         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.input_size))
         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.input_size))
         torch.nn.init.normal_(self.v, 0, std_scale / math.sqrt(self.input_size))
-        torch.nn.init.normal_(self.o, 0, std_scale / math.sqrt(self.n_heads * self.projection_size))
+        torch.nn.init.normal_(
+            self.o, 0, std_scale / math.sqrt(self.n_heads * self.d_head)
+        )
 
     def renorm_rows(self, x: torch.Tensor):
         with torch.no_grad():
@@ -183,8 +234,12 @@ class SwitchHeadCore(torch.nn.Module):
     def project_to_torch_order(self, x: torch.Tensor):
         return x.view(*x.shape[:-1], self.n_heads, -1).transpose(-2, -3)
 
-    def get_mask_tensor(self, src_len: int, mask: Optional[AttentionMask]) -> Optional[torch.Tensor]:
-        if mask is None or (mask.position_mask is None and mask.src_length_mask is None):
+    def get_mask_tensor(
+        self, src_len: int, mask: Optional[AttentionMask]
+    ) -> Optional[torch.Tensor]:
+        if mask is None or (
+            mask.position_mask is None and mask.src_length_mask is None
+        ):
             return None
 
         # mask.position_mask: [..., N_out, N_in]
@@ -194,7 +249,7 @@ class SwitchHeadCore(torch.nn.Module):
         if mask.position_mask is not None:
             n_pad = src_len - mask.position_mask.shape[-1]
             if n_pad > 0:
-                pm = F.pad(mask.position_mask, (n_pad, 0), 'constant', value=False)
+                pm = F.pad(mask.position_mask, (n_pad, 0), "constant", value=False)
             else:
                 pm = mask.position_mask
 
@@ -208,28 +263,26 @@ class SwitchHeadCore(torch.nn.Module):
         return m
 
     def get_sel(self, t: torch.Tensor, w: torch.Tensor) -> Tuple[CVMMSel, torch.Tensor]:
-        
-        
+
         # t :  batch_size, seq_len, d_model
         # w : n_heads * n_experts, d_model
-        #print("t", t.shape)
-        #print("w", w.shape)
-        
+        # print("t", t.shape)
+        # print("w", w.shape)
+
         sel = F.linear(t, w).float()
         # sel : batch_size, seq_len, n_heads * n_experts
         sel = sel_raw = sel.view(*sel.shape[:-1], self.n_heads, -1)
         # sel : batch_size, seq_len, n_heads, n_experts
-        
+
         sel = sel.sigmoid()
         # sel : batch_size, seq_len, n_heads, n_experts
-        #print("sel", sel.shape)
+        # print("sel", sel.shape)
 
-
-        #C This tells which token goes to which expert -- here is where we can skip ?
+        # C This tells which token goes to which expert -- here is where we can skip ?
         with torch.no_grad():
             if self.expert_dropout > 0 and self.training:
                 mask = torch.rand_like(sel) < self.expert_dropout
-                sel2 = sel.masked_fill(mask, float('-inf'))
+                sel2 = sel.masked_fill(mask, float("-inf"))
             else:
                 sel2 = sel
             _, sel_index = sel2.topk(self.moe_k, dim=-1, sorted=False)
@@ -237,34 +290,50 @@ class SwitchHeadCore(torch.nn.Module):
         # sel_index: batch_size, seq_len, n_heads, attn_n_experts
         # sel_val : batch_size, seq_len, n_heads, attn_n_experts
         # sel_val is the per token expert which was assembled
-        
-        
+
         # We have the two experts selected
-        
+
         # This is like a positional encoding, but for the experts?
-        sel_index_shifted = (torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype) * self.n_experts).unsqueeze(-1) + sel_index
+        sel_index_shifted = (
+            torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype)
+            * self.n_experts
+        ).unsqueeze(-1) + sel_index
         # sel_index_shifted : batch_size, seq_len, n_heads, attn_n_experts
-        
+
         # #print("sel_index_shifted", sel_index_shifted.shape)
         # #print((torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype) * self.n_experts).unsqueeze(-1))
-        
-        
-        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2,-1), sel_val), sel_raw
 
-    def attend(self, pos_offset: int, v: torch.Tensor, k: torch.Tensor, q: torch.Tensor,
-               mask: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_raw
+
+    def attend(
+        self,
+        pos_offset: int,
+        v: torch.Tensor,
+        k: torch.Tensor,
+        q: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
     def get_reg_loss(self) -> torch.Tensor:
         loss = 0
         if self.sel_hist:
             for i in range(len(self.sel_hist[0])):
-                loss = loss + entropy_reg(torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4,-3), -3)
+                loss = loss + entropy_reg(
+                    torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
+                    -3,
+                )
         self.sel_hist = []
         return loss
 
-    def forward(self, q_src: torch.Tensor, k_src: torch.Tensor, v_src: torch.Tensor, mask: Optional[AttentionMask],
-                kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:        
+    def forward(
+        self,
+        q_src: torch.Tensor,
+        k_src: torch.Tensor,
+        v_src: torch.Tensor,
+        mask: Optional[AttentionMask],
+        kv_cache: KVCache = None,
+    ) -> Tuple[torch.Tensor, KVCache]:
 
         # q_src, k_src, v_src: [batch_size, sequence_length, d_model]
         pos_offset = q_src.shape[1] - k_src.shape[1]
@@ -274,20 +343,19 @@ class SwitchHeadCore(torch.nn.Module):
 
         q = self.q(q_src)
         k = self.k(k_src)
-        # q : batch_size, seq_len, projection_size * n_heads
-        # k : batch_size, seq_len, projection_size * n_heads
+        # q : batch_size, seq_len, d_head * n_heads
+        # k : batch_size, seq_len, d_head * n_heads
         q = q * scale.type_as(q)
         k = k * scale.type_as(k)
 
         # Wsv, Wso matrices?
-        # Lets 
-        # Values and output expert selection 
+        # Lets
+        # Values and output expert selection
         if self.n_experts > 1:
             v_sel, v_sel_raw = self.get_sel(k_src, self.sel_v)
             o_sel, o_sel_raw = self.get_sel(q_src, self.sel_o)
             if self.training:
                 self.sel_hist.append((o_sel_raw, v_sel_raw))
-            
 
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
@@ -300,10 +368,7 @@ class SwitchHeadCore(torch.nn.Module):
         if kv_cache is not None:
             v = torch.cat([kv_cache["v"], v], dim=-2) if "v" in kv_cache else v
             k = torch.cat([kv_cache["k"], k], dim=-2) if "k" in kv_cache else k
-            kv_cache = {
-                "v": v,
-                "k": k
-            }
+            kv_cache = {"v": v, "k": k}
 
         q = self.dropout(q)
         res = self.attend(pos_offset, v, k, q, self.get_mask_tensor(v.shape[-2], mask))
@@ -342,20 +407,38 @@ class RotaryPosEncoding(torch.nn.Module):
             (-x2, x1), dim=x1.ndim - 1
         )  # dim=-1 triggers a bug in torch < 1.8.0
 
-    def apply_rot(self, x: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor, seq_dim: int, offset: int) -> torch.Tensor:
+    def apply_rot(
+        self,
+        x: torch.Tensor,
+        sin: torch.Tensor,
+        cos: torch.Tensor,
+        seq_dim: int,
+        offset: int,
+    ) -> torch.Tensor:
         sin = sin.narrow(seq_dim, offset, x.shape[seq_dim])
         cos = cos.narrow(seq_dim, offset, x.shape[seq_dim])
         return (x * cos) + (self.rotate_half(x) * sin)
 
-    def apply_rotary_pos_emb(self, q: torch.Tensor, k: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor,
-                             seq_dim: int, offset: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.apply_rot(q, sin, cos, seq_dim, offset), self.apply_rot(k, sin, cos, seq_dim, 0)
+    def apply_rotary_pos_emb(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        sin: torch.Tensor,
+        cos: torch.Tensor,
+        seq_dim: int,
+        offset: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.apply_rot(q, sin, cos, seq_dim, offset), self.apply_rot(
+            k, sin, cos, seq_dim, 0
+        )
 
     def get(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         seq_len = x.shape[self.seq_dim]
         if seq_len > self.seq_len_cached:
             self.seq_len_cached = seq_len
-            t = torch.arange(x.shape[self.seq_dim], device=x.device).type_as(self.inv_freq)
+            t = torch.arange(x.shape[self.seq_dim], device=x.device).type_as(
+                self.inv_freq
+            )
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
 
@@ -368,37 +451,55 @@ class RotaryPosEncoding(torch.nn.Module):
 
         return self.sin_cached, self.cos_cached
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, pos_offset: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, q: torch.Tensor, k: torch.Tensor, pos_offset: int = 0
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         sin, cos = self.get(k)
         return self.apply_rotary_pos_emb(q, k, sin, cos, self.seq_dim, pos_offset)
 
 
 class SwitchHeadRope(SwitchHeadCore):
-    def __init__(self, d_model: int, n_heads: int, n_experts: int, dropout: float = 0.0,
-                 projection_size: Optional[int] = None, expert_dropout: float = 0.0, moe_k: int = 2,
-                 rotate_fraction: float = 0.5, rope_base: float = 10000):
-
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        n_experts: int,
+        dropout: float = 0.0,
+        d_head: int | None = None,
+        expert_dropout: float = 0.0,
+        moe_k: int = 2,
+        rotate_fraction: float = 0.5,
+        rope_base: float = 10000,
+    ):
         super().__init__(
-            d_model, n_heads, n_experts, dropout, projection_size, expert_dropout, moe_k)
-
-        self.n_rotate = int(rotate_fraction * self.projection_size)
+            d_model, n_heads, n_experts, dropout, d_head, expert_dropout, moe_k
+        )
+        self.n_rotate = int(rotate_fraction * self.d_head)
         if self.n_rotate > 0:
             self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
-    def rotate(self, q: torch.Tensor, k: torch.Tensor, offset: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.n_rotate < self.projection_size:
-            r_k = k[..., :self.n_rotate]
-            nr_k = k[..., self.n_rotate:]
-            r_q = q[..., :self.n_rotate]
-            nr_q = q[..., self.n_rotate:]
+    def rotate(
+        self, q: torch.Tensor, k: torch.Tensor, offset: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.n_rotate < self.d_head:
+            r_k = k[..., : self.n_rotate]
+            nr_k = k[..., self.n_rotate :]
+            r_q = q[..., : self.n_rotate]
+            nr_q = q[..., self.n_rotate :]
 
             r_q, r_k = self.pe(r_q, r_k, offset)
             return torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1)
         else:
             return self.pe(q, k, offset)
 
-    def attend(self, pos_offset: int, v: torch.Tensor, k: torch.Tensor, q: torch.Tensor,
-               mask: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def attend(
+        self,
+        pos_offset: int,
+        v: torch.Tensor,
+        k: torch.Tensor,
+        q: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         if self.n_rotate > 0:
             q, k = self.rotate(q, k, pos_offset or 0)
@@ -406,86 +507,123 @@ class SwitchHeadRope(SwitchHeadCore):
         return F.scaled_dot_product_attention(q, k, v, ~mask, scale=1.0)
 
 
+#  d_model: int,
+#         n_heads: int,
+#         ff_expert_size: int,
+#         ff_n_experts: int,
+#         att_n_experts: int,
+#         d_head: Optional[int] = None,
+#         att_k: int = 2,
+#         ff_k: int = 8,
+#         ff_expert_dropout: float = 0.0,
+#         att_expert_dropout: float = 0.0,
+#         dropout: float = 0.0,
+#         attention=SwitchHeadRope,
 class MoEUTLayer(torch.nn.Module):
-    def __init__(self, d_model: int, n_heads: int, ff_expert_size: int, ff_n_experts: int,
-                 att_n_experts: int, d_head: Optional[int] = None, att_k: int = 2,
-                 ff_k: int = 8, ff_expert_dropout: float = 0.0, att_expert_dropout: float = 0.0,
-                 dropout: float = 0.0, attention = SwitchHeadRope):
-
+    def __init__(self, config: DictConfig):
         super().__init__()
         # Attention MoE
-        self.attention = attention(
-            d_model, n_heads, att_n_experts, projection_size=d_head, moe_k=att_k,
-            expert_dropout=att_expert_dropout)
-        
+        self.attention = SwitchHeadRope(
+            config.d_model,
+            config.n_heads,
+            config.att_n_experts,
+            d_head=config.d_head,
+            moe_k=config.att_k,
+            expert_dropout=config.att_expert_dropout,
+        )
         # FFN MoE
-        self.ffn = SigmaMoE(d_model, ff_n_experts, ff_expert_size, k=ff_k, expert_dropout=ff_expert_dropout)
-        
-        
-        self.ln1 = RMSNorm(d_model)
-        self.ln2 = RMSNorm(d_model)
-        self.drop = torch.nn.Dropout(dropout)
+        self.ffn = SigmaMoE(
+            config.d_model,
+            config.ff_n_experts,
+            config.ff_expert_size,
+            k=config.ff_k,
+            expert_dropout=config.ff_expert_dropout,
+        )
+        self.ln1 = RMSNorm(config.d_model)
+        self.ln2 = RMSNorm(config.d_model)
+        self.drop = torch.nn.Dropout(config.dropout)
 
-    def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None, kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[AttentionMask] = None,
+        kv_cache: KVCache = None,
+    ) -> Tuple[torch.Tensor, KVCache]:
         # x shape batch_size x seq_len x d_model
         # here we prenorm
         xnorm = self.ln1(x)
-        
-        #print("xnorm",xnorm.shape)
+
+        # print("xnorm",xnorm.shape)
         # xnorm shape batch_size x seq_len x d_model
-        
+
         att, kv_cache = self.attention(xnorm, xnorm, x, mask, kv_cache=kv_cache)
         # att shape batch_size x seq_len x d_model
         x = x + self.drop(att)
-        
+
         # here we prenorm
         upd = self.ffn(x, self.ln2(x))
         # upd shape batch_size x seq_len x d_model
-        
+
         return x + upd, kv_cache
 
 
-class MoEUT(torch.nn.Module):
-    def __init__(self, d_model: int, n_layers: int, n_heads: int, ff_expert_size: int, ff_n_experts: int,
-                 att_n_experts: int, d_head: Optional[int] = None, att_k: int = 2,
-                 ff_k: int = 8, ff_expert_dropout: float = 0.0, att_expert_dropout: float = 0.0,
-                 dropout: float = 0.0, entropy_reg: float = 0.01, att_entropy_reg: float = 0.001,
-                 attention = SwitchHeadRope, group_size: int = 2):
+class MoEUTConfig(PretrainedConfig):
+    pass
+
+
+class MoEUTPretrainedModel(PreTrainedModel):
+    config_class = MoEUTConfig
+    base_model_prefix: str = "mouet"
+    is_parallelizable: bool = False
+    main_input_name: str = "input_ids"
+    load_tf_weights = None
+
+    # - **model** ([`PreTrainedModel`]) -- An instance of the model on which to load the TensorFlow checkpoint.
+    # - **config** ([`PreTrainedConfig`]) -- An instance of the configuration associated to the model.
+    # - **path** (`str`) -- A path to the TensorFlow checkpoint.
+
+
+class MoEUT(MoEUTPretrainedModel):
+    def __init__(
+        self,
+        config: DictConfig,
+    ):
         super().__init__()
 
-        self.entropy_reg = entropy_reg
-        self.att_entropy_reg = att_entropy_reg
+        self.entropy_reg = config.entropy_reg
+        self.att_entropy_reg = config.att_entropy_reg
 
-        self.n_repeats = n_layers // group_size
-        self.layers = torch.nn.ModuleList([
-            MoEUTLayer(d_model, n_heads, ff_expert_size, ff_n_experts, att_n_experts, d_head, att_k, ff_k,
-                       ff_expert_dropout, att_expert_dropout, dropout, attention)
-            for _ in range(group_size)
-        ])
-        
+        self.n_repeats = config.n_layers // config.group_size
+        self.layers = torch.nn.ModuleList(
+            [MoEUTLayer(config) for _ in range(config.group_size)]
+        )
+
         self.reset_parameters()
 
-    def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None,
-                kv_cache: MultilayerKVCache = None) -> MoEUTOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[AttentionMask] = None,
+        kv_cache: MultilayerKVCache = None,
+    ) -> MoEUTOutput:
         # x input of shape batch_size x seq_len x d_model
-        
+
         new_cache = {}
-        
-        
+
         # populate the kv cache based on absolute index of layer
         # Execute the layer
         for r in range(self.n_repeats):
             for layer_index, layer in enumerate(self.layers):
-                layer_index_abs = r*len(self.layers)+layer_index
-                cache = kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
-                
-                
+                layer_index_abs = r * len(self.layers) + layer_index
+                cache = (
+                    kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
+                )
+
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
-                x, new_cache[layer_index_abs] = layer(x, mask, kv_cache = cache)
+                x, new_cache[layer_index_abs] = layer(x, mask, kv_cache=cache)
                 # x shape batch_size x seq_len x d_model
-                
-                
+
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
         reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
         for layer in self.modules():
@@ -503,73 +641,126 @@ class MoEUT(torch.nn.Module):
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
             elif isinstance(layer, RMSNorm):
-                layer.register_parameters()
+                layer.reset_parameters()
 
 
-class 
-
-
-class ComposerMoEUT(HuggingFaceModel):
-    def __init__(self, vocab_size: int, d_model: int, n_layers: int, n_heads: int,
-                 ff_n_experts: int, att_n_experts: int, d_head: Optional[int] = None,
-                 group_size: int = 2, ff_k: int = 8,  att_k: int = 2, ff_expert_dropout: float = 0.0,
-                 att_expert_dropout: float = 0.0, ff_expert_size: int = 128, dropout: float = 0.0, 
-                 entropy_reg: float = 0.01, att_entropy_reg: float = 0.001, attention = SwitchHeadRope):
-
-        
-        self.model = MoEUT(d_model, n_layers, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
-                                 d_head, att_k, ff_k, ff_expert_dropout, att_expert_dropout, dropout,
-                                 entropy_reg, att_entropy_reg, attention, group_size)
-
-
-        super().__init__(
-            model=self.model,
-            tokenizer=tokenizer,  # type: ignore
-            use_logits=True,
-            metrics=train_metrics,
-            eval_metrics=eval_metrics,
-            shift_labels=model.transformer.shift_labels,
-            allow_embedding_resizing=True,
-        )
-        self.n_layers = n_layers
-        self.embedding = torch.nn.Embedding(vocab_size, d_model)
-        self.lm_head = torch.nn.Linear(d_model, vocab_size)
-        self.out_norm = RMSNorm(d_model)
+#  vocab_size: int,
+#         d_model: int,
+#         n_layers: int,
+#         n_heads: int,
+#         ff_n_experts: int,
+#         att_n_experts: int,
+#         d_head: Optional[int] = None,
+#         group_size: int = 2,
+#         ff_k: int = 8,
+#         att_k: int = 2,
+#         ff_expert_dropout: float = 0.0,
+#         att_expert_dropout: float = 0.0,
+#         ff_expert_size: int = 128,
+#         dropout: float = 0.0,
+#         entropy_reg: float = 0.01,
+#         att_entropy_reg: float = 0.001,
+#         attention=SwitchHeadRope,
+class MoEUTLM(MoEUTPretrainedModel):
+    def __init__(
+        self,
+        config: DictConfig,
+    ):
+        super().__init__()
+        self.transformer = MoEUT(config)
+        self.n_layers = config.n_layers
+        self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
+        self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size)
+        self.out_norm = RMSNorm(config.d_model)
         self.reset_parameters()
 
     @torch.no_grad
     def reset_parameters(self):
-        torch.nn.init.kaiming_normal_(self.embedding.weight, mode="fan_in", nonlinearity="linear")
+        torch.nn.init.kaiming_normal_(
+            self.embedding.weight, mode="fan_in", nonlinearity="linear"
+        )
         self.transformer.reset_parameters()
 
-    def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None,
-                kv_cache: MultilayerKVCache = None) -> MoEUTOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[AttentionMask] = None,
+        kv_cache: MultilayerKVCache = None,
+    ) -> MoEUTOutput:
 
         # x input of shape batch_size x seq_len -- tokens so ints
         # kv_cache: feed an empty dict to start caching
-        
+
         if mask is None:
             mask = AttentionMask(None, self.generate_causal_attention_mask(x.shape[-1]))
-            
-            
-        
 
         x = self.embedding(x)
         # x shape batch_size x seq_len x d_model
-        #print(x.shape)
+        # print(x.shape)
         out = self.transformer(x, mask, kv_cache)
-        #print(x.shape)
+        # print(x.shape)
         # x shape batch_size x seq_len x d_model
         out.outputs = self.lm_head(self.out_norm(out.outputs))
-        #print(out.outputs.shape)
+        # print(out.outputs.shape)
         # out.outputs shape batch_size x seq_len x vocab_size
         return out
+
     def loss(self, outputs, batch, *args, **kwargs):
         return None
+
     def get_metrics():
         return None
+
     def eval_forward():
         return None
 
     def generate_causal_attention_mask(self, sz: int) -> torch.Tensor:
-        return torch.triu(torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device), diagonal=1)
+        return torch.triu(
+            torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device),
+            diagonal=1,
+        )
+
+
+class ComposerMoEUT(HuggingFaceModel):
+    def __init__(
+        self,
+        config: DictConfig,
+        tokenizer: PreTrainedTokenizerBase | None = None,
+        additional_train_metrics: list | None = None,
+        loss_fn=None,
+    ):
+        model = self.model_class(config)
+        train_metrics = {}
+        eval_metrics = {}
+        super().__init__(
+            model=model,
+            tokenizer=tokenizer,  # type: ignore
+            use_logits=True,
+            metrics=train_metrics,
+            eval_metrics=eval_metrics,
+            shift_labels=config.shift_labels,
+            allow_embedding_resizing=True,
+        )
+
+    @property
+    def model_class(self):
+        return MoEUTLM
+
+    def forward(self, batch) -> CausalLMOutputWithPast:
+        return self.model(
+            input_ids=batch.get("input_ids", None),
+            attention_mask=batch.get("attention_mask", None),
+            sequence_id=batch.get("sequence_id", None),
+            inputs_embeds=batch.get("inputs_embeds", None),
+            position_ids=batch.get("position_ids", None),
+        )
+
+    def loss(self, outputs: CausalLMOutputWithPast, batch) -> dict | torch.Tensor:
+
+        # loss = compute_loss_from_logits(
+        #     outputs,
+        #     self.shift_labels,
+        #     batch["labels"],
+        #     self.loss_fn,
+        # )
+        return {"loss": 0}

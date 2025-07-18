@@ -1,0 +1,19 @@
+model_config:
+  d_model: 768
+  n_heads: 12
+  n_experts: 4
+  expert_size: 192
+  moe_k: 2
+  dropout: 0.1
+trainer_config:
+  max_duration: 1000ba
+  eval_interval: 1
+  eval_subset_num_batches: -1
+  train_dataloader_label: train
+  eval_dataloader_label: validation
+  device_train_microbatch_size: null
+  precision: amp
+  device: cuda
+  parallelism_config:
+    pipeline_parallel_size: null
+    tensor_parallel_size: null
