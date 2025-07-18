@@ -4,14 +4,7 @@ from typing import Tuple, Optional, Dict
 import math
 from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from dataclasses import dataclass
-from flash_attn.ops.triton.layer_norm import RMSNorm
-from composer.models import HuggingFaceModel
-from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
-)
 
 @dataclass
 class AttentionMask:
@@ -422,8 +415,8 @@ class MoEUTLayer(torch.nn.Module):
         self.ffn = SigmaMoE(d_model, ff_n_experts, ff_expert_size, k=ff_k, expert_dropout=ff_expert_dropout)
         
         
-        self.ln1 = RMSNorm(d_model)
-        self.ln2 = RMSNorm(d_model)
+        self.ln1 = torch.nn.LayerNorm(d_model)
+        self.ln2 = torch.nn.LayerNorm(d_model)
         self.drop = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None, kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:
@@ -462,7 +455,7 @@ class MoEUT(torch.nn.Module):
                        ff_expert_dropout, att_expert_dropout, dropout, attention)
             for _ in range(group_size)
         ])
-        
+
         self.reset_parameters()
 
     def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None,
@@ -502,39 +495,27 @@ class MoEUT(torch.nn.Module):
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, RMSNorm):
-                layer.register_parameters()
+            elif isinstance(layer, torch.nn.LayerNorm):
+                torch.nn.init.ones_(layer.weight)
+                torch.nn.init.zeros_(layer.bias)
 
 
-class 
-
-
-class ComposerMoEUT(HuggingFaceModel):
+class MoEUTLM_old(torch.nn.Module):
     def __init__(self, vocab_size: int, d_model: int, n_layers: int, n_heads: int,
                  ff_n_experts: int, att_n_experts: int, d_head: Optional[int] = None,
                  group_size: int = 2, ff_k: int = 8,  att_k: int = 2, ff_expert_dropout: float = 0.0,
                  att_expert_dropout: float = 0.0, ff_expert_size: int = 128, dropout: float = 0.0, 
                  entropy_reg: float = 0.01, att_entropy_reg: float = 0.001, attention = SwitchHeadRope):
 
-        
-        self.model = MoEUT(d_model, n_layers, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
+        super().__init__()
+        self.transformer = MoEUT(d_model, n_layers, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
                                  d_head, att_k, ff_k, ff_expert_dropout, att_expert_dropout, dropout,
                                  entropy_reg, att_entropy_reg, attention, group_size)
 
-
-        super().__init__(
-            model=self.model,
-            tokenizer=tokenizer,  # type: ignore
-            use_logits=True,
-            metrics=train_metrics,
-            eval_metrics=eval_metrics,
-            shift_labels=model.transformer.shift_labels,
-            allow_embedding_resizing=True,
-        )
         self.n_layers = n_layers
         self.embedding = torch.nn.Embedding(vocab_size, d_model)
         self.lm_head = torch.nn.Linear(d_model, vocab_size)
-        self.out_norm = RMSNorm(d_model)
+        self.out_norm = torch.nn.LayerNorm(d_model)
         self.reset_parameters()
 
     @torch.no_grad
@@ -564,12 +545,6 @@ class ComposerMoEUT(HuggingFaceModel):
         #print(out.outputs.shape)
         # out.outputs shape batch_size x seq_len x vocab_size
         return out
-    def loss(self, outputs, batch, *args, **kwargs):
-        return None
-    def get_metrics():
-        return None
-    def eval_forward():
-        return None
 
     def generate_causal_attention_mask(self, sz: int) -> torch.Tensor:
         return torch.triu(torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device), diagonal=1)
