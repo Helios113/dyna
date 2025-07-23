@@ -131,14 +131,14 @@ class SigmaMoE(torch.nn.Module):
             weight.div_(weight.norm(dim=dim, keepdim=True))
             weight.mul_(std / weight.std())
 
-    def get_reg_loss(self) -> torch.Tensor:
-        if not self.sel_hist:
-            return 0
+    # def get_reg_loss(self) -> torch.Tensor:
+    #     if not self.sel_hist:
+    #         return 0
 
-        # Average over time and layers.
-        loss = entropy_reg(torch.stack(self.sel_hist, dim=-2).flatten(-3, -2), -2)
-        self.sel_hist = []
-        return loss
+    #     # Average over time and layers.
+    #     loss = entropy_reg(torch.stack(self.sel_hist, dim=-2).flatten(-3, -2), -2)
+    #     self.sel_hist = []
+    #     return loss
 
     def forward(
         self, input: torch.Tensor, sel_input: Optional[torch.Tensor] = None
@@ -351,16 +351,16 @@ class SwitchHeadCore(torch.nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
-    def get_reg_loss(self) -> torch.Tensor:
-        loss = 0
-        if self.sel_hist:
-            for i in range(len(self.sel_hist[0])):
-                loss = loss + entropy_reg(
-                    torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
-                    -3,
-                )
-        self.sel_hist = []
-        return loss
+    # def get_reg_loss(self) -> torch.Tensor:
+    #     loss = 0
+    #     if self.sel_hist:
+    #         for i in range(len(self.sel_hist[0])):
+    #             loss = loss + entropy_reg(
+    #                 torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
+    #                 -3,
+    #             )
+    #     self.sel_hist = []
+    #     return loss
 
     def forward(
         self,
@@ -595,7 +595,7 @@ class MoEUTLayer(torch.nn.Module):
         xnorm = self.attn_pre(x)
         # Before attention, check if we will continue
     
-        att, kv_cache = self.attention(xnorm, xnorm, x, mask, kv_cache=kv_cache)
+        att, kv_cache = self.attention(xnorm, xnorm, xnorm, mask, kv_cache=kv_cache)
         
         # att shape batch_size x seq_len x d_model
         x = layer_index/(layer_index+1)*x + self.drop(self.attn_post(att))/(layer_index+1)
@@ -670,14 +670,14 @@ class MoEUT(MoEUTPretrainedModel):
                 
                 
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
-        reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
-        for layer in self.modules():
-            if isinstance(layer, SigmaMoE):
-                reg_loss = reg_loss + self.entropy_reg * layer.get_reg_loss()
-            elif isinstance(layer, SwitchHeadCore):
-                reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
+        # reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
+        # for layer in self.modules():
+        #     if isinstance(layer, SigmaMoE):
+        #         reg_loss = reg_loss + self.entropy_reg * layer.get_reg_loss()
+        #     elif isinstance(layer, SwitchHeadCore):
+        #         reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
         
-        return CausalLMOutputWithPast(reg_loss, x, new_cache if kv_cache is not None else None)
+        return CausalLMOutputWithPast(0, x, new_cache if kv_cache is not None else None)
 
     @torch.no_grad
     def reset_parameters(self):
@@ -800,7 +800,6 @@ class ComposerMoEUT(HuggingFaceModel):
         )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> dict | torch.Tensor:
-        print("Calculating loss in MoEUTLM")
         
         loss_fn = torch.nn.CrossEntropyLoss(
             ignore_index=CROSS_ENTROPY_IGNORE_INDEX,
@@ -813,9 +812,6 @@ class ComposerMoEUT(HuggingFaceModel):
             batch['input_ids'] if 'input_ids' in batch else batch['labels'],
             loss_fn,
         )
-        print(loss)
-        print(outputs.loss)
-        print((loss + outputs.loss))
         return (loss)
 
 
