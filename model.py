@@ -12,7 +12,43 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
 )
+CROSS_ENTROPY_IGNORE_INDEX = -100
+def get_targets(labels: torch.Tensor) -> torch.Tensor:
+    targets = torch.roll(labels, shifts=-1)
+    targets[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+    return targets
 
+
+def compute_loss_from_logits(
+    outputs: CausalLMOutputWithPast,
+    shift_labels: bool,
+    labels: torch.Tensor,
+    loss_fn: torch.nn.Module,
+) -> torch.Tensor:
+    targets = get_targets(labels) if shift_labels else labels
+
+    losses = loss_fn(
+        outputs.logits.view(-1, outputs.logits.size(-1)),  # type: ignore
+        targets.view(-1),
+    )
+
+    if torch.all(targets == loss_fn.ignore_index):  # type: ignore
+        loss = losses.sum()
+    else:
+        loss = losses.sum() / (targets
+                            != loss_fn.ignore_index).sum()  # type: ignore
+
+    return loss
+
+class MoEUTConfig(PretrainedConfig):
+    model_type = 'moeut'
+    
+    def __init__(self, config: DictConfig):
+        # Pass a dummy config to PretrainedConfig to satisfy its requirements
+        super().__init__(**{"model_type": self.model_type})
+        self.config = config
+        for key, value in config.items():
+            setattr(self, key, value)
 
 @dataclass
 class AttentionMask:
@@ -120,7 +156,7 @@ class SigmaMoE(torch.nn.Module):
         if self.training and self.expert_dropout > 0:
             mask = torch.rand_like(sel) < self.expert_dropout
             sel = sel.masked_fill(mask, float("-inf"))
-
+        
         sel_val, sel_index = sel.topk(self.n_heads, dim=-1, sorted=False)
 
         # Preprocess the selection indices. They will be needed for both layers and save some time
@@ -520,7 +556,7 @@ class SwitchHeadRope(SwitchHeadCore):
 #         dropout: float = 0.0,
 #         attention=SwitchHeadRope,
 class MoEUTLayer(torch.nn.Module):
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: MoEUTConfig):
         super().__init__()
         # Attention MoE
         self.attention = SwitchHeadRope(
@@ -539,38 +575,40 @@ class MoEUTLayer(torch.nn.Module):
             k=config.ff_k,
             expert_dropout=config.ff_expert_dropout,
         )
-        self.ln1 = RMSNorm(config.d_model)
-        self.ln2 = RMSNorm(config.d_model)
+        self.attn_pre = RMSNorm(config.d_model)
+        self.attn_post = RMSNorm(config.d_model)
+        self.ffn_pre = RMSNorm(config.d_model)
+        self.ffn_post = RMSNorm(config.d_model)
+    
         self.drop = torch.nn.Dropout(config.dropout)
 
     def forward(
         self,
         x: torch.Tensor,
+        layer_index: int,
         mask: Optional[AttentionMask] = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
+        condition = True
+        layer_index = 2*layer_index + 1
         # x shape batch_size x seq_len x d_model
-        # here we prenorm
-        xnorm = self.ln1(x)
-
-        # print("xnorm",xnorm.shape)
-        # xnorm shape batch_size x seq_len x d_model
-
+        xnorm = self.attn_pre(x)
+        # Before attention, check if we will continue
+    
         att, kv_cache = self.attention(xnorm, xnorm, x, mask, kv_cache=kv_cache)
+        
         # att shape batch_size x seq_len x d_model
-        x = x + self.drop(att)
-
+        x = layer_index/(layer_index+1)*x + self.drop(self.attn_post(att))/(layer_index+1)
+        layer_index+= 1
+        
         # here we prenorm
-        upd = self.ffn(x, self.ln2(x))
+        xnorm = self.ffn_pre(x)
+        upd = self.ffn(xnorm, xnorm)
         # upd shape batch_size x seq_len x d_model
 
-        return x + upd, kv_cache
+        return layer_index/(layer_index+1)*x + self.ffn_post(upd)/(layer_index+1), kv_cache, condition
 
-
-class MoEUTConfig(PretrainedConfig):
-    pass
-
-
+        
 class MoEUTPretrainedModel(PreTrainedModel):
     config_class = MoEUTConfig
     base_model_prefix: str = "mouet"
@@ -586,14 +624,15 @@ class MoEUTPretrainedModel(PreTrainedModel):
 class MoEUT(MoEUTPretrainedModel):
     def __init__(
         self,
-        config: DictConfig,
+        config: CausalLMOutputWithPast,
     ):
-        super().__init__()
+        super().__init__(config)
 
         self.entropy_reg = config.entropy_reg
         self.att_entropy_reg = config.att_entropy_reg
-
-        self.n_repeats = config.n_layers // config.group_size
+        self.group_size = config.group_size
+        self.n_repeats = 1
+        # self.n_repeats = config.n_layers // config.group_size
         self.layers = torch.nn.ModuleList(
             [MoEUTLayer(config) for _ in range(config.group_size)]
         )
@@ -609,21 +648,27 @@ class MoEUT(MoEUTPretrainedModel):
         # x input of shape batch_size x seq_len x d_model
 
         new_cache = {}
-
+        condition = True
         # populate the kv cache based on absolute index of layer
         # Execute the layer
-        for r in range(self.n_repeats):
-            for layer_index, layer in enumerate(self.layers):
-                layer_index_abs = r * len(self.layers) + layer_index
+        layer_index_abs = 0
+        while condition:
+            for layer in self.layers:
                 cache = (
                     kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
                 )
 
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
-                x, new_cache[layer_index_abs] = layer(x, mask, kv_cache=cache)
+                x, new_cache[layer_index_abs], condition = layer(x,layer_index_abs, mask, kv_cache=cache)
                 # x shape batch_size x seq_len x d_model
-
+                layer_index_abs += 1
+            if layer_index_abs == 4:
+                # If we have executed all layers, we can stop
+                condition = False
+                
+                
+                
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
         reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
         for layer in self.modules():
@@ -631,8 +676,8 @@ class MoEUT(MoEUTPretrainedModel):
                 reg_loss = reg_loss + self.entropy_reg * layer.get_reg_loss()
             elif isinstance(layer, SwitchHeadCore):
                 reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
-
-        return MoEUTOutput(x, reg_loss, new_cache if kv_cache is not None else None)
+        
+        return CausalLMOutputWithPast(reg_loss, x, new_cache if kv_cache is not None else None)
 
     @torch.no_grad
     def reset_parameters(self):
@@ -664,9 +709,9 @@ class MoEUT(MoEUTPretrainedModel):
 class MoEUTLM(MoEUTPretrainedModel):
     def __init__(
         self,
-        config: DictConfig,
+        config: MoEUTConfig,
     ):
-        super().__init__()
+        super().__init__(config)
         self.transformer = MoEUT(config)
         self.n_layers = config.n_layers
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
@@ -683,36 +728,35 @@ class MoEUTLM(MoEUTPretrainedModel):
 
     def forward(
         self,
-        x: torch.Tensor,
-        mask: Optional[AttentionMask] = None,
-        kv_cache: MultilayerKVCache = None,
-    ) -> MoEUTOutput:
-
+        input_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None
+    ) -> CausalLMOutputWithPast:
+        
+        # Check that we have either input_ids or inputs_embeds
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You have to specify either input_ids or inputs_embeds, not both")
+        
+        
+        
         # x input of shape batch_size x seq_len -- tokens so ints
         # kv_cache: feed an empty dict to start caching
-
-        if mask is None:
-            mask = AttentionMask(None, self.generate_causal_attention_mask(x.shape[-1]))
-
-        x = self.embedding(x)
+        kv_cache = {}
+        if attention_mask is None:
+            attention_mask = AttentionMask(None, self.generate_causal_attention_mask(input_ids.shape[-1]))
+        
+        if input_ids is not None:
+            x = self.embedding(input_ids)
         # x shape batch_size x seq_len x d_model
         # print(x.shape)
-        out = self.transformer(x, mask, kv_cache)
+        out = self.transformer(x, attention_mask, kv_cache)
         # print(x.shape)
         # x shape batch_size x seq_len x d_model
-        out.outputs = self.lm_head(self.out_norm(out.outputs))
-        # print(out.outputs.shape)
+        out.logits = self.lm_head(self.out_norm(out.logits))
         # out.outputs shape batch_size x seq_len x vocab_size
         return out
-
-    def loss(self, outputs, batch, *args, **kwargs):
-        return None
-
-    def get_metrics():
-        return None
-
-    def eval_forward():
-        return None
 
     def generate_causal_attention_mask(self, sz: int) -> torch.Tensor:
         return torch.triu(
@@ -724,14 +768,16 @@ class MoEUTLM(MoEUTPretrainedModel):
 class ComposerMoEUT(HuggingFaceModel):
     def __init__(
         self,
-        config: DictConfig,
+        config: MoEUTConfig,
         tokenizer: PreTrainedTokenizerBase | None = None,
         additional_train_metrics: list | None = None,
         loss_fn=None,
     ):
         model = self.model_class(config)
+        self.vocab_size = config.vocab_size
         train_metrics = {}
         eval_metrics = {}
+        self.shift_labels = True
         super().__init__(
             model=model,
             tokenizer=tokenizer,  # type: ignore
@@ -749,18 +795,27 @@ class ComposerMoEUT(HuggingFaceModel):
     def forward(self, batch) -> CausalLMOutputWithPast:
         return self.model(
             input_ids=batch.get("input_ids", None),
-            attention_mask=batch.get("attention_mask", None),
-            sequence_id=batch.get("sequence_id", None),
             inputs_embeds=batch.get("inputs_embeds", None),
-            position_ids=batch.get("position_ids", None),
+            attention_mask=batch.get("attention_mask", None),
         )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> dict | torch.Tensor:
+        print("Calculating loss in MoEUTLM")
+        
+        loss_fn = torch.nn.CrossEntropyLoss(
+            ignore_index=CROSS_ENTROPY_IGNORE_INDEX,
+            reduction='mean',
+        )
+        
+        loss = compute_loss_from_logits(
+            outputs,
+            self.shift_labels,
+            batch['input_ids'] if 'input_ids' in batch else batch['labels'],
+            loss_fn,
+        )
+        print(loss)
+        print(outputs.loss)
+        print((loss + outputs.loss))
+        return (loss)
 
-        # loss = compute_loss_from_logits(
-        #     outputs,
-        #     self.shift_labels,
-        #     batch["labels"],
-        #     self.loss_fn,
-        # )
-        return {"loss": 0}
+

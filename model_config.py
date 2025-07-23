@@ -25,6 +25,7 @@ from composer.devices import Device
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
     vocab_size: int = 49152
+    max_seq_len: int = 2048
     d_model: int = 1024
     n_layers: int = 12
     n_heads: int = 12

@@ -4,7 +4,7 @@ from typing import Tuple, Optional, Dict
 import math
 from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from dataclasses import dataclass
-
+from flash_attn.ops.triton.layer_norm import RMSNorm
 
 @dataclass
 class AttentionMask:
@@ -415,8 +415,8 @@ class MoEUTLayer(torch.nn.Module):
         self.ffn = SigmaMoE(d_model, ff_n_experts, ff_expert_size, k=ff_k, expert_dropout=ff_expert_dropout)
         
         
-        self.ln1 = torch.nn.LayerNorm(d_model)
-        self.ln2 = torch.nn.LayerNorm(d_model)
+        self.ln1 = RMSNorm(d_model)
+        self.ln2 = RMSNorm(d_model)
         self.drop = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None, kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:
@@ -495,9 +495,8 @@ class MoEUT(torch.nn.Module):
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, torch.nn.LayerNorm):
-                torch.nn.init.ones_(layer.weight)
-                torch.nn.init.zeros_(layer.bias)
+            elif isinstance(layer, RMSNorm):
+                layer.reset_parameters()
 
 
 class MoEUTLM_old(torch.nn.Module):
@@ -515,7 +514,7 @@ class MoEUTLM_old(torch.nn.Module):
         self.n_layers = n_layers
         self.embedding = torch.nn.Embedding(vocab_size, d_model)
         self.lm_head = torch.nn.Linear(d_model, vocab_size)
-        self.out_norm = torch.nn.LayerNorm(d_model)
+        self.out_norm = RMSNorm(d_model)
         self.reset_parameters()
 
     @torch.no_grad

@@ -1,17 +1,24 @@
 model_config:
   d_model: 768
+  n_layers: 4
   n_heads: 12
   ff_n_experts: 4
+  att_n_experts: 8
+  d_head: 36
+  ff_k: 2
   ff_expert_size: 192
+  group_size: 2
+  vocab_size: 49152
+  max_seq_len: 2048
 
 trainer_config:
-  max_duration: "1000ba"
+  max_duration: "10ba"
   eval_interval: 1
   eval_subset_num_batches: -1
   train_dataloader_label: "train"
   device_train_microbatch_size: null
-  precision: "bf16"
-  device: "cuda"
+  precision: "amp_bf16"
+  device: "gpu"
   parallelism_config:
     pipeline_parallel_size: null
     tensor_parallel_size: null

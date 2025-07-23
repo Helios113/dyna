@@ -20,7 +20,6 @@ from transformers import PreTrainedTokenizerBase
 from llmfoundry.data import ConcatTokensDataset, NoConcatDataset
 from llmfoundry.utils.builders import build_tokenizer
 
-
 class ConcatMode(Enum):
     NO_CONCAT = 'NO_CONCAT'
     CONCAT_TOKENS = 'CONCAT_TOKENS'
@@ -156,6 +155,8 @@ c4constants.splits['val_xxsmall'] = DataSplitConstants(
     raw_samples=100,
     truncated_samples=100,
 )
+
+
 
 CONSTS = {'allenai/c4': c4constants, 'the_pile': pileconstants}
 
@@ -301,6 +302,7 @@ def generate_samples(
 
 def convert_dataset_hf(
     dataset: str,
+    dataset_constants: dict[str, str],
     data_subset: Optional[str],
     splits: list[str],
     out_root: str,
@@ -312,6 +314,7 @@ def convert_dataset_hf(
     eos_text: str,
     no_wrap: bool,
     num_workers: Optional[int],
+    
 ) -> None:
     """Converts HuggingFace datasets to MDS format.
 
@@ -332,23 +335,14 @@ def convert_dataset_hf(
     Raises:
         KeyError: If constants are not defined for the split
     """
-    try:
-        dataset_constants = CONSTS[dataset]
-    except KeyError:
-        raise ValueError(
-            f'Constants for dataset "{dataset}" not found. Currently only "the_pile" and "allenai/c4" are supported.',
-        )
+    
 
-    if concat_tokens is not None and tokenizer is not None:
-        mode = ConcatMode.CONCAT_TOKENS
-        built_tokenizer = build_tokenizer(tokenizer, tokenizer_kwargs)
-        # we will enforce length, so suppress warnings about sequences too long for the model
-        built_tokenizer.model_max_length = int(1e30)
-        columns = {'tokens': 'ndarray:int32'}
-    else:
-        mode = ConcatMode.NO_CONCAT
-        built_tokenizer = None
-        columns = {'text': 'str'}
+    mode = ConcatMode.CONCAT_TOKENS
+    built_tokenizer = build_tokenizer(tokenizer, tokenizer_kwargs)
+    # we will enforce length, so suppress warnings about sequences too long for the model
+    built_tokenizer.model_max_length = int(1e30)
+    columns = {'tokens': 'ndarray:int32'}
+    
 
     for split_name in splits:
         try:
@@ -389,7 +383,7 @@ def convert_dataset_hf(
             denominator = truncate_num_samples if truncate_num_samples is not None else _est_progress_denominator(
                 total_samples=expected_num_samples,
                 chars_per_sample=dataset_constants.chars_per_sample,
-                chars_per_token=dataset_constants.chars_per_token,
+                chars_per_token=CHARS_PER_TOKEN,
                 mode=mode,
                 max_length=concat_tokens,
             )
