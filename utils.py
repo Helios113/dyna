@@ -10,8 +10,7 @@ import os
 from transformers import PreTrainedTokenizerBase
 from composer import DataSpec
 from omegaconf import OmegaConf
-from model_config import DatasetConfig, DataConfig
-
+from model_config import ModelConfig, TrainerConfig, DataConfig
 def generate_id(length: int = 8) -> str:
     """Generate a random base-36 string of `length` digits."""
     # There are ~2.8T base-36 8-digit strings. If we generate 210k ids,
@@ -130,12 +129,10 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
 
 def build_full_concrete_config(cfg):
     """
-    Constructs and merges all configs (model, trainer, data) and returns a single flat config dict.
-    This is equivalent to the config construction logic in main.py and get_data_loader.
+    Constructs and merges all configs (model, trainer, data) and returns a single config dict.
     """
-    from model_config import ModelConfig, TrainerConfig, DataConfig
-    from omegaconf import OmegaConf
 
+    OmegaConf.resolve(cfg)
     # Model Config
     model_schema = OmegaConf.structured(ModelConfig)
     model_config = OmegaConf.merge(model_schema, cfg.model_config)

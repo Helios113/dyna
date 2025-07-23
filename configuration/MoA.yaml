@@ -1,14 +1,15 @@
 model_config:
-  d_model: 2048
-  n_layers: 4
-  n_heads: 12
-  n_ffn_experts: 12
+  d_model: 412
+  n_layers: 16
+  n_heads: 4
+  n_ffn_experts: 155
   n_att_experts: 8
-  d_head: 36
-  ff_k: 2
-  ff_expert_size: 192
-  group_size: 1
+  d_head: 82
+  ff_k: 12
+  ff_expert_size: 188
+  group_size: 2
   vocab_size: 49152
+  max_seq_len: 1024
 
 callbacks:
     speed_monitor:
@@ -20,6 +21,8 @@ callbacks:
 
 data_config:
   path: "/nfs-share/pa511/code_bases/abbie/configuration/streams"
+  dataset:
+    max_seq_len: ${model_config.max_seq_len}
 
 
 trainer_config:
@@ -33,3 +36,8 @@ trainer_config:
   parallelism_config:
     pipeline_parallel_size: null
     tensor_parallel_size: null
+
+
+# MoEUT_44M = dict(
+#     d_model=412, n_layers=16, n_heads=4, ff_n_experts=155, att_n_experts=8, d_head=82, 
+#     ff_k=12, group_size=2)
