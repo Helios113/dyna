@@ -12,3 +12,5 @@ wheels/
 *.lock
 outputs/
 data_cache/
+wandb/
+logs/

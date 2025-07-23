@@ -1,14 +1,15 @@
 from transformers import AutoTokenizer
 from model_config import ModelConfig, TrainerConfig
+from composer.loggers import WandBLogger
 from model import ComposerMoEUT, MoEUTConfig
 from composer import Trainer
-from streaming import StreamingDataset
 import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from composer.optim import DecoupledAdamW
 from data.stream_text_data import StreamingTextDataset
+from utils import make_wandb_run_name, get_callbacks
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
@@ -28,8 +29,11 @@ def main(cfg: DictConfig):
     trainer_config = cfg.trainer_config
     trainer_config = OmegaConf.merge(trainer_schema, trainer_config)
     assert isinstance(trainer_config, DictConfig), "trainer_config should be a DictConfig instance"
-
     
+    
+    run_name = make_wandb_run_name(model_config)
+
+    wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name)
     # We don't need a tokenizer becuase all of our data is pre-tokenized.
     
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
@@ -55,7 +59,6 @@ def main(cfg: DictConfig):
     local = '/nfs-share/pa511/code_bases/abbie/data_cache'
     dataset = StreamingTextDataset(tokenizer=tokenizer, max_seq_len=1024, local=local, remote=remote, shuffle=False, batch_size=2, predownload=1)
     train_dataloader = DataLoader(dataset, batch_size=2)
-    
 
     # Make optimizer
     optimizer = DecoupledAdamW(model.parameters())
@@ -63,12 +66,17 @@ def main(cfg: DictConfig):
     scheduler = None
     eval_dataloader = None
     
+    loggers = [wandb_logger]
+    callbacks = get_callbacks(cfg.callbacks)
+    
     trainer = Trainer(
         model=model,
         train_dataloader=train_dataloader,
         eval_dataloader=eval_dataloader,
+        callbacks=callbacks,
         optimizers=optimizer,
         schedulers=scheduler,
+        loggers=loggers,
         **trainer_config,
     )
     

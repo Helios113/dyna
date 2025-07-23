@@ -51,6 +51,7 @@ class TrainerConfig:
     train_dataloader_label: str = "train"
     train_subset_num_batches: int = -1
     spin_dataloaders: bool = True
+    
 
     # Stopping Condition
     max_duration: str | None = None  # Use str for durations
@@ -68,17 +69,15 @@ class TrainerConfig:
     # Evaluators
     eval_interval: str | None = "1ba"  # Use str for intervals
     eval_subset_num_batches: int = -1
-
-    # Callbacks and Logging
-    callbacks: str | None = None  # Use str if not OmegaConf-compatible
-    loggers: str | None = None  # Use str if not OmegaConf-compatible
     run_name: str | None = None
     progress_bar: bool = True
-    log_to_console: bool = False
+    log_to_console: bool = True
     console_stream: str | None = "stderr"
     console_log_interval: str | None = "1ba"
     log_traces: bool = False
     auto_log_hparams: bool = False
+    
+
 
     # Load Checkpoint
     load_path: str | None = None

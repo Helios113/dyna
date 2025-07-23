@@ -11,6 +11,14 @@ model_config:
   vocab_size: 49152
   max_seq_len: 2048
 
+callbacks:
+    speed_monitor:
+      window_size: 10
+    lr_monitor: {}
+    memory_monitor: {}
+    runtime_estimator: {}
+    optimizer_monitor: {}
+
 trainer_config:
   max_duration: "10ba"
   eval_interval: 1
