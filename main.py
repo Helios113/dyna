@@ -7,23 +7,14 @@ import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from composer.optim import DecoupledAdamW
-from utils import make_wandb_run_name, get_callbacks, get_data_loader
+from utils import make_wandb_run_name, get_callbacks, get_data_loader, check_duplicate_keys, build_full_concrete_config
+
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    cfg = build_full_concrete_config(cfg)
+
     
-    # CONFIGS
-    # Model Config
-    model_schema = OmegaConf.structured(ModelConfig)
-    model_config = OmegaConf.merge(model_schema, cfg.model_config)
-    assert isinstance(model_config, DictConfig), "model_config should be a DictConfig instance"
-    
-    # Trainer Config
-    trainer_schema = OmegaConf.structured(TrainerConfig)
-    trainer_config = OmegaConf.merge(trainer_schema, cfg.trainer_config)
-    assert isinstance(trainer_config, DictConfig), "trainer_config should be a DictConfig instance"
-    
-    run_name = make_wandb_run_name(model_config)
+    run_name = make_wandb_run_name(cfg.model_config)
 
     wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name)
     # We don't need a tokenizer becuase all of our data is pre-tokenized.
@@ -32,7 +23,8 @@ def main(cfg: DictConfig):
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
     
     
-    conf = MoEUTConfig(model_config)
+    # Instead of passing the DictConfig directly, unpack it as kwargs
+    conf = MoEUTConfig(**cfg.model_config)
 
     model = ComposerMoEUT(
         config=conf,
@@ -41,12 +33,8 @@ def main(cfg: DictConfig):
         loss_fn=None,
     )
     
-    
-    # Make dataloader
-
-    # max_seq_len -- VERY Important
     train_dataloader = get_data_loader(
-        cfg,
+        cfg.data_config,
         tokenizer,
         device_train_batch_size=2,  # Set to 2 for testing purposes
     )
@@ -68,7 +56,7 @@ def main(cfg: DictConfig):
         optimizers=optimizer,
         schedulers=scheduler,
         loggers=loggers,
-        **trainer_config,
+        **cfg.trainer_config,
     )
     
     trainer.fit()

@@ -42,13 +42,49 @@ def compute_loss_from_logits(
 
 class MoEUTConfig(PretrainedConfig):
     model_type = 'moeut'
-    
-    def __init__(self, config: DictConfig):
-        # Pass a dummy config to PretrainedConfig to satisfy its requirements
+
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_ffn_experts: int,
+        n_att_experts: int,
+        d_head: Optional[int] = None,
+        group_size: int = 2,
+        ff_k: int = 8,
+        att_k: int = 2,
+        ff_expert_dropout: float = 0.0,
+        att_expert_dropout: float = 0.0,
+        ff_expert_size: int = 128,
+        dropout: float = 0.0,
+        entropy_reg: float = 0.01,
+        att_entropy_reg: float = 0.001,
+        shift_labels: bool = True,
+        **kwargs
+    ):
         super().__init__(**{"model_type": self.model_type})
-        self.config = config
-        for key, value in config.items():
-            setattr(self, key, value)
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.n_ffn_experts = n_ffn_experts
+        self.n_att_experts = n_att_experts
+        self.d_head = d_head
+        self.group_size = group_size
+        self.ff_k = ff_k
+        self.att_k = att_k
+        self.ff_expert_dropout = ff_expert_dropout
+        self.att_expert_dropout = att_expert_dropout
+        self.ff_expert_size = ff_expert_size
+        self.dropout = dropout
+        self.entropy_reg = entropy_reg
+        self.att_entropy_reg = att_entropy_reg
+        self.shift_labels = shift_labels
+        # Accept and store any additional keys for forward compatibility
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 @dataclass
 class AttentionMask:
@@ -562,7 +598,7 @@ class MoEUTLayer(torch.nn.Module):
         self.attention = SwitchHeadRope(
             config.d_model,
             config.n_heads,
-            config.att_n_experts,
+            config.n_att_experts,
             d_head=config.d_head,
             moe_k=config.att_k,
             expert_dropout=config.att_expert_dropout,
@@ -570,7 +606,7 @@ class MoEUTLayer(torch.nn.Module):
         # FFN MoE
         self.ffn = SigmaMoE(
             config.d_model,
-            config.ff_n_experts,
+            config.n_ffn_experts,
             config.ff_expert_size,
             k=config.ff_k,
             expert_dropout=config.ff_expert_dropout,
@@ -624,19 +660,16 @@ class MoEUTPretrainedModel(PreTrainedModel):
 class MoEUT(MoEUTPretrainedModel):
     def __init__(
         self,
-        config: CausalLMOutputWithPast,
+        config: MoEUTConfig,
     ):
         super().__init__(config)
-
         self.entropy_reg = config.entropy_reg
         self.att_entropy_reg = config.att_entropy_reg
         self.group_size = config.group_size
         self.n_repeats = 1
-        # self.n_repeats = config.n_layers // config.group_size
         self.layers = torch.nn.ModuleList(
             [MoEUTLayer(config) for _ in range(config.group_size)]
         )
-
         self.reset_parameters()
 
     def forward(
@@ -777,7 +810,7 @@ class ComposerMoEUT(HuggingFaceModel):
         self.vocab_size = config.vocab_size
         train_metrics = {}
         eval_metrics = {}
-        self.shift_labels = True
+        self.shift_labels = config.shift_labels
         super().__init__(
             model=model,
             tokenizer=tokenizer,  # type: ignore

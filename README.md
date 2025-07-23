@@ -44,7 +44,6 @@ Todo:
 
     4.1 check that they work as designed
         Devise a method to check and do it!
-    5. Clean the s3 a bit then tokenize the smollm2 dataset -- maybe just fineweb-edu
 
 Add Muon
 

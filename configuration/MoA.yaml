@@ -1,13 +1,13 @@
 model_config:
-  d_model: 768
+  d_model: 2048
   n_layers: 4
   n_heads: 12
-  ff_n_experts: 4
-  att_n_experts: 8
+  n_ffn_experts: 12
+  n_att_experts: 8
   d_head: 36
   ff_k: 2
   ff_expert_size: 192
-  group_size: 2
+  group_size: 1
   vocab_size: 49152
 
 callbacks:

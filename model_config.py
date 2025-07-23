@@ -29,8 +29,8 @@ class ModelConfig:
     d_model: int = 1024
     n_layers: int = 12
     n_heads: int = 12
-    ff_n_experts: int = 10
-    att_n_experts: int = 2
+    n_ffn_experts: int = 10
+    n_att_experts: int = 2
     d_head: int | None = None
     group_size: int = 2
     ff_k: int = 8
