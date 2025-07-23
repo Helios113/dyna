@@ -9,7 +9,6 @@ model_config:
   ff_expert_size: 192
   group_size: 2
   vocab_size: 49152
-  max_seq_len: 2048
 
 callbacks:
     speed_monitor:
@@ -18,6 +17,10 @@ callbacks:
     memory_monitor: {}
     runtime_estimator: {}
     optimizer_monitor: {}
+
+data_config:
+  path: "/nfs-share/pa511/code_bases/abbie/configuration/streams"
+
 
 trainer_config:
   max_duration: "10ba"

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Sequence, Callable, Any, TextIO
 import torch
 from composer.optim import ComposerScheduler
@@ -51,7 +51,6 @@ class TrainerConfig:
     train_dataloader_label: str = "train"
     train_subset_num_batches: int = -1
     spin_dataloaders: bool = True
-    
 
     # Stopping Condition
     max_duration: str | None = None  # Use str for durations
@@ -76,8 +75,6 @@ class TrainerConfig:
     console_log_interval: str | None = "1ba"
     log_traces: bool = False
     auto_log_hparams: bool = False
-    
-
 
     # Load Checkpoint
     load_path: str | None = None
@@ -133,3 +130,45 @@ class TrainerConfig:
 
     # compile config for PyTorch 2.0 or higher
     compile_config: dict[str, Any] | None = None
+
+
+
+@dataclass
+class DatasetConfig:
+    streams: dict | None = None
+    token_encoding_type: str = "int64"
+    remote: str | None = None
+    local: str | None = None
+    split: str | None = None
+    download_retry: int = 2
+    download_timeout: float = 60
+    validate_hash: str | None = None
+    keep_zip: bool = False
+    epoch_size: int | str | None = None
+    predownload: int | None = None
+    cache_limit: int | str | None = None
+    partition_algo: str = "relaxed"
+    num_canonical_nodes: int | None = None
+    shuffle: bool = False
+    shuffle_algo: str = "py1e"
+    shuffle_seed: int = 9176
+    shuffle_block_size: int | None = None
+    sampling_method: str = "balanced"
+    sampling_granularity: int = 1
+    batching_method: str = "random"
+    allow_unsafe_types: bool = False
+    replication: int | None = None
+    stream_name: str = "stream"
+    stream_config: dict | None = None
+    max_seq_len: int | None = 2048
+
+
+
+@dataclass
+class DataConfig:
+    path : str
+    dataset : DatasetConfig = field(default_factory=DatasetConfig)
+    name: str = "text"
+    drop_last: bool = True
+    num_workers: int = 4
+    device_batch_size: int = 2

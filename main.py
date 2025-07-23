@@ -6,30 +6,22 @@ from composer import Trainer
 import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader
 from composer.optim import DecoupledAdamW
-from data.stream_text_data import StreamingTextDataset
-from utils import make_wandb_run_name, get_callbacks
+from utils import make_wandb_run_name, get_callbacks, get_data_loader
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     
-    # max_seq_len -- VERY Important
-    
-    
     # CONFIGS
     # Model Config
     model_schema = OmegaConf.structured(ModelConfig)
-    model_config = cfg.model_config
-    model_config = OmegaConf.merge(model_schema, model_config)
+    model_config = OmegaConf.merge(model_schema, cfg.model_config)
     assert isinstance(model_config, DictConfig), "model_config should be a DictConfig instance"
     
     # Trainer Config
     trainer_schema = OmegaConf.structured(TrainerConfig)
-    trainer_config = cfg.trainer_config
-    trainer_config = OmegaConf.merge(trainer_schema, trainer_config)
+    trainer_config = OmegaConf.merge(trainer_schema, cfg.trainer_config)
     assert isinstance(trainer_config, DictConfig), "trainer_config should be a DictConfig instance"
-    
     
     run_name = make_wandb_run_name(model_config)
 
@@ -39,8 +31,9 @@ def main(cfg: DictConfig):
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
     
-    conf = MoEUTConfig(model_config)
     
+    conf = MoEUTConfig(model_config)
+
     model = ComposerMoEUT(
         config=conf,
         tokenizer=tokenizer,
@@ -50,16 +43,14 @@ def main(cfg: DictConfig):
     
     
     # Make dataloader
+
+    # max_seq_len -- VERY Important
+    train_dataloader = get_data_loader(
+        cfg,
+        tokenizer,
+        device_train_batch_size=2,  # Set to 2 for testing purposes
+    )
     
-    os.environ["S3_ENDPOINT_URL"] = "http://128.232.115.19:9000"
-    # Remote path where full dataset is persistently stored
-    remote = 's3://loop-llm/smoll_corpus/fineweb-edu-dedup'
-
-    # Local working dir where dataset is cached during operation
-    local = '/nfs-share/pa511/code_bases/abbie/data_cache'
-    dataset = StreamingTextDataset(tokenizer=tokenizer, max_seq_len=1024, local=local, remote=remote, shuffle=False, batch_size=2, predownload=1)
-    train_dataloader = DataLoader(dataset, batch_size=2)
-
     # Make optimizer
     optimizer = DecoupledAdamW(model.parameters())
     
