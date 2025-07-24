@@ -324,27 +324,27 @@ class SwitchHeadCore(torch.nn.Module):
         self, src_len: int, mask: Optional[AttentionMask]
     ) -> Optional[torch.Tensor]:
         if mask is None or (
-            mask.position_mask is None and mask.src_length_mask is None
+            mask[0] is None and mask[1] is None
         ):
             return None
 
-        # mask.position_mask: [..., N_out, N_in]
-        # mask.src_length_mask: [B, ...., N_in]
+        # mask[0]: [..., N_out, N_in]
+        # mask[1]: [B, ...., N_in]
         # True where it has to be masked
 
-        if mask.position_mask is not None:
-            n_pad = src_len - mask.position_mask.shape[-1]
+        if mask[0] is not None:
+            n_pad = src_len - mask[0].shape[-1]
             if n_pad > 0:
-                pm = F.pad(mask.position_mask, (n_pad, 0), "constant", value=False)
+                pm = F.pad(mask[0], (n_pad, 0), "constant", value=False)
             else:
-                pm = mask.position_mask
+                pm = mask[0]
 
-        if mask.position_mask is None:
-            m = mask.src_length_mask.unsqueeze(-2).unsqueeze(-2)
-        elif mask.src_length_mask is None:
+        if mask[0] is None:
+            m = mask[1].unsqueeze(-2).unsqueeze(-2)
+        elif mask[1] is None:
             m = pm
         else:
-            m = mask.src_length_mask.unsqueeze(-2).unsqueeze(-2) | pm
+            m = mask[1].unsqueeze(-2).unsqueeze(-2) | pm
 
         return m
 
@@ -417,7 +417,7 @@ class SwitchHeadCore(torch.nn.Module):
         q_src: torch.Tensor,
         k_src: torch.Tensor,
         v_src: torch.Tensor,
-        mask: Optional[AttentionMask],
+        mask: tuple[torch.Tensor, torch.Tensor],
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
 
@@ -457,7 +457,7 @@ class SwitchHeadCore(torch.nn.Module):
             kv_cache = {"v": v, "k": k}
 
         q = self.dropout(q)
-        res = self.attend(pos_offset, v, k, q, self.get_mask_tensor(v.shape[-2], mask))
+        res = self.attend(torch.tensor(pos_offset), v, k, q, self.get_mask_tensor(v.shape[-2], mask))
         res = res.transpose(-2, -3)
 
         if self.n_experts > 1:
@@ -485,7 +485,7 @@ class RotaryPosEncoding(torch.nn.Module):
         self.seq_len_cached = 0
         self.cos_cached = None
         self.sin_cached = None
-        self.seq_dim = seq_dim
+        self.seq_dim = torch.tensor(seq_dim)
 
     def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
         x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
@@ -498,8 +498,8 @@ class RotaryPosEncoding(torch.nn.Module):
         x: torch.Tensor,
         sin: torch.Tensor,
         cos: torch.Tensor,
-        seq_dim: int,
-        offset: int,
+        seq_dim: torch.Tensor,
+        offset: torch.Tensor,
     ) -> torch.Tensor:
         sin = sin.narrow(seq_dim, offset, x.shape[seq_dim])
         cos = cos.narrow(seq_dim, offset, x.shape[seq_dim])
@@ -540,6 +540,7 @@ class RotaryPosEncoding(torch.nn.Module):
     def forward(
         self, q: torch.Tensor, k: torch.Tensor, pos_offset: int = 0
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        pos_offset = torch.tensor(pos_offset, device=q.device, dtype=torch.int64)
         sin, cos = self.get(k)
         return self.apply_rotary_pos_emb(q, k, sin, cos, self.seq_dim, pos_offset)
 
@@ -573,10 +574,10 @@ class SwitchHeadRope(SwitchHeadCore):
             r_q = q[..., : self.n_rotate]
             nr_q = q[..., self.n_rotate :]
 
-            r_q, r_k = self.pe(r_q, r_k, offset)
+            r_q, r_k = self.pe(r_q, r_k, torch.tensor(offset))
             return torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1)
         else:
-            return self.pe(q, k, offset)
+            return self.pe(q, k, torch.tensor(offset))
 
     def attend(
         self,
@@ -639,7 +640,7 @@ class MoEUTLayer(torch.nn.Module):
         x: torch.Tensor,
         layer_index: int,
         e: torch.Tensor | None = None,
-        mask: Optional[AttentionMask] = None,
+        mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
         condition = True
@@ -725,7 +726,7 @@ class MoEUT(MoEUTPretrainedModel):
         self,
         x: torch.Tensor,
         e: torch.Tensor | None = None,
-        mask: Optional[AttentionMask] = None,
+        mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: MultilayerKVCache = None,
     ) -> MoEUTOutput:
         # x input of shape batch_size x seq_len x d_model
@@ -815,6 +816,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         input_ids: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        src_len_mask: Optional[torch.Tensor] = None,
     ) -> CausalLMOutputWithPast:
 
         # Check that we have either input_ids or inputs_embeds
@@ -830,9 +832,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         # kv_cache: feed an empty dict to start caching
         kv_cache = {}
         if attention_mask is None:
-            attention_mask = AttentionMask(
-                None, self.generate_causal_attention_mask(input_ids.shape[-1])
-            )
+            attention_mask = self.generate_causal_attention_mask(input_ids.shape[-1])
 
         if input_ids is not None:
             x = self.embedding(input_ids)
@@ -842,7 +842,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         e = None
         if self.prot_emb:
             e = x.clone()
-        out = self.transformer(x, e, attention_mask, kv_cache)
+        out = self.transformer(x, e, (attention_mask, src_len_mask), kv_cache)
         # print(x.shape)
         # x shape batch_size x seq_len x d_model
         out.logits = self.lm_head(self.out_norm(out.logits))
