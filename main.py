@@ -2,6 +2,7 @@ from transformers import AutoTokenizer
 from composer.loggers import WandBLogger
 from dyna.model.model import ComposerMoEUT, MoEUTConfig
 from composer import Trainer
+from composer.callbacks import ActivationMonitor
 import os
 import hydra
 from omegaconf import DictConfig, OmegaConf

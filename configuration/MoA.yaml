@@ -26,6 +26,7 @@ callbacks:
     memory_monitor: {}
     runtime_estimator: {}
     optimizer_monitor: {}
+    activation_monitor_c: {}
 
 data_config:
   path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
