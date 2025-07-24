@@ -1,0 +1,5 @@
+cosmo_client_0:
+  remote: s3://smollm-corpus/shared/cosmo/client_0
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/cosmo/client_0
+  split: train
+  proportion: 0.10

@@ -241,9 +241,8 @@ class SwitchHeadCore(torch.nn.Module):
     ):
         super().__init__()
 
-        self.input_size = d_model
-        self.output_size = d_model
-        self.pe_size = self.input_size
+        self.d_model = d_model
+        self.pe_size = self.d_model
         self.expert_dropout = expert_dropout
         self.moe_k = moe_k
         self.attention_to_visualize = []
@@ -256,37 +255,33 @@ class SwitchHeadCore(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
         self.d_head = d_head or (d_model // n_heads)
 
-        self.q = torch.nn.Linear(
-            self.input_size, self.d_head * self.n_heads, bias=False
-        )
-        self.k = torch.nn.Linear(
-            self.input_size, self.d_head * self.n_heads, bias=False
-        )
+        self.q = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
+        self.k = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
 
         if self.n_experts > 1:
             self.v = torch.nn.Parameter(
-                torch.empty(self.n_heads * self.n_experts, self.input_size, self.d_head)
+                torch.empty(self.n_heads * self.n_experts, self.d_model, self.d_head)
             )
             self.o = torch.nn.Parameter(
                 torch.empty(
                     self.n_heads * self.n_experts,
                     self.d_head,
-                    self.output_size,
+                    self.d_model,
                 )
             )
             self.sel_v = torch.nn.Parameter(
-                torch.empty(self.n_heads * self.n_experts, self.input_size)
+                torch.empty(self.n_heads * self.n_experts, self.d_model)
             )
         else:
             self.v = torch.nn.Parameter(
-                torch.empty(self.n_heads * self.d_head, self.input_size)
+                torch.empty(self.n_heads * self.d_head, self.d_model)
             )
             self.o = torch.nn.Parameter(
-                torch.empty(self.output_size, self.n_heads * self.d_head)
+                torch.empty(self.d_model, self.n_heads * self.d_head)
             )
 
         self.sel_o = torch.nn.Parameter(
-            torch.empty(self.n_heads * self.n_experts, self.input_size)
+            torch.empty(self.n_heads * self.n_experts, self.d_model)
         )
 
         self.register_buffer(
@@ -298,15 +293,15 @@ class SwitchHeadCore(torch.nn.Module):
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
         if self.n_experts > 1:
-            torch.nn.init.normal_(self.sel_v, 0, std_scale / math.sqrt(self.input_size))
+            torch.nn.init.normal_(self.sel_v, 0, std_scale / math.sqrt(self.d_model))
             self.renorm_rows(self.sel_v)
 
-        torch.nn.init.normal_(self.sel_o, 0, std_scale / math.sqrt(self.input_size))
+        torch.nn.init.normal_(self.sel_o, 0, std_scale / math.sqrt(self.d_model))
         self.renorm_rows(self.sel_o)
 
-        torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.input_size))
-        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.input_size))
-        torch.nn.init.normal_(self.v, 0, std_scale / math.sqrt(self.input_size))
+        torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.v, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(
             self.o, 0, std_scale / math.sqrt(self.n_heads * self.d_head)
         )
@@ -323,9 +318,7 @@ class SwitchHeadCore(torch.nn.Module):
     def get_mask_tensor(
         self, src_len: int, mask: Optional[AttentionMask]
     ) -> Optional[torch.Tensor]:
-        if mask is None or (
-            mask[0] is None and mask[1] is None
-        ):
+        if mask is None or (mask[0] is None and mask[1] is None):
             return None
 
         # mask[0]: [..., N_out, N_in]
@@ -401,17 +394,6 @@ class SwitchHeadCore(torch.nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
-    # def get_reg_loss(self) -> torch.Tensor:
-    #     loss = 0
-    #     if self.sel_hist:
-    #         for i in range(len(self.sel_hist[0])):
-    #             loss = loss + entropy_reg(
-    #                 torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
-    #                 -3,
-    #             )
-    #     self.sel_hist = []
-    #     return loss
-
     def forward(
         self,
         q_src: torch.Tensor,
@@ -419,11 +401,11 @@ class SwitchHeadCore(torch.nn.Module):
         v_src: torch.Tensor,
         mask: tuple[torch.Tensor, torch.Tensor],
         kv_cache: KVCache = None,
+        pos_offset: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, KVCache]:
 
-        # q_src, k_src, v_src: [batch_size, sequence_length, d_model]
-        pos_offset = q_src.shape[1] - k_src.shape[1]
-        assert pos_offset >= 0
+        # pos_offset = q_src.shape[1] - k_src.shape[1]
+        # assert pos_offset >= 0
 
         scale = self.scale.sqrt()
 
@@ -457,7 +439,9 @@ class SwitchHeadCore(torch.nn.Module):
             kv_cache = {"v": v, "k": k}
 
         q = self.dropout(q)
-        res = self.attend(torch.tensor(pos_offset), v, k, q, self.get_mask_tensor(v.shape[-2], mask))
+        res = self.attend(
+            torch.tensor(pos_offset), v, k, q, self.get_mask_tensor(v.shape[-2], mask)
+        )
         res = res.transpose(-2, -3)
 
         if self.n_experts > 1:
@@ -640,22 +624,71 @@ class MoEUTLayer(torch.nn.Module):
         x: torch.Tensor,
         layer_index: int,
         e: torch.Tensor | None = None,
+        router: torch.nn.Parameter | None = None,
+        cum_sum: torch.Tensor | None = None,
         mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
         condition = True
         layer_index = self.group_size * layer_index + 1
-        # x shape batch_size x seq_len x d_model
-        xnorm = self.attn_pre(x)
-        # Before attention, check if we will continue
 
-        att, kv_cache = self.attention(xnorm, xnorm, xnorm, mask, kv_cache=kv_cache)
+        # Calc s exit
+        s_exit = F.sigmoid(F.linear(x, router))
+        print(s_exit)
+        # add it to sum
+        cum_sum += s_exit
+
+        # make a mask
+
+        skip_mask = cum_sum < 0.5
+        lengths = skip_mask.sum(dim=1)      # number of valid entries per batch
+        max_len = lengths.max()
+        out = torch.zeros(x.shape[0], max_len, x.shape[-1], device=x.device)
+
+
+        
+        xnorm = self.attn_pre(x)
+        
+        # Pack the batch to be something smaller
+        for i in range(x.shape[0]):
+            n = lengths[i]
+            if n > 0:
+                out[i, :n] = xnorm[i][skip_mask[i]]
+                
+        # for i in range(B):
+        #     idx = b[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
+        #     n = idx.numel()
+        #     if n > 0:
+        #         q[i, :n] = a[i, idx]
+        #         positions_q[i, :n] = idx
+        print(out.shape)
+
+
+        # Give the batch and location info to the attention mechanism
+        # There skip the offset assertion by providing a location into and offset precalculated
+        # Then, apply the rope is a sparse way
+        # Then, attend
+        # Then return to the original dimension using:
+        # processed_flat = torch.cat([
+        #     processed[i, :lengths[i]]
+        #     for i in range(B)
+        # ], dim=0)  # shape (total_valid, D)
+
+        # # Prepare output
+        # restored = torch.zeros_like(a)
+        # restored[b] = processed_flat
+        
+        
+        att, kv_cache = self.attention(
+            out, xnorm, xnorm, mask, kv_cache=kv_cache
+        )
 
         # att shape batch_size x seq_len x d_model
         if self.scale_add:
             if e is not None:
                 # If we scale addition, we have to scale the update
                 # Otherwise, we just add the update
+                # Do this element wise, so layer index will now be a tensor as well
                 x = x - e
                 x = layer_index / (layer_index + 1) * x + self.drop(
                     self.attn_post(att)
@@ -673,7 +706,7 @@ class MoEUTLayer(torch.nn.Module):
 
         # here we prenorm
         xnorm = self.ffn_pre(x)
-        upd = self.ffn(xnorm, xnorm)
+        upd = self.ffn(xnorm[:, skip_mask, :], xnorm)
         # upd shape batch_size x seq_len x d_model
         if self.scale_add:
             # If we scale addition, we have to scale the update
@@ -708,6 +741,9 @@ class MoEUTPretrainedModel(PreTrainedModel):
 
 
 class MoEUT(MoEUTPretrainedModel):
+    # Two major things here
+    # First, get the computation graph from the preserving e
+    # second, do the early exiting
     def __init__(
         self,
         config: MoEUTConfig,
@@ -717,9 +753,11 @@ class MoEUT(MoEUTPretrainedModel):
         self.att_entropy_reg = config.att_entropy_reg
         self.group_size = config.group_size
         self.n_repeats = 4
+        self.d_model = config.d_model
         self.layers = torch.nn.ModuleList(
             [MoEUTLayer(config) for _ in range(config.group_size)]
         )
+        self.router = torch.nn.Parameter(torch.empty(self.d_model))
         self.reset_parameters()
 
     def forward(
@@ -730,13 +768,16 @@ class MoEUT(MoEUTPretrainedModel):
         kv_cache: MultilayerKVCache = None,
     ) -> MoEUTOutput:
         # x input of shape batch_size x seq_len x d_model
-
         new_cache = {}
         condition = True
+        cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
         # populate the kv cache based on absolute index of layer
         # Execute the layer
         layer_index_abs = 0
         for i in range(self.n_repeats):
+            # We are routing intra group
+            # Intra means within
+            # Inter means between
             for layer in self.layers:
                 cache = (
                     kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
@@ -745,7 +786,7 @@ class MoEUT(MoEUTPretrainedModel):
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
                 x, new_cache[layer_index_abs], condition = layer(
-                    x, layer_index_abs, e, mask, kv_cache=cache
+                    x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=cache
                 )
                 # x shape batch_size x seq_len x d_model
                 layer_index_abs += 1
@@ -766,6 +807,7 @@ class MoEUT(MoEUTPretrainedModel):
     @torch.no_grad
     def reset_parameters(self):
         scale = math.sqrt(2 / (self.n_repeats * len(self.layers)))
+        torch.nn.init.normal_(self.router, 0, scale / math.sqrt(self.d_model))
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
@@ -820,7 +862,6 @@ class MoEUTLM(MoEUTPretrainedModel):
     ) -> CausalLMOutputWithPast:
 
         # Check that we have either input_ids or inputs_embeds
-        print("input_ids", input_ids.shape)
         if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
         if input_ids is not None and inputs_embeds is not None:
