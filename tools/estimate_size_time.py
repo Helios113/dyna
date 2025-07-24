@@ -6,9 +6,9 @@ import yaml
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from model_config import ModelConfig
-from model import MoEUTConfig, MoEUTLM
-from utils import build_full_concrete_config
+from dyna.model.model_config import ModelConfig
+from model.model import MoEUTConfig, MoEUTLM
+from dyna.utils.utils import build_full_concrete_config
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
@@ -137,6 +137,20 @@ def main(cfg: DictConfig):
     print(f"{'Trainable':<15} {trainable_params:>15,}")
 
     print_param_breakdown(model)
+
+    # Compute-optimal token count (20 tokens per parameter)
+    compute_optimal_tokens = total_params * 20
+    print(f"\nCompute-optimal token count (20 per parameter): {compute_optimal_tokens:,}")
+
+    # Compute number of steps for a given batch size and sequence length
+    batch_size = getattr(model_cfg, "batch_size", 1)
+    seq_length = getattr(model_cfg, "max_seq_len", 1024)
+    tokens_per_step = batch_size * seq_length
+    if tokens_per_step > 0:
+        steps = (compute_optimal_tokens + tokens_per_step - 1) // tokens_per_step
+        print(f"Steps needed for batch_size={batch_size}, seq_length={seq_length}: {steps:,}")
+    else:
+        print("Batch size or sequence length is zero; cannot compute steps.")
 
 if __name__ == "__main__":
     main()

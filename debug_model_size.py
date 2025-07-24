@@ -1,11 +1,11 @@
 import torch
-from old_model import MoEUTLM_old
+from tools.old_model import MoEUTLM_old
 import profiles
 import random
 import numpy as np
 from transformers import AutoTokenizer
-from model_config import ModelConfig, TrainerConfig
-from model import ComposerMoEUT, MoEUTConfig
+from dyna.model.model_config import ModelConfig, TrainerConfig
+from model.model import ComposerMoEUT, MoEUTConfig
 from composer import Trainer
 from streaming import StreamingDataset
 import os
