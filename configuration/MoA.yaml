@@ -29,7 +29,7 @@ callbacks:
     activation_monitor_c: {}
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 
