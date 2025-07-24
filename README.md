@@ -45,6 +45,16 @@ Todo:
     4.1 check that they work as designed
         Devise a method to check and do it!
 
+
+
+# Where we are today:
+    1. Model is running and training - but not in it's final form
+    2. Dynamic halting needs to be implemented
+    3. Per token rescaling
+    4. FSDP and firends
+    5. KV cache from MoR
+
+
 Add Muon
 
 ## For the MoE
