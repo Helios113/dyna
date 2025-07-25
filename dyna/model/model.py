@@ -402,6 +402,7 @@ class SwitchHeadCore(torch.nn.Module):
         mask: tuple[torch.Tensor, torch.Tensor],
         kv_cache: KVCache = None,
         pos_offset: torch.Tensor = None,
+        positions: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, KVCache]:
 
         # pos_offset = q_src.shape[1] - k_src.shape[1]
@@ -439,8 +440,12 @@ class SwitchHeadCore(torch.nn.Module):
             kv_cache = {"v": v, "k": k}
 
         q = self.dropout(q)
+        # print("qshape")
+        # print(q.shape)
+        # print(k.shape)
+        # print(self.n_experts)
         res = self.attend(
-            torch.tensor(pos_offset), v, k, q, self.get_mask_tensor(v.shape[-2], mask)
+            pos_offset, positions, v, k, q, self.get_mask_tensor(v.shape[-2], mask)
         )
         res = res.transpose(-2, -3)
 
@@ -480,27 +485,19 @@ class RotaryPosEncoding(torch.nn.Module):
     def apply_rot(
         self,
         x: torch.Tensor,
-        sin: torch.Tensor,
-        cos: torch.Tensor,
-        seq_dim: torch.Tensor,
         offset: torch.Tensor,
+        positions: torch.Tensor = None,
     ) -> torch.Tensor:
-        sin = sin.narrow(seq_dim, offset, x.shape[seq_dim])
-        cos = cos.narrow(seq_dim, offset, x.shape[seq_dim])
-        return (x * cos) + (self.rotate_half(x) * sin)
 
-    def apply_rotary_pos_emb(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        sin: torch.Tensor,
-        cos: torch.Tensor,
-        seq_dim: int,
-        offset: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.apply_rot(q, sin, cos, seq_dim, offset), self.apply_rot(
-            k, sin, cos, seq_dim, 0
-        )
+        # the offset here is from zero so we will ideally make it mask
+        # remove the masked elements
+        if positions is None:
+            sin, cos = self.get(x)
+        else:
+            sin, cos = self.get1(positions, x)
+        sin = sin.narrow(self.seq_dim, offset, x.shape[self.seq_dim])
+        cos = cos.narrow(self.seq_dim, offset, x.shape[self.seq_dim])
+        return (x * cos) + (self.rotate_half(x) * sin)
 
     def get(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         seq_len = x.shape[self.seq_dim]
@@ -521,12 +518,24 @@ class RotaryPosEncoding(torch.nn.Module):
 
         return self.sin_cached, self.cos_cached
 
-    def forward(
-        self, q: torch.Tensor, k: torch.Tensor, pos_offset: int = 0
+    def get1(
+        self, x: torch.Tensor, q: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        pos_offset = torch.tensor(pos_offset, device=q.device, dtype=torch.int64)
-        sin, cos = self.get(k)
-        return self.apply_rotary_pos_emb(q, k, sin, cos, self.seq_dim, pos_offset)
+        freqs = torch.einsum("ki,j->kij", x, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
+
+        tgt_shape = [1] * q.ndim
+        tgt_shape[0] = q.shape[0]
+        tgt_shape[1] = 1
+        tgt_shape[self.seq_dim] = q.shape[self.seq_dim]
+        tgt_shape[-1] = q.shape[-1]
+
+        return emb.sin().view(*tgt_shape), emb.cos().view(*tgt_shape)
+
+    def forward(
+        self, q: torch.Tensor, k: torch.Tensor, pos_offset: int = 0, positions=None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.apply_rot(q, pos_offset, positions), self.apply_rot(k, 0, None)
 
 
 class SwitchHeadRope(SwitchHeadCore):
@@ -550,7 +559,7 @@ class SwitchHeadRope(SwitchHeadCore):
             self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
     def rotate(
-        self, q: torch.Tensor, k: torch.Tensor, offset: int
+        self, q: torch.Tensor, k: torch.Tensor, offset: int, positions: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.n_rotate < self.d_head:
             r_k = k[..., : self.n_rotate]
@@ -558,14 +567,15 @@ class SwitchHeadRope(SwitchHeadCore):
             r_q = q[..., : self.n_rotate]
             nr_q = q[..., self.n_rotate :]
 
-            r_q, r_k = self.pe(r_q, r_k, torch.tensor(offset))
+            r_q, r_k = self.pe(r_q, r_k, torch.tensor(offset), positions)
             return torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1)
         else:
-            return self.pe(q, k, torch.tensor(offset))
+            return self.pe(q, k, torch.tensor(offset), positions)
 
     def attend(
         self,
         pos_offset: int,
+        positions: torch.Tensor,
         v: torch.Tensor,
         k: torch.Tensor,
         q: torch.Tensor,
@@ -573,9 +583,11 @@ class SwitchHeadRope(SwitchHeadCore):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         if self.n_rotate > 0:
-            q, k = self.rotate(q, k, pos_offset or 0)
+            q, k = self.rotate(q, k, pos_offset or 0, positions)
 
-        return F.scaled_dot_product_attention(q, k, v, ~mask, scale=1.0)
+        # Masking is missing -- needs to be assembled
+        # Maksing problem confirmed!
+        return F.scaled_dot_product_attention(q, k, v, scale=1.0)
 
 
 #  d_model: int,
@@ -634,35 +646,36 @@ class MoEUTLayer(torch.nn.Module):
 
         # Calc s exit
         s_exit = F.sigmoid(F.linear(x, router))
-        print(s_exit)
         # add it to sum
         cum_sum += s_exit
 
-        # make a mask
+        # find the original pos offset
+        pos_offset = 0
 
+        # make a mask
         skip_mask = cum_sum < 0.5
-        lengths = skip_mask.sum(dim=1)      # number of valid entries per batch
+        if torch.all(skip_mask == False):
+            return x, kv_cache, False
+        lengths = skip_mask.sum(dim=1)  # number of valid entries per batch
         max_len = lengths.max()
+        positions = torch.zeros(x.shape[0], max_len, dtype=torch.long, device=x.device)
+
+        # compact batch
         out = torch.zeros(x.shape[0], max_len, x.shape[-1], device=x.device)
 
-
-        
         xnorm = self.attn_pre(x)
-        
         # Pack the batch to be something smaller
+        idx = 0
+        # Exit condition needs to be here?
+        # If elements of a batch are empty we can start to remove them one by one.
+        # Don't forget the masking still doesn't work.
+        # Ideally we can do something about this. -- packing instead of padding?
         for i in range(x.shape[0]):
-            n = lengths[i]
+            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
+            n = idx.numel()
             if n > 0:
-                out[i, :n] = xnorm[i][skip_mask[i]]
-                
-        # for i in range(B):
-        #     idx = b[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
-        #     n = idx.numel()
-        #     if n > 0:
-        #         q[i, :n] = a[i, idx]
-        #         positions_q[i, :n] = idx
-        print(out.shape)
-
+                out[i, :n] = xnorm[i, idx]
+                positions[i, :n] = idx
 
         # Give the batch and location info to the attention mechanism
         # There skip the offset assertion by providing a location into and offset precalculated
@@ -677,10 +690,15 @@ class MoEUTLayer(torch.nn.Module):
         # # Prepare output
         # restored = torch.zeros_like(a)
         # restored[b] = processed_flat
-        
-        
+
         att, kv_cache = self.attention(
-            out, xnorm, xnorm, mask, kv_cache=kv_cache
+            out,
+            xnorm,
+            xnorm,
+            mask,
+            kv_cache=kv_cache,
+            pos_offset=pos_offset,
+            positions=positions,
         )
 
         # att shape batch_size x seq_len x d_model
@@ -690,14 +708,28 @@ class MoEUTLayer(torch.nn.Module):
                 # Otherwise, we just add the update
                 # Do this element wise, so layer index will now be a tensor as well
                 x = x - e
-                x = layer_index / (layer_index + 1) * x + self.drop(
-                    self.attn_post(att)
-                ) / (layer_index + 1)
+
+                # This will be interesting
+                # The RMS norm will maybe exxagerate the effects of single tokens
+                attn = self.drop(self.attn_post(att))
+                processed_flat = torch.cat(
+                    [attn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
+                )  # shape (total_valid, D)
+
+                x[skip_mask] = layer_index / (layer_index + 1) * x[
+                    skip_mask
+                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+
                 x = x + e
             else:
-                x = layer_index / (layer_index + 1) * x + self.drop(
-                    self.attn_post(att)
-                ) / (layer_index + 1)
+                attn = self.drop(self.attn_post(att))
+                processed_flat = torch.cat(
+                    [attn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
+                )  # shape (total_valid, D)
+
+                x[skip_mask] = layer_index / (layer_index + 1) * x[
+                    skip_mask
+                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
 
         else:
             x = self.drop(self.attn_post(att)) + x
@@ -706,16 +738,33 @@ class MoEUTLayer(torch.nn.Module):
 
         # here we prenorm
         xnorm = self.ffn_pre(x)
-        upd = self.ffn(xnorm[:, skip_mask, :], xnorm)
+        idx = 0
+        for i in range(x.shape[0]):
+            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
+            n = idx.numel()
+            if n > 0:
+                out[i, :n] = xnorm[i, idx]
+                positions[i, :n] = idx
+        upd = self.ffn(out, out)
         # upd shape batch_size x seq_len x d_model
         if self.scale_add:
             # If we scale addition, we have to scale the update
             # Otherwise, we just add the update
             if e is not None:
+
                 x = x - e
-                x = layer_index / (layer_index + 1) * x + self.drop(
-                    self.ffn_post(upd)
-                ) / (layer_index + 1)
+
+                # This will be interesting
+                # The RMS norm will maybe exxagerate the effects of single tokens
+                ffn = self.drop(self.ffn_post(upd))
+                processed_flat = torch.cat(
+                    [ffn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
+                )  # shape (total_valid, D)
+
+                x[skip_mask] = layer_index / (layer_index + 1) * x[
+                    skip_mask
+                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+
                 x = x + e
             else:
                 x = layer_index / (layer_index + 1) * x + self.drop(
@@ -725,7 +774,7 @@ class MoEUTLayer(torch.nn.Module):
             # If we do not scale addition, we just add the update
             x = self.drop(self.ffn_post(upd)) + x
 
-        return x, kv_cache, condition
+        return x, kv_cache, True
 
 
 class MoEUTPretrainedModel(PreTrainedModel):
@@ -774,7 +823,8 @@ class MoEUT(MoEUTPretrainedModel):
         # populate the kv cache based on absolute index of layer
         # Execute the layer
         layer_index_abs = 0
-        for i in range(self.n_repeats):
+        while condition:
+            print(layer_index_abs)
             # We are routing intra group
             # Intra means within
             # Inter means between
@@ -788,11 +838,13 @@ class MoEUT(MoEUTPretrainedModel):
                 x, new_cache[layer_index_abs], condition = layer(
                     x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=cache
                 )
+                print(condition)
+                if not condition:
+                    break
                 # x shape batch_size x seq_len x d_model
                 layer_index_abs += 1
-            # if layer_index_abs >0:
-            #     # If we have executed all layers, we can stop
-            #     condition = False
+            if layer_index_abs > 12:
+                break
 
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
         # reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
@@ -879,7 +931,6 @@ class MoEUTLM(MoEUTPretrainedModel):
             x = self.embedding(input_ids)
 
         # x shape batch_size x seq_len x d_model
-        # print(x.shape)
         e = None
         if self.prot_emb:
             e = x.clone()
