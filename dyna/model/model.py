@@ -664,18 +664,24 @@ class MoEUTLayer(torch.nn.Module):
         out = torch.zeros(x.shape[0], max_len, x.shape[-1], device=x.device)
 
         xnorm = self.attn_pre(x)
-        # Pack the batch to be something smaller
-        idx = 0
-        # Exit condition needs to be here?
-        # If elements of a batch are empty we can start to remove them one by one.
-        # Don't forget the masking still doesn't work.
-        # Ideally we can do something about this. -- packing instead of padding?
-        for i in range(x.shape[0]):
-            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
-            n = idx.numel()
-            if n > 0:
-                out[i, :n] = xnorm[i, idx]
-                positions[i, :n] = idx
+        # Pack the batch to be something smaller - VECTORIZED VERSION
+        # Get all valid positions in one go
+        batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
+        
+        # Create a mapping for efficient packing
+        if batch_idx.numel() > 0:
+            # Count valid tokens per batch
+            batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
+            cumsum_counts = torch.cumsum(torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]), dim=0)
+            
+            # Create output indices
+            local_indices = torch.arange(batch_idx.numel(), device=x.device) - cumsum_counts[batch_idx]
+            valid_mask = local_indices < max_len
+            
+            if valid_mask.any():
+                # Pack efficiently
+                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[batch_idx[valid_mask], seq_idx[valid_mask]]
+                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[valid_mask]
 
         # Give the batch and location info to the attention mechanism
         # There skip the offset assertion by providing a location into and offset precalculated
@@ -712,24 +718,18 @@ class MoEUTLayer(torch.nn.Module):
                 # This will be interesting
                 # The RMS norm will maybe exxagerate the effects of single tokens
                 attn = self.drop(self.attn_post(att))
-                processed_flat = torch.cat(
-                    [attn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
-                )  # shape (total_valid, D)
-
+                # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
 
                 x = x + e
             else:
                 attn = self.drop(self.attn_post(att))
-                processed_flat = torch.cat(
-                    [attn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
-                )  # shape (total_valid, D)
-
+                # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
 
         else:
             x = self.drop(self.attn_post(att)) + x
@@ -738,13 +738,18 @@ class MoEUTLayer(torch.nn.Module):
 
         # here we prenorm
         xnorm = self.ffn_pre(x)
-        idx = 0
-        for i in range(x.shape[0]):
-            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
-            n = idx.numel()
-            if n > 0:
-                out[i, :n] = xnorm[i, idx]
-                positions[i, :n] = idx
+        # Vectorized packing for FFN (reuse the same logic)
+        batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
+        
+        if batch_idx.numel() > 0:
+            batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
+            cumsum_counts = torch.cumsum(torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]), dim=0)
+            local_indices = torch.arange(batch_idx.numel(), device=x.device) - cumsum_counts[batch_idx]
+            valid_mask = local_indices < max_len
+            
+            if valid_mask.any():
+                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[batch_idx[valid_mask], seq_idx[valid_mask]]
+                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[valid_mask]
         upd = self.ffn(out, out)
         # upd shape batch_size x seq_len x d_model
         if self.scale_add:
@@ -757,13 +762,10 @@ class MoEUTLayer(torch.nn.Module):
                 # This will be interesting
                 # The RMS norm will maybe exxagerate the effects of single tokens
                 ffn = self.drop(self.ffn_post(upd))
-                processed_flat = torch.cat(
-                    [ffn[i, : lengths[i]] for i in range(x.shape[0])], dim=0
-                )  # shape (total_valid, D)
-
+                # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + processed_flat * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + ffn.view(-1, ffn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
 
                 x = x + e
             else:
@@ -824,7 +826,6 @@ class MoEUT(MoEUTPretrainedModel):
         # Execute the layer
         layer_index_abs = 0
         while condition:
-            print(layer_index_abs)
             # We are routing intra group
             # Intra means within
             # Inter means between
@@ -838,7 +839,6 @@ class MoEUT(MoEUTPretrainedModel):
                 x, new_cache[layer_index_abs], condition = layer(
                     x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=cache
                 )
-                print(condition)
                 if not condition:
                     break
                 # x shape batch_size x seq_len x d_model
