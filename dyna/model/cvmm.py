@@ -399,7 +399,7 @@ def cvmm_triton(
 
 
 if version.parse(torch.__version__) >= version.parse("2.2.0"):
-    @torch.library.register_fake("mylib::cvmm_triton", cvmm_triton)
+    @torch.library.impl_abstract("mylib::cvmm_triton", cvmm_triton)
     def cvmm_triton_abstract(x, sel_idx, sel, keys, out_dtype, out_index):
         sel_shape = sel.shape
         sel = sel.flatten()
@@ -570,17 +570,14 @@ def cvmm(x: torch.Tensor, sel: Union[torch.Tensor, CVMMSel], keys: torch.Tensor)
 
 def cvmm_prepare_sel2(sel: torch.Tensor, w: Optional[torch.Tensor] = None) -> CVMMSel:
     # Has multiple selections for each batch element
-    
-    # print("cvmm_prepare_sel2", sel.shape, sel.dtype, w is not None)
-    # sel: batch_size ,  seq_len, n_heads*attn_n_experts
-    # w : batch_size, seq_len, n_heads, n_experts
     n_per_batch = sel.shape[-1]
 
     # indices = torch.arange(sel.nelement() // n_per_batch, device=sel.device, dtype=torch.int32)
     # indices = indices.repeat_interleave(n_per_batch).flatten()
 
-    ssel, sel_index = sel.flatten().sort()
-    # print(ssel)
+    fsel = sel.flatten()
+    ssel, sel_index = fsel.sort()
+
     # in_index = indices[sel_index]
     in_index = sel_index // n_per_batch
 

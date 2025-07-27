@@ -124,6 +124,13 @@ KVCache = Optional[Dict[str, torch.Tensor]]
 MultilayerKVCache = Optional[Dict[int, KVCache]]
 
 
+def round_up_to_multiple_of_256(n: int) -> int:
+    """Return the smallest number divisible by 256 that is >= n"""
+    if n <= 0:
+        return 256
+    return ((n - 1) // 256 + 1) * 256
+
+
 @dataclass
 class MoEUTOutput:
     outputs: torch.Tensor
@@ -153,7 +160,6 @@ class SigmaMoE(torch.nn.Module):
         self.activation = activation
         self.expert_dropout = expert_dropout
 
-        self.sel_hist = []
 
         self.keys = torch.nn.Parameter(
             torch.empty(self.n_experts, self.k_vec_dim, self.expert_size)
@@ -181,14 +187,6 @@ class SigmaMoE(torch.nn.Module):
             weight.div_(weight.norm(dim=dim, keepdim=True))
             weight.mul_(std / weight.std())
 
-    # def get_reg_loss(self) -> torch.Tensor:
-    #     if not self.sel_hist:
-    #         return 0
-
-    #     # Average over time and layers.
-    #     loss = entropy_reg(torch.stack(self.sel_hist, dim=-2).flatten(-3, -2), -2)
-    #     self.sel_hist = []
-    #     return loss
 
     def forward(
         self, input: torch.Tensor, sel_input: Optional[torch.Tensor] = None
@@ -197,8 +195,6 @@ class SigmaMoE(torch.nn.Module):
         sel = F.linear(
             sel_input if sel_input is not None else input, self.expert_sel, None
         )
-        if self.training:
-            self.sel_hist.append(sel)
 
         # Selection activation and topk
         sel = F.sigmoid(sel)
@@ -213,6 +209,8 @@ class SigmaMoE(torch.nn.Module):
         sel_indices = cvmm_prepare_sel2(sel_index.int())
 
         # "Up-projection" layer for each head
+
+        # scores input times Ws
         scores = cvmm(input, sel_indices, self.keys)
         scores = self.activation(scores)
 
@@ -222,6 +220,8 @@ class SigmaMoE(torch.nn.Module):
         sel_indices.sel_index = sel_indices.out_index
         sel_indices.out_index = None
 
+        
+        # scores times relu(xW)W
         out = cvmm(scores, sel_indices, self.values)
 
         res = out.view(*input.shape[:-1], self.v_dim)
@@ -249,7 +249,6 @@ class SwitchHeadCore(torch.nn.Module):
         self.selections_to_visualize = {}
         self.n_experts = n_experts
 
-        self.sel_hist = []
 
         self.n_heads = n_heads
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
@@ -423,8 +422,6 @@ class SwitchHeadCore(torch.nn.Module):
         if self.n_experts > 1:
             v_sel, v_sel_raw = self.get_sel(k_src, self.sel_v)
             o_sel, o_sel_raw = self.get_sel(q_src, self.sel_o)
-            if self.training:
-                self.sel_hist.append((o_sel_raw, v_sel_raw))
 
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
@@ -457,6 +454,9 @@ class SwitchHeadCore(torch.nn.Module):
             # of the different heads. So reshape the reduction weight accordingly.
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
+            
+            # Result times o_sel -- this is how we get s_o to be part of optim process
+            # res will be in condensed form, so should o_sel
             out = cvmm(res, o_sel, self.o)
         else:
             res = res * o_gate[..., None]
@@ -654,11 +654,11 @@ class MoEUTLayer(torch.nn.Module):
         pos_offset = 0
 
         # make a mask
-        skip_mask = cum_sum < 0.5
+        skip_mask = cum_sum < 1.5
         if torch.all(skip_mask == False):
             return x, kv_cache, False
         lengths = skip_mask.sum(dim=1)  # number of valid entries per batch
-        max_len = lengths.max()
+        max_len = round_up_to_multiple_of_256(lengths.max().item())
         positions = torch.zeros(x.shape[0], max_len, dtype=torch.long, device=x.device)
 
         # compact batch
@@ -831,21 +831,22 @@ class MoEUT(MoEUTPretrainedModel):
             # Intra means within
             # Inter means between
             for layer in self.layers:
-                cache = (
-                    kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
-                )
+                # cache = (
+                #     kv_cache.get(layer_index_abs, {}) if kv_cache is not None else None
+                # )
 
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
-                x, new_cache[layer_index_abs], condition = layer(
-                    x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=cache
+                x, _, condition = layer(
+                    x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=None
                 )
                 if not condition:
                     break
                 # x shape batch_size x seq_len x d_model
                 layer_index_abs += 1
-            if layer_index_abs > 12:
+            if layer_index_abs > 4:
                 break
+        print("layers used for batch", layer_index_abs)
 
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
         # reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
@@ -947,7 +948,6 @@ class MoEUTLM(MoEUTPretrainedModel):
             torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device),
             diagonal=1,
         )
-
 class ComposerMoEUT(HuggingFaceModel):
     def __init__(
         self,
@@ -977,11 +977,14 @@ class ComposerMoEUT(HuggingFaceModel):
         return MoEUTLM
 
     def forward(self, batch) -> CausalLMOutputWithPast:
+
+
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),
             attention_mask=batch.get("attention_mask", None),
         )
+        
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> dict | torch.Tensor:
 
