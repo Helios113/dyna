@@ -39,7 +39,7 @@ def main(cfg: DictConfig):
     train_dataloader = get_data_loader(
         cfg.data_config,
         tokenizer,
-        device_train_batch_size=2,  # Set to 2 for testing purposes
+        device_train_batch_size=cfg.train.device_train_batch_size,
     )
 
     # Make optimizer
