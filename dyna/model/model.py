@@ -13,7 +13,7 @@ from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
 from llmfoundry.utils.builders import build_metric
-
+from torch.nn.attention import SDPBackend, sdpa_kernel
 CROSS_ENTROPY_IGNORE_INDEX = -100
 DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
     "language_cross_entropy",
@@ -587,7 +587,8 @@ class SwitchHeadRope(SwitchHeadCore):
 
         # Masking is missing -- needs to be assembled
         # Maksing problem confirmed!
-        return F.scaled_dot_product_attention(q, k, v, scale=1.0)
+        with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
+            return F.scaled_dot_product_attention(q, k, v, scale=1.0)
 
 
 #  d_model: int,
@@ -946,7 +947,6 @@ class MoEUTLM(MoEUTPretrainedModel):
             torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device),
             diagonal=1,
         )
-
 
 class ComposerMoEUT(HuggingFaceModel):
     def __init__(
