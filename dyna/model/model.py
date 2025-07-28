@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict
@@ -639,6 +640,7 @@ class MoEUTLayer(torch.nn.Module):
         e: torch.Tensor | None = None,
         router: torch.nn.Parameter | None = None,
         cum_sum: torch.Tensor | None = None,
+        tau : torch.Tensor | None = None,
         mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
@@ -654,9 +656,20 @@ class MoEUTLayer(torch.nn.Module):
         pos_offset = 0
 
         # make a mask
-        skip_mask = cum_sum < 1.5
+        skip_mask = cum_sum < tau
+        
+        # Check if the last token in each sequence is ready to exit
+        last_token_idx = x.shape[1] - 1  # Index of the last token in the sequence
+        last_tokens_exit = ~skip_mask[:, last_token_idx]  # True where last token has skip_mask == False
+        
+        # For sequences where the last token is ready to exit, mark the entire sequence as done
+        for batch_idx in last_tokens_exit.nonzero(as_tuple=True)[0]:
+            skip_mask[batch_idx, :] = False
+            
+        # Exit if all sequences are done
         if torch.all(skip_mask == False):
-            return x, kv_cache, False
+            return x, kv_cache, False, 0
+            
         lengths = skip_mask.sum(dim=1)  # number of valid entries per batch
         max_len = round_up_to_multiple_of_256(lengths.max().item())
         positions = torch.zeros(x.shape[0], max_len, dtype=torch.long, device=x.device)
@@ -722,7 +735,7 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
 
                 x = x + e
             else:
@@ -730,7 +743,7 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
 
         else:
             x = self.drop(self.attn_post(att)) + x
@@ -766,7 +779,7 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + ffn.view(-1, ffn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) / (layer_index + 1)
+                ] + ffn.view(-1, ffn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
 
                 x = x + e
             else:
@@ -777,7 +790,7 @@ class MoEUTLayer(torch.nn.Module):
             # If we do not scale addition, we just add the update
             x = self.drop(self.ffn_post(upd)) + x
 
-        return x, kv_cache, True
+        return x, kv_cache, True, max_len
 
 
 class MoEUTPretrainedModel(PreTrainedModel):
@@ -810,6 +823,7 @@ class MoEUT(MoEUTPretrainedModel):
             [MoEUTLayer(config) for _ in range(config.group_size)]
         )
         self.router = torch.nn.Parameter(torch.empty(self.d_model))
+        self.tau = torch.nn.Parameter(torch.ones(1))
         self.reset_parameters()
 
     def forward(
@@ -821,6 +835,7 @@ class MoEUT(MoEUTPretrainedModel):
     ) -> MoEUTOutput:
         # x input of shape batch_size x seq_len x d_model
         new_cache = {}
+        self._seq_len_evolve = []
         condition = True
         cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
         # populate the kv cache based on absolute index of layer
@@ -837,24 +852,18 @@ class MoEUT(MoEUTPretrainedModel):
 
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
-                x, _, condition = layer(
-                    x, layer_index_abs, e, self.router, cum_sum, mask, kv_cache=None
+                x, _, condition, seq_lengths = layer(
+                    x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
                 )
+                self._seq_len_evolve.append(copy.deepcopy(seq_lengths))
                 if not condition:
                     break
                 # x shape batch_size x seq_len x d_model
                 layer_index_abs += 1
-            if layer_index_abs > 4:
-                break
-        print("layers used for batch", layer_index_abs)
+        
+        # Store the layer usage for the callback to access
+        self._layer_index_abs = layer_index_abs
 
-        # Collect regularizaiton losses. Must be at the end because it is across the layers.
-        # reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
-        # for layer in self.modules():
-        #     if isinstance(layer, SigmaMoE):
-        #         reg_loss = reg_loss + self.entropy_reg * layer.get_reg_loss()
-        #     elif isinstance(layer, SwitchHeadCore):
-        #         reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
 
         return CausalLMOutputWithPast(0, x, new_cache if kv_cache is not None else None)
 
@@ -862,6 +871,8 @@ class MoEUT(MoEUTPretrainedModel):
     def reset_parameters(self):
         scale = math.sqrt(2 / (self.n_repeats * len(self.layers)))
         torch.nn.init.normal_(self.router, 0, scale / math.sqrt(self.d_model))
+        self._layer_index_abs = 0  # Initialize the layer usage tracking
+        self._seq_len_evolve = []
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
@@ -978,7 +989,6 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
 
-
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),
@@ -992,11 +1002,12 @@ class ComposerMoEUT(HuggingFaceModel):
             ignore_index=CROSS_ENTROPY_IGNORE_INDEX,
             reduction="mean",
         )
-
+        # self.model.transformer.tau
         loss = compute_loss_from_logits(
             outputs,
             self.shift_labels,
             batch["input_ids"] if "input_ids" in batch else batch["labels"],
             loss_fn,
         )
+        
         return loss
