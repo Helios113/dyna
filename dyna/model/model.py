@@ -271,6 +271,7 @@ class SwitchHeadCore(torch.nn.Module):
                     self.d_model,
                 )
             )
+            # heads x experts, dmodel
             self.sel_v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.n_experts, self.d_model)
             )
@@ -343,40 +344,49 @@ class SwitchHeadCore(torch.nn.Module):
 
         return m
 
-    def get_sel(self, t: torch.Tensor, w: torch.Tensor) -> Tuple[CVMMSel, torch.Tensor]:
+    def get_sel(self, t: torch.Tensor, w: torch.Tensor, bias: torch.Tensor=None) -> Tuple[CVMMSel, torch.Tensor]:
 
         # Selects which experts to use
         
-        # t :  batch_size, seq_len, d_model
+        # t : batch_size, seq_len, d_model
         # w : n_heads * n_experts, d_model
-
+        # F.liear applies tW^t
         sel = F.linear(t, w).float()
         # sel : batch_size, seq_len, n_heads * n_experts
+        
+        
+        # separate the dimensions
         sel = sel_raw = sel.view(*sel.shape[:-1], self.n_heads, -1)
         # sel : batch_size, seq_len, n_heads, n_experts
 
+        # Activation
         sel = sel.sigmoid()
-        # sel : batch_size, seq_len, n_heads, n_experts
-        # print("sel", sel.shape)
+        
         with torch.no_grad():
             if self.expert_dropout > 0 and self.training:
                 mask = torch.rand_like(sel) < self.expert_dropout
                 sel2 = sel.masked_fill(mask, float("-inf"))
             else:
                 sel2 = sel
+            # TopK -- gives an outup equal to the exact number of experts
+            if bias is not None:
+                sel2+=bias
             _, sel_index = sel2.topk(self.moe_k, dim=-1, sorted=False)
+            # sel_index batch_size, seq_len, n_heads, attn_n_experts
+            
+        # gathers activations based on expert section for multiplication
         sel_val = torch.gather(sel, -1, sel_index)
+        #sel_index batch_size, seq_len, n_heads, sel_val
 
 
-        # This is like a positional encoding, but for the experts?
+        # This gives an index of which attention head to use from a big matrix of expert attention heads
+        # This is used for optimal matrix multiplications
+        # Sel index is the correct thing that says which expert is selected
         sel_index_shifted = (
             torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype)
             * self.n_experts
         ).unsqueeze(-1) + sel_index
         # sel_index_shifted : batch_size, seq_len, n_heads, attn_n_experts
-
-        # #print("sel_index_shifted", sel_index_shifted.shape)
-        # #print((torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype) * self.n_experts).unsqueeze(-1))
 
         return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_index
 
@@ -417,12 +427,29 @@ class SwitchHeadCore(torch.nn.Module):
         if self.n_experts > 1:
             # expert selection
             # sel.hist showed the slected clients
-            v_sel, v_sel_raw = self.get_sel(k_src, self.sel_v)
-            o_sel, o_sel_raw = self.get_sel(q_src, self.sel_o)
+            # 
+            # k_src bs x seq_len x dmodel
+            # sel_v heads x experts, dmodel
+            v_sel, v_sel_index = self.get_sel(k_src, self.sel_v)
+            o_sel, o_sel_index = self.get_sel(q_src, self.sel_o)
+            
+            # bs, seq_len, n_heads, attn_n_experts 
+            # v_sel_index -- top k'd index of activations
+            # o_sel_index -- top k'd index of activations
+            
             
             if self.training:
-                print("v_sel",v_sel_raw)
-                print("o_sel",o_sel_raw)        
+                print("v_sel",v_sel_index.shape)
+                print("o_sel",v_sel_index)
+                # count how many entries there are for each expert
+                c_v = torch.bincount(v_sel_index, minlength=self.n_experts)
+                c_v_avg = torch.mean(c_v)
+                c_o = torch.bincount(o_sel_index, minlength=self.n_experts) 
+                c_o_avg = torch.mean(c_o)
+                e_v =  - c_v + c_v_avg
+                e_o =  - c_o + c_o_avg
+                
+                
 
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
