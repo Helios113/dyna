@@ -161,7 +161,8 @@ class SigmaMoE(torch.nn.Module):
         self.n_heads = k
         self.activation = activation
         self.expert_dropout = expert_dropout
-
+        self.bias = torch.zeros(n_experts)
+        self.bias_update_lr = 0.001
         self.keys = torch.nn.Parameter(
             torch.empty(self.n_experts, self.k_vec_dim, self.expert_size)
         )
@@ -202,8 +203,16 @@ class SigmaMoE(torch.nn.Module):
         if self.training and self.expert_dropout > 0:
             mask = torch.rand_like(sel) < self.expert_dropout
             sel = sel.masked_fill(mask, float("-inf"))
+            
 
-        sel_val, sel_index = sel.topk(self.n_heads, dim=-1, sorted=False)
+        # check if self.n_heads is correct
+        _, sel_index = torch.topk(sel+self.bias,self.n_heads, dim=-1, sorted=False)
+        sel_val = torch.gather(sel, -1, sel_index)
+        if self.training:
+            c_i = torch.bincount(sel_index, minlength=self.n_experts)
+            c_i_avg = torch.mean(c_i)
+
+            self.bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
 
         # Preprocess the selection indices. They will be needed for both layers and save some time
         sel_indices = cvmm_prepare_sel2(sel_index.int())
@@ -256,7 +265,7 @@ class SwitchHeadCore(torch.nn.Module):
         self.q = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
         self.k = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
 
-        self.bias_update_lr = 0.1
+        self.bias_update_lr = 0.001
 
         if self.n_experts > 1:
             self.v = torch.nn.Parameter(
