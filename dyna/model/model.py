@@ -75,6 +75,7 @@ class MoEUTConfig(PretrainedConfig):
         shift_labels: bool = True,
         scale_add: bool = True,
         prot_emb: bool = False,
+        shared_expert_number: int = 1,
         **kwargs,
     ):
         super().__init__(**{"model_type": self.model_type})
@@ -97,6 +98,7 @@ class MoEUTConfig(PretrainedConfig):
         self.shift_labels = shift_labels
         self.scale_add = scale_add
         self.prot_emb = prot_emb
+        self.shared_expert_number = shared_expert_number
         # Accept and store any additional keys for forward compatibility
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -150,6 +152,7 @@ class SigmaMoE(torch.nn.Module):
         activation=F.relu,
         v_dim: Optional[int] = None,
         expert_dropout: float = 0.0,
+        shared_expert_number: int = 1,
     ):
         super().__init__()
         self.k_dim = d_model
@@ -161,6 +164,8 @@ class SigmaMoE(torch.nn.Module):
         self.n_heads = k
         self.activation = activation
         self.expert_dropout = expert_dropout
+        self.shared_expert_number = min(shared_expert_number, n_experts)  # Ensure we don't exceed n_experts
+        self.routed_expert_number = n_experts - self.shared_expert_number  # Number of experts that will be selected through routing
         self.bias = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
         self.bias_update_lr = 0.001
         self.keys = torch.nn.Parameter(
@@ -172,6 +177,10 @@ class SigmaMoE(torch.nn.Module):
         self.expert_sel = torch.nn.Parameter(
             torch.empty(self.n_experts, self.k_vec_dim)
         )
+        # Define shared expert indices - experts that are always selected
+        # Last 'shared_expert_number' experts are the shared ones
+        self.register_buffer('shared_expert', torch.arange(
+            n_experts - self.shared_expert_number, n_experts, dtype=torch.long))
 
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
@@ -204,9 +213,18 @@ class SigmaMoE(torch.nn.Module):
             mask = torch.rand_like(sel) < self.expert_dropout
             sel = sel.masked_fill(mask, float("-inf"))
             
-
-        # check if self.n_heads is correct
-        _, sel_index = torch.topk(sel+self.bias,self.n_heads, dim=-1, sorted=False)
+        # Only select from routed experts (excluding shared experts)
+        # We'll select n_heads - shared_expert_number experts through routing
+        
+        _, sel_index = torch.topk(sel[:, :,:self.routed_expert_number] + self.bias[:self.routed_expert_number], 
+                                  self.routed_expert_number, dim=-1, sorted=False)
+        
+        # If we have shared experts, add them to the selection
+        if self.shared_expert_number > 0:
+            # Create tensor with shared expert indices expanded to match batch dimensions
+            shared_shape = sel_index.shape[:-1] + (self.shared_expert_number,)
+            shared_expert_expanded = self.shared_expert.view(*([1] * (sel_index.dim() - 1)), -1).expand(shared_shape)
+            sel_index = torch.cat([sel_index, shared_expert_expanded], dim=-1)
         
         sel_val = torch.gather(sel, -1, sel_index)
         if self.training:
@@ -214,7 +232,8 @@ class SigmaMoE(torch.nn.Module):
                 c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
 
-                self.bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
+                self.bias[:self.routed_expert_number] += self.bias_update_lr * torch.sign(
+                    -c_i[:self.routed_expert_number] + c_i_avg)
 
         # Preprocess the selection indices. They will be needed for both layers and save some time
         sel_indices = cvmm_prepare_sel2(sel_index.int())
@@ -248,6 +267,7 @@ class SwitchHeadCore(torch.nn.Module):
         d_head: Optional[int] = None,
         expert_dropout: float = 0.0,
         moe_k: int = 2,
+        shared_expert_number: int = 1,
     ):
         super().__init__()
 
@@ -258,6 +278,13 @@ class SwitchHeadCore(torch.nn.Module):
         self.attention_to_visualize = []
         self.selections_to_visualize = {}
         self.n_experts = n_experts
+        self.shared_expert_number = min(shared_expert_number, n_experts)  # Ensure we don't exceed n_experts
+        self.routed_expert_number = n_experts - self.shared_expert_number  # Number of experts that will be selected through routing
+        
+        # Define shared expert indices - experts that are always selected
+        # Last 'shared_expert_number' experts are the shared ones
+        self.register_buffer('shared_expert', torch.arange(
+            n_experts - self.shared_expert_number, n_experts, dtype=torch.long))
 
         self.sel_hist = []
         self.n_heads = n_heads
@@ -330,7 +357,7 @@ class SwitchHeadCore(torch.nn.Module):
         return x.view(*x.shape[:-1], self.n_heads, -1).transpose(-2, -3)
 
     def get_mask_tensor(
-        self, src_len: int, mask: Optional[AttentionMask]
+        self, src_len: int, mask: tuple[torch.Tensor,torch.Tensor], skip_mask
     ) -> Optional[torch.Tensor]:
         if mask is None or (mask[0] is None and mask[1] is None):
             return None
@@ -352,8 +379,17 @@ class SwitchHeadCore(torch.nn.Module):
             m = pm
         else:
             m = mask[1].unsqueeze(-2).unsqueeze(-2) | pm
-
-        return m
+        
+        # m = m.expand(skip_mask.shape[0], -1,-1)
+        lengths = skip_mask.sum(dim=1)  # number of valid entries per batch
+        max_len = round_up_to_multiple_of_256(lengths.max().item())
+        mask = torch.zeros(skip_mask.shape[0],self.n_heads, max_len, src_len, dtype=torch.bool,device=self.v.device)
+        for i in range(skip_mask.shape[0]):
+            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)  # shape (n,)
+            n = idx.numel()
+            if n > 0:
+                mask[i,:, :n] = m[idx]
+        return mask
 
     def get_sel(
         self, t: torch.Tensor, w: torch.Tensor, bias: torch.Tensor = None
@@ -380,16 +416,39 @@ class SwitchHeadCore(torch.nn.Module):
                 sel2 = sel.masked_fill(mask, float("-inf"))
             else:
                 sel2 = sel
-            # TopK -- gives an outup equal to the exact number of experts
-            _, sel_index = torch.topk((sel2 + bias) if bias is not None else sel2 ,self.moe_k, dim=-1, sorted=False)
+                
+            # Only select from routed experts (excluding shared experts)
+            # We'll select moe_k - shared_expert_number experts through routing
+            routed_k = max(1, self.moe_k - self.shared_expert_number)
+            
+            # TopK -- select from the routed experts only (first self.routed_expert_number experts)
+            _, sel_index = torch.topk(
+                (sel2[:, :, :, :self.routed_expert_number] + bias[:self.routed_expert_number]) 
+                if bias is not None else sel2[:, :, :, :self.routed_expert_number], 
+                routed_k, dim=-1, sorted=False
+            )
+
+            # Add shared experts to the selection
+            # shared_expert is a tensor of expert indices for the shared experts
+            if self.shared_expert_number > 0:
+                # Expand shared_expert to match sel_index batch dims
+                shared_shape = sel_index.shape[:-1] + (self.shared_expert_number,)
+                shared_expert_expanded = self.shared_expert.view(*([1] * (sel_index.dim() - 1)), -1).expand(shared_shape)
+                sel_index = torch.cat([sel_index, shared_expert_expanded], dim=-1)
+            
             # sel_index batch_size, seq_len, n_heads, attn_n_experts
             if self.training:
                 c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
 
-                bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
+                # Only update bias for routed experts
+                if bias is not None:
+                    bias[:self.routed_expert_number] += self.bias_update_lr * torch.sign(
+                        -c_i[:self.routed_expert_number] + c_i_avg)
+                    
         # gathers activations based on expert section for multiplication
-        sel_val = torch.gather(sel, -1, sel_index)
+        sel_val = torch.gather(sel.view(*sel.shape[:-2], -1), -1, sel_index.view(*sel_index.shape[:-2], -1))
+        sel_val = sel_val.view(*sel_index.shape)
         # sel_index batch_size, seq_len, n_heads, sel_val
 
         # This gives an index of which attention head to use from a big matrix of expert attention heads
@@ -406,10 +465,12 @@ class SwitchHeadCore(torch.nn.Module):
     def attend(
         self,
         pos_offset: int,
+        positions: torch.Tensor,
         v: torch.Tensor,
         k: torch.Tensor,
         q: torch.Tensor,
         mask: Optional[torch.Tensor],
+        skip_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
@@ -422,6 +483,7 @@ class SwitchHeadCore(torch.nn.Module):
         kv_cache: KVCache = None,
         pos_offset: torch.Tensor = None,
         positions: torch.Tensor = None,
+        skip_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, KVCache]:
 
         # pos_offset = q_src.shape[1] - k_src.shape[1]
@@ -468,7 +530,7 @@ class SwitchHeadCore(torch.nn.Module):
         # print(k.shape)
         # print(self.n_experts)
         res = self.attend(
-            pos_offset, positions, v, k, q, self.get_mask_tensor(v.shape[-2], mask)
+            pos_offset, positions, v, k, q, self.get_mask_tensor(v.shape[-2], mask, skip_mask)
         )
         res = res.transpose(-2, -3)
 
@@ -576,9 +638,10 @@ class SwitchHeadRope(SwitchHeadCore):
         moe_k: int = 2,
         rotate_fraction: float = 0.5,
         rope_base: float = 10000,
+        shared_expert_number: int = 1,
     ):
         super().__init__(
-            d_model, n_heads, n_experts, dropout, d_head, expert_dropout, moe_k
+            d_model, n_heads, n_experts, dropout, d_head, expert_dropout, moe_k, shared_expert_number
         )
         self.n_rotate = int(rotate_fraction * self.d_head)
         if self.n_rotate > 0:
@@ -610,11 +673,8 @@ class SwitchHeadRope(SwitchHeadCore):
 
         if self.n_rotate > 0:
             q, k = self.rotate(q, k, pos_offset or 0, positions)
-
-        # Masking is missing -- needs to be assembled
-        # Maksing problem confirmed!
-        with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
-            return F.scaled_dot_product_attention(q, k, v, scale=1.0)
+            
+        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=mask)
 
 
 #  d_model: int,
@@ -632,6 +692,9 @@ class SwitchHeadRope(SwitchHeadCore):
 class MoEUTLayer(torch.nn.Module):
     def __init__(self, config: MoEUTConfig):
         super().__init__()
+        # Get the shared expert number from config, default to 1 if not provided
+        shared_expert_number = getattr(config, 'shared_expert_number', 1)
+        
         # Attention MoE
         self.attention = SwitchHeadRope(
             config.d_model,
@@ -640,6 +703,7 @@ class MoEUTLayer(torch.nn.Module):
             d_head=config.d_head,
             moe_k=config.att_k,
             expert_dropout=config.att_expert_dropout,
+            shared_expert_number=shared_expert_number,
         )
         # FFN MoE
         self.ffn = SigmaMoE(
@@ -648,6 +712,7 @@ class MoEUTLayer(torch.nn.Module):
             config.ff_expert_size,
             k=config.ff_k,
             expert_dropout=config.ff_expert_dropout,
+            shared_expert_number=shared_expert_number,
         )
         self.attn_pre = RMSNorm(config.d_model)
         self.attn_post = RMSNorm(config.d_model)
@@ -669,6 +734,9 @@ class MoEUTLayer(torch.nn.Module):
         mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
+        
+        # mask square tri causal mask
+        
         condition = True
         layer_index = self.group_size * layer_index + 1
 
@@ -682,7 +750,9 @@ class MoEUTLayer(torch.nn.Module):
 
         # make a mask
         skip_mask = cum_sum < tau
-
+        
+        
+    
         # Check if the last token in each sequence is ready to exit
         last_token_idx = x.shape[1] - 1  # Index of the last token in the sequence
         last_tokens_exit = ~skip_mask[
@@ -734,20 +804,6 @@ class MoEUTLayer(torch.nn.Module):
                     valid_mask
                 ]
 
-        # Give the batch and location info to the attention mechanism
-        # There skip the offset assertion by providing a location into and offset precalculated
-        # Then, apply the rope is a sparse way
-        # Then, attend
-        # Then return to the original dimension using:
-        # processed_flat = torch.cat([
-        #     processed[i, :lengths[i]]
-        #     for i in range(B)
-        # ], dim=0)  # shape (total_valid, D)
-
-        # # Prepare output
-        # restored = torch.zeros_like(a)
-        # restored[b] = processed_flat
-
         att, kv_cache = self.attention(
             out,
             xnorm,
@@ -756,6 +812,7 @@ class MoEUTLayer(torch.nn.Module):
             kv_cache=kv_cache,
             pos_offset=pos_offset,
             positions=positions,
+            skip_mask=skip_mask,
         )
 
         # att shape batch_size x seq_len x d_model
