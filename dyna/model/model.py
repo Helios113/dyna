@@ -161,7 +161,7 @@ class SigmaMoE(torch.nn.Module):
         self.n_heads = k
         self.activation = activation
         self.expert_dropout = expert_dropout
-        self.bias = torch.zeros(n_experts)
+        self.bias = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
         self.bias_update_lr = 0.001
         self.keys = torch.nn.Parameter(
             torch.empty(self.n_experts, self.k_vec_dim, self.expert_size)
@@ -207,12 +207,14 @@ class SigmaMoE(torch.nn.Module):
 
         # check if self.n_heads is correct
         _, sel_index = torch.topk(sel+self.bias,self.n_heads, dim=-1, sorted=False)
+        
         sel_val = torch.gather(sel, -1, sel_index)
         if self.training:
-            c_i = torch.bincount(sel_index, minlength=self.n_experts)
-            c_i_avg = torch.mean(c_i)
+            with torch.no_grad():
+                c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
+                c_i_avg = torch.mean(c_i, dtype=torch.float32)
 
-            self.bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
+                self.bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
 
         # Preprocess the selection indices. They will be needed for both layers and save some time
         sel_indices = cvmm_prepare_sel2(sel_index.int())
@@ -282,8 +284,8 @@ class SwitchHeadCore(torch.nn.Module):
             self.sel_v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.n_experts, self.d_model)
             )
-            self.bias_v = torch.zeros(n_experts)
-            self.bias_o = torch.zeros(n_experts)
+            self.bias_v = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
+            self.bias_o = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
         else:
             self.v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.d_head, self.d_model)
@@ -385,8 +387,8 @@ class SwitchHeadCore(torch.nn.Module):
             # sel_index batch_size, seq_len, n_heads, attn_n_experts
             if self.training:
 
-                c_i = torch.bincount(sel_index, minlength=self.n_experts)
-                c_i_avg = torch.mean(c_i)
+                c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
+                c_i_avg = torch.mean(c_i, dtype=torch.float32)
 
                 bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
         # gathers activations based on expert section for multiplication
