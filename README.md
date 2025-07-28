@@ -66,3 +66,19 @@ Add Muon
 ## The KV cache
     From the Mixture of Reccurence paper
 
+
+
+The loss function should balance itself. For better science I need some hypothesis to see if this will work.
+1 . Tau is multiplied together with S into each token. works really well I think.
+2. Tau is both multiplied at each token and loss. Not great
+3. Tau is just multipled with the loss
+
+
+bias trick
+generalist architecture
+and two entropies to finish it off
+
+
+Future work:
+    Multi Token prediction
+    The cool attention from Meta
