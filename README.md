@@ -94,6 +94,17 @@ How do we verify everything
     and two entropies to finish it off
 
 
+Mixture of Reccurance routing examples
+
+
+Parameters:
+    Token exit
+    Peri-LN
+    Attn experts
+    FFN experts
+    Shared experts
+    Expert balancing
+    Early exiting losses
 
 Future work:
     Multi Token prediction
