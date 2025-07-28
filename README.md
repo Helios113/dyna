@@ -74,25 +74,11 @@ The loss function should balance itself. For better science I need some hypothes
 3. Tau is just multipled with the loss
 
 
-bias trick
-    - Figure out what sel does and how it picks
-    - Add bias to selection
-    - update bias term according to Algo 1
-
-
-
-shared experts architecture
-    Manually select experts Ks to be always activated
-    From bias trick work should become obvious how to achieve
-    Make is such that 0 also works for Ks 
-    And a zero mask should also work for early exiting
-    The modifications of E are important
-
 
 New masking for the attention
     Take the regular mask and just assembled it as before
 
-and two entropies to finish it off
+
     
     
 
@@ -100,6 +86,13 @@ pos_offset and kv caching
 
 
 1 expert case is handled
+
+Add all hyper params like learned tau and bias to the hf checkpoint
+
+How do we verify everything
+    We need statistics
+    and two entropies to finish it off
+
 
 
 Future work:
