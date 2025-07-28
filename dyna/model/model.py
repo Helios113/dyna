@@ -250,14 +250,16 @@ class SwitchHeadCore(torch.nn.Module):
         self.selections_to_visualize = {}
         self.n_experts = n_experts
 
-
+        self.sel_hist = []
         self.n_heads = n_heads
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
         self.d_head = d_head or (d_model // n_heads)
 
         self.q = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
         self.k = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
-
+        self.bias_v = torch.zeros(n_experts)
+        self.bias_o = torch.zeros(n_experts)
+        
         if self.n_experts > 1:
             self.v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.n_experts, self.d_model, self.d_head)
@@ -343,10 +345,10 @@ class SwitchHeadCore(torch.nn.Module):
 
     def get_sel(self, t: torch.Tensor, w: torch.Tensor) -> Tuple[CVMMSel, torch.Tensor]:
 
+        # Selects which experts to use
+        
         # t :  batch_size, seq_len, d_model
         # w : n_heads * n_experts, d_model
-        # print("t", t.shape)
-        # print("w", w.shape)
 
         sel = F.linear(t, w).float()
         # sel : batch_size, seq_len, n_heads * n_experts
@@ -356,8 +358,6 @@ class SwitchHeadCore(torch.nn.Module):
         sel = sel.sigmoid()
         # sel : batch_size, seq_len, n_heads, n_experts
         # print("sel", sel.shape)
-
-        # C This tells which token goes to which expert -- here is where we can skip ?
         with torch.no_grad():
             if self.expert_dropout > 0 and self.training:
                 mask = torch.rand_like(sel) < self.expert_dropout
@@ -366,11 +366,7 @@ class SwitchHeadCore(torch.nn.Module):
                 sel2 = sel
             _, sel_index = sel2.topk(self.moe_k, dim=-1, sorted=False)
         sel_val = torch.gather(sel, -1, sel_index)
-        # sel_index: batch_size, seq_len, n_heads, attn_n_experts
-        # sel_val : batch_size, seq_len, n_heads, attn_n_experts
-        # sel_val is the per token expert which was assembled
 
-        # We have the two experts selected
 
         # This is like a positional encoding, but for the experts?
         sel_index_shifted = (
@@ -382,7 +378,7 @@ class SwitchHeadCore(torch.nn.Module):
         # #print("sel_index_shifted", sel_index_shifted.shape)
         # #print((torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype) * self.n_experts).unsqueeze(-1))
 
-        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_raw
+        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_index
 
     def attend(
         self,
@@ -417,12 +413,16 @@ class SwitchHeadCore(torch.nn.Module):
         q = q * scale.type_as(q)
         k = k * scale.type_as(k)
 
-        # Wsv, Wso matrices?
-        # Lets
-        # Values and output expert selection
+
         if self.n_experts > 1:
+            # expert selection
+            # sel.hist showed the slected clients
             v_sel, v_sel_raw = self.get_sel(k_src, self.sel_v)
             o_sel, o_sel_raw = self.get_sel(q_src, self.sel_o)
+            
+            if self.training:
+                print("v_sel",v_sel_raw)
+                print("o_sel",o_sel_raw)        
 
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
