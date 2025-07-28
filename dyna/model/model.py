@@ -381,12 +381,9 @@ class SwitchHeadCore(torch.nn.Module):
             else:
                 sel2 = sel
             # TopK -- gives an outup equal to the exact number of experts
-            if bias is not None:
-                sel2 += bias
-            _, sel_index = sel2.topk(self.moe_k, dim=-1, sorted=False)
+            _, sel_index = torch.topk((sel2 + bias) if bias is not None else sel2 ,self.moe_k, dim=-1, sorted=False)
             # sel_index batch_size, seq_len, n_heads, attn_n_experts
             if self.training:
-
                 c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
 
