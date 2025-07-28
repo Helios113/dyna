@@ -15,6 +15,7 @@ from transformers.modeling_outputs import (
 )
 from llmfoundry.utils.builders import build_metric
 from torch.nn.attention import SDPBackend, sdpa_kernel
+
 CROSS_ENTROPY_IGNORE_INDEX = -100
 DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
     "language_cross_entropy",
@@ -161,7 +162,6 @@ class SigmaMoE(torch.nn.Module):
         self.activation = activation
         self.expert_dropout = expert_dropout
 
-
         self.keys = torch.nn.Parameter(
             torch.empty(self.n_experts, self.k_vec_dim, self.expert_size)
         )
@@ -187,7 +187,6 @@ class SigmaMoE(torch.nn.Module):
             std = weight.std()
             weight.div_(weight.norm(dim=dim, keepdim=True))
             weight.mul_(std / weight.std())
-
 
     def forward(
         self, input: torch.Tensor, sel_input: Optional[torch.Tensor] = None
@@ -221,7 +220,6 @@ class SigmaMoE(torch.nn.Module):
         sel_indices.sel_index = sel_indices.out_index
         sel_indices.out_index = None
 
-        
         # scores times relu(xW)W
         out = cvmm(scores, sel_indices, self.values)
 
@@ -257,9 +255,9 @@ class SwitchHeadCore(torch.nn.Module):
 
         self.q = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
         self.k = torch.nn.Linear(self.d_model, self.d_head * self.n_heads, bias=False)
-        self.bias_v = torch.zeros(n_experts)
-        self.bias_o = torch.zeros(n_experts)
-        
+
+        self.bias_update_lr = 0.1
+
         if self.n_experts > 1:
             self.v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.n_experts, self.d_model, self.d_head)
@@ -275,6 +273,8 @@ class SwitchHeadCore(torch.nn.Module):
             self.sel_v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.n_experts, self.d_model)
             )
+            self.bias_v = torch.zeros(n_experts)
+            self.bias_o = torch.zeros(n_experts)
         else:
             self.v = torch.nn.Parameter(
                 torch.empty(self.n_heads * self.d_head, self.d_model)
@@ -344,24 +344,25 @@ class SwitchHeadCore(torch.nn.Module):
 
         return m
 
-    def get_sel(self, t: torch.Tensor, w: torch.Tensor, bias: torch.Tensor=None) -> Tuple[CVMMSel, torch.Tensor]:
+    def get_sel(
+        self, t: torch.Tensor, w: torch.Tensor, bias: torch.Tensor = None
+    ) -> Tuple[CVMMSel, torch.Tensor]:
 
         # Selects which experts to use
-        
+
         # t : batch_size, seq_len, d_model
         # w : n_heads * n_experts, d_model
         # F.liear applies tW^t
         sel = F.linear(t, w).float()
         # sel : batch_size, seq_len, n_heads * n_experts
-        
-        
+
         # separate the dimensions
         sel = sel_raw = sel.view(*sel.shape[:-1], self.n_heads, -1)
         # sel : batch_size, seq_len, n_heads, n_experts
 
         # Activation
         sel = sel.sigmoid()
-        
+
         with torch.no_grad():
             if self.expert_dropout > 0 and self.training:
                 mask = torch.rand_like(sel) < self.expert_dropout
@@ -370,14 +371,18 @@ class SwitchHeadCore(torch.nn.Module):
                 sel2 = sel
             # TopK -- gives an outup equal to the exact number of experts
             if bias is not None:
-                sel2+=bias
+                sel2 += bias
             _, sel_index = sel2.topk(self.moe_k, dim=-1, sorted=False)
             # sel_index batch_size, seq_len, n_heads, attn_n_experts
-            
+            if self.training:
+
+                c_i = torch.bincount(sel_index, minlength=self.n_experts)
+                c_i_avg = torch.mean(c_i)
+
+                bias += self.bias_update_lr * torch.sign(-c_i + c_i_avg)
         # gathers activations based on expert section for multiplication
         sel_val = torch.gather(sel, -1, sel_index)
-        #sel_index batch_size, seq_len, n_heads, sel_val
-
+        # sel_index batch_size, seq_len, n_heads, sel_val
 
         # This gives an index of which attention head to use from a big matrix of expert attention heads
         # This is used for optimal matrix multiplications
@@ -423,33 +428,18 @@ class SwitchHeadCore(torch.nn.Module):
         q = q * scale.type_as(q)
         k = k * scale.type_as(k)
 
-
         if self.n_experts > 1:
             # expert selection
             # sel.hist showed the slected clients
-            # 
+            #
             # k_src bs x seq_len x dmodel
             # sel_v heads x experts, dmodel
-            v_sel, v_sel_index = self.get_sel(k_src, self.sel_v)
-            o_sel, o_sel_index = self.get_sel(q_src, self.sel_o)
-            
-            # bs, seq_len, n_heads, attn_n_experts 
+            v_sel, v_sel_index = self.get_sel(k_src, self.sel_v, self.bias_v)
+            o_sel, o_sel_index = self.get_sel(q_src, self.sel_o, self.bias_o)
+
+            # bs, seq_len, n_heads, attn_n_experts
             # v_sel_index -- top k'd index of activations
             # o_sel_index -- top k'd index of activations
-            
-            
-            if self.training:
-                print("v_sel",v_sel_index.shape)
-                print("o_sel",v_sel_index)
-                # count how many entries there are for each expert
-                c_v = torch.bincount(v_sel_index, minlength=self.n_experts)
-                c_v_avg = torch.mean(c_v)
-                c_o = torch.bincount(o_sel_index, minlength=self.n_experts) 
-                c_o_avg = torch.mean(c_o)
-                e_v =  - c_v + c_v_avg
-                e_o =  - c_o + c_o_avg
-                
-                
 
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
@@ -482,7 +472,7 @@ class SwitchHeadCore(torch.nn.Module):
             # of the different heads. So reshape the reduction weight accordingly.
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
-            
+
             # Result times o_sel -- this is how we get s_o to be part of optim process
             # res will be in condensed form, so should o_sel
             out = cvmm(res, o_sel, self.o)
@@ -667,7 +657,7 @@ class MoEUTLayer(torch.nn.Module):
         e: torch.Tensor | None = None,
         router: torch.nn.Parameter | None = None,
         cum_sum: torch.Tensor | None = None,
-        tau : torch.Tensor | None = None,
+        tau: torch.Tensor | None = None,
         mask: tuple[torch.Tensor, torch.Tensor] | None = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache]:
@@ -684,19 +674,21 @@ class MoEUTLayer(torch.nn.Module):
 
         # make a mask
         skip_mask = cum_sum < tau
-        
+
         # Check if the last token in each sequence is ready to exit
         last_token_idx = x.shape[1] - 1  # Index of the last token in the sequence
-        last_tokens_exit = ~skip_mask[:, last_token_idx]  # True where last token has skip_mask == False
-        
+        last_tokens_exit = ~skip_mask[
+            :, last_token_idx
+        ]  # True where last token has skip_mask == False
+
         # For sequences where the last token is ready to exit, mark the entire sequence as done
         for batch_idx in last_tokens_exit.nonzero(as_tuple=True)[0]:
             skip_mask[batch_idx, :] = False
-            
+
         # Exit if all sequences are done
         if torch.all(skip_mask == False):
             return x, kv_cache, False, 0
-            
+
         lengths = skip_mask.sum(dim=1)  # number of valid entries per batch
         max_len = round_up_to_multiple_of_256(lengths.max().item())
         positions = torch.zeros(x.shape[0], max_len, dtype=torch.long, device=x.device)
@@ -708,21 +700,31 @@ class MoEUTLayer(torch.nn.Module):
         # Pack the batch to be something smaller - VECTORIZED VERSION
         # Get all valid positions in one go
         batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
-        
+
         # Create a mapping for efficient packing
         if batch_idx.numel() > 0:
             # Count valid tokens per batch
             batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
-            cumsum_counts = torch.cumsum(torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]), dim=0)
-            
+            cumsum_counts = torch.cumsum(
+                torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]),
+                dim=0,
+            )
+
             # Create output indices
-            local_indices = torch.arange(batch_idx.numel(), device=x.device) - cumsum_counts[batch_idx]
+            local_indices = (
+                torch.arange(batch_idx.numel(), device=x.device)
+                - cumsum_counts[batch_idx]
+            )
             valid_mask = local_indices < max_len
-            
+
             if valid_mask.any():
                 # Pack efficiently
-                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[batch_idx[valid_mask], seq_idx[valid_mask]]
-                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[valid_mask]
+                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[
+                    batch_idx[valid_mask], seq_idx[valid_mask]
+                ]
+                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[
+                    valid_mask
+                ]
 
         # Give the batch and location info to the attention mechanism
         # There skip the offset assertion by providing a location into and offset precalculated
@@ -762,7 +764,13 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[: skip_mask.sum()] * cum_sum[
+                    skip_mask
+                ].unsqueeze(
+                    1
+                ) * tau / (
+                    layer_index + 1
+                )
 
                 x = x + e
             else:
@@ -770,7 +778,13 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + attn.view(-1, attn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
+                ] + attn.view(-1, attn.shape[-1])[: skip_mask.sum()] * cum_sum[
+                    skip_mask
+                ].unsqueeze(
+                    1
+                ) * tau / (
+                    layer_index + 1
+                )
 
         else:
             x = self.drop(self.attn_post(att)) + x
@@ -781,16 +795,26 @@ class MoEUTLayer(torch.nn.Module):
         xnorm = self.ffn_pre(x)
         # Vectorized packing for FFN (reuse the same logic)
         batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
-        
+
         if batch_idx.numel() > 0:
             batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
-            cumsum_counts = torch.cumsum(torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]), dim=0)
-            local_indices = torch.arange(batch_idx.numel(), device=x.device) - cumsum_counts[batch_idx]
+            cumsum_counts = torch.cumsum(
+                torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]),
+                dim=0,
+            )
+            local_indices = (
+                torch.arange(batch_idx.numel(), device=x.device)
+                - cumsum_counts[batch_idx]
+            )
             valid_mask = local_indices < max_len
-            
+
             if valid_mask.any():
-                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[batch_idx[valid_mask], seq_idx[valid_mask]]
-                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[valid_mask]
+                out[batch_idx[valid_mask], local_indices[valid_mask]] = xnorm[
+                    batch_idx[valid_mask], seq_idx[valid_mask]
+                ]
+                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[
+                    valid_mask
+                ]
         upd = self.ffn(out, out)
         # upd shape batch_size x seq_len x d_model
         if self.scale_add:
@@ -806,7 +830,13 @@ class MoEUTLayer(torch.nn.Module):
                 # More efficient: use boolean indexing instead of concatenation
                 x[skip_mask] = layer_index / (layer_index + 1) * x[
                     skip_mask
-                ] + ffn.view(-1, ffn.shape[-1])[:skip_mask.sum()] * cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
+                ] + ffn.view(-1, ffn.shape[-1])[: skip_mask.sum()] * cum_sum[
+                    skip_mask
+                ].unsqueeze(
+                    1
+                ) * tau / (
+                    layer_index + 1
+                )
 
                 x = x + e
             else:
@@ -880,17 +910,23 @@ class MoEUT(MoEUTPretrainedModel):
                 # execute the layer
                 # x shape batch_size x seq_len x d_model
                 x, _, condition, seq_lengths = layer(
-                    x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
+                    x,
+                    layer_index_abs,
+                    e,
+                    self.router,
+                    cum_sum,
+                    self.tau,
+                    mask,
+                    kv_cache=None,
                 )
                 self._seq_len_evolve.append(copy.deepcopy(seq_lengths))
                 if not condition:
                     break
                 # x shape batch_size x seq_len x d_model
                 layer_index_abs += 1
-        
+
         # Store the layer usage for the callback to access
         self._layer_index_abs = layer_index_abs
-
 
         return CausalLMOutputWithPast(0, x, new_cache if kv_cache is not None else None)
 
@@ -986,6 +1022,8 @@ class MoEUTLM(MoEUTPretrainedModel):
             torch.ones(sz, sz, dtype=torch.bool, device=self.lm_head.weight.device),
             diagonal=1,
         )
+
+
 class ComposerMoEUT(HuggingFaceModel):
     def __init__(
         self,
@@ -1021,7 +1059,6 @@ class ComposerMoEUT(HuggingFaceModel):
             inputs_embeds=batch.get("inputs_embeds", None),
             attention_mask=batch.get("attention_mask", None),
         )
-        
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> dict | torch.Tensor:
 
@@ -1036,5 +1073,5 @@ class ComposerMoEUT(HuggingFaceModel):
             batch["input_ids"] if "input_ids" in batch else batch["labels"],
             loss_fn,
         )
-        
+
         return loss
