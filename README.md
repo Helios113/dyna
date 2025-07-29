@@ -94,6 +94,10 @@ How do we verify everything
     and two entropies to finish it off
 
 
+    Plot expert selection
+    Plot entropy and maybe seq length as a graph that can scroll and as a total graph
+
+
 Mixture of Reccurance routing examples
 
 

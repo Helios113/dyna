@@ -123,6 +123,12 @@ class MoEUTConfig(PretrainedConfig):
         scale_add: bool = True,
         prot_emb: bool = False,
         shared_expert_number: int = 1,
+        # New configurable options for backward compatibility
+        enable_early_exit: bool = True,
+        use_rms_norm: bool = True,
+        enable_sequence_packing: bool = True,
+        use_simple_residual: bool = False,
+        collect_reg_loss: bool = False,
         **kwargs,
     ):
         super().__init__(**{"model_type": self.model_type})
@@ -156,6 +162,13 @@ class MoEUTConfig(PretrainedConfig):
         self.shift_labels = shift_labels
         self.scale_add = scale_add
         self.prot_emb = prot_emb
+        
+        # Backward compatibility options
+        self.enable_early_exit = enable_early_exit
+        self.use_rms_norm = use_rms_norm
+        self.enable_sequence_packing = enable_sequence_packing
+        self.use_simple_residual = use_simple_residual
+        self.collect_reg_loss = collect_reg_loss
         
         # Store additional kwargs for forward compatibility
         for k, v in kwargs.items():
@@ -750,7 +763,7 @@ class SwitchHeadRope(SwitchHeadCore):
 
 
 class MoEUTLayer(torch.nn.Module):
-    """Single layer of the MoEUT model with early exit capability."""
+    """Single layer of the MoEUT model with configurable behavior."""
     
     def __init__(self, config: MoEUTConfig):
         super().__init__()
@@ -778,16 +791,20 @@ class MoEUTLayer(torch.nn.Module):
             shared_expert_number=shared_expert_number,
         )
         
-        # Layer normalization
-        self.attn_pre = RMSNorm(config.d_model)
-        self.attn_post = RMSNorm(config.d_model)
-        self.ffn_pre = RMSNorm(config.d_model)
-        self.ffn_post = RMSNorm(config.d_model)
+        # Layer normalization - configurable type
+        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
+        self.attn_pre = norm_class(config.d_model)
+        self.attn_post = norm_class(config.d_model)
+        self.ffn_pre = norm_class(config.d_model)
+        self.ffn_post = norm_class(config.d_model)
         
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
         self.scale_add = config.scale_add
         self.group_size = config.group_size
+        self.enable_early_exit = config.enable_early_exit
+        self.enable_sequence_packing = config.enable_sequence_packing
+        self.use_simple_residual = config.use_simple_residual
 
     def _check_early_exit(
         self, 
@@ -798,6 +815,11 @@ class MoEUTLayer(torch.nn.Module):
         layer_index: int
     ) -> Tuple[torch.Tensor, bool]:
         """Check if tokens should exit early and create skip mask."""
+        if not self.enable_early_exit:
+            # Return mask that keeps all tokens
+            skip_mask = torch.ones_like(cum_sum, dtype=torch.bool)
+            return skip_mask, True
+            
         # Compute exit scores
         s_exit = F.sigmoid(F.linear(x, router))
         cum_sum += s_exit
@@ -816,7 +838,7 @@ class MoEUTLayer(torch.nn.Module):
         # Check if all sequences are done
         continue_processing = not torch.all(skip_mask == False)
         
-        return skip_mask, continue_processing
+        return skip_mask, continue_processing, s_exit
 
     def _pack_sequence(
         self, 
@@ -824,6 +846,11 @@ class MoEUTLayer(torch.nn.Module):
         skip_mask: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, int]:
         """Pack sequences for efficient processing."""
+        if not self.enable_sequence_packing:
+            # Return original sequence without packing
+            positions = torch.arange(x.shape[1], device=x.device).unsqueeze(0).expand(x.shape[0], -1)
+            return x, positions, x.shape[1]
+            
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
         
@@ -865,24 +892,33 @@ class MoEUTLayer(torch.nn.Module):
         e: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Apply residual connection with optional scaling."""
+        if self.use_simple_residual:
+            # Simple residual connection like old model
+            return x + self.drop(update)
+            
         if self.scale_add:
             if e is not None:
                 x = x - e
             
             # Apply scaled update
-            scale_factor = layer_index / (layer_index + 1)
-            update_factor = cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
-            
-            x[skip_mask] = (
-                scale_factor * x[skip_mask] + 
-                update.view(-1, update.shape[-1])[:skip_mask.sum()] * update_factor
-            )
+            if self.enable_early_exit:
+                scale_factor = layer_index / (layer_index + 1)
+                update_factor = cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
+                
+                x[skip_mask] = (
+                    scale_factor * x[skip_mask] + 
+                    update.view(-1, update.shape[-1])[:skip_mask.sum()] * update_factor
+                )
+            else:
+                # Apply to all tokens when early exit is disabled
+                scale_factor = layer_index / (layer_index + 1)
+                x = scale_factor * x + update * tau / (layer_index + 1)
             
             if e is not None:
                 x = x + e
         else:
             # Simple residual connection
-            x = update + x
+            x = x + self.drop(update)
         
         return x
 
@@ -897,57 +933,95 @@ class MoEUTLayer(torch.nn.Module):
         mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         kv_cache: KVCache = None,
     ) -> Tuple[torch.Tensor, KVCache, bool, int]:
-        """Forward pass through the layer with early exit."""
+        """Forward pass through the layer with configurable behavior."""
         # Update layer index for group processing
-        layer_index = self.group_size * layer_index + 1
-        
+        if self.enable_early_exit:
+            layer_index = self.group_size * layer_index + 1
+        s_exit = 0
         # Check for early exit
-        skip_mask, continue_processing = self._check_early_exit(
-            x, router, cum_sum, tau, layer_index
-        )
-        
-        if not continue_processing:
-            return x, kv_cache, False, 0
+        if self.enable_early_exit and router is not None and cum_sum is not None and tau is not None:
+            skip_mask, continue_processing, s_exit = self._check_early_exit(
+                x, router, cum_sum, tau, layer_index
+            )
+            
+            if not continue_processing:
+                return x, kv_cache, False, 0, s_exit
+        else:
+            # Process all tokens when early exit is disabled
+            skip_mask = torch.ones(x.shape[0], x.shape[1], dtype=torch.bool, device=x.device)
+            continue_processing = True
         
         # === ATTENTION BLOCK ===
         # Pre-normalization and packing
         xnorm = self.attn_pre(x)
-        packed_x, positions, max_len = self._pack_sequence(xnorm, skip_mask)
+        
+        if self.enable_sequence_packing and self.enable_early_exit:
+            packed_x, positions, max_len = self._pack_sequence(xnorm, skip_mask)
+            positions_arg = positions
+            skip_mask_arg = skip_mask
+        else:
+            packed_x = xnorm
+            positions_arg = torch.arange(x.shape[1], device=x.device).unsqueeze(0).expand(x.shape[0], -1)
+            skip_mask_arg = None
+            max_len = x.shape[1]
         
         # Attention computation
         att, kv_cache = self.attention(
             packed_x, xnorm, xnorm, mask,
-            kv_cache=kv_cache, pos_offset=0, positions=positions, skip_mask=skip_mask
+            kv_cache=kv_cache, pos_offset=0, positions=positions_arg, skip_mask=skip_mask_arg
         )
         
         # Apply residual connection
-        attn_out = self.drop(self.attn_post(att))
-        x = self._apply_residual_update(x, attn_out, skip_mask, cum_sum, tau, layer_index, e)
-        layer_index += 1
+        if self.use_simple_residual:
+            x = x + self.drop(att)
+        else:
+            attn_out = self.attn_post(att)
+            x = self._apply_residual_update(x, attn_out, skip_mask, cum_sum, tau, layer_index, e)
+        
+        if self.enable_early_exit:
+            layer_index += 1
         
         # === FFN BLOCK ===
         # Pre-normalization and packing
-        xnorm = self.ffn_pre(x)
-        packed_x, positions, _ = self._pack_sequence(xnorm, skip_mask)
+        if self.use_simple_residual:
+            # Old model style: use x directly for FFN, apply layer norm inside FFN
+            ffn_input = x
+            ffn_norm_input = self.ffn_pre(x)
+        else:
+            # New model style: pre-normalize then pack
+            xnorm = self.ffn_pre(x)
+            if self.enable_sequence_packing and self.enable_early_exit:
+                packed_x, positions, _ = self._pack_sequence(xnorm, skip_mask)
+                ffn_input = packed_x
+                ffn_norm_input = packed_x
+            else:
+                ffn_input = xnorm
+                ffn_norm_input = xnorm
         
         # FFN computation
-        ffn_out = self.ffn(packed_x, packed_x)
+        ffn_out = self.ffn(ffn_input, ffn_norm_input)
         
         # Apply residual connection
-        ffn_processed = self.drop(self.ffn_post(ffn_out))
-        
-        if self.scale_add:
-            if e is not None:
-                x = x - e
-                x = self._apply_residual_update(x, ffn_processed, skip_mask, cum_sum, tau, layer_index, None)
-                x = x + e
-            else:
-                scale_factor = layer_index / (layer_index + 1)
-                x = scale_factor * x + ffn_processed / (layer_index + 1)
+        if self.use_simple_residual:
+            x = x + ffn_out
         else:
-            x = ffn_processed + x
+            ffn_processed = self.ffn_post(ffn_out)
+            
+            if self.scale_add:
+                if e is not None:
+                    x = x - e
+                    x = self._apply_residual_update(x, ffn_processed, skip_mask, cum_sum, tau, layer_index, None)
+                    x = x + e
+                else:
+                    if self.enable_early_exit:
+                        scale_factor = layer_index / (layer_index + 1)
+                        x = scale_factor * x + ffn_processed / (layer_index + 1)
+                    else:
+                        x = x + self.drop(ffn_processed)
+            else:
+                x = x + self.drop(ffn_processed)
         
-        return x, kv_cache, True, max_len
+        return x, kv_cache, continue_processing, max_len, s_exit
 
 
 class MoEUTPretrainedModel(PreTrainedModel):
@@ -961,7 +1035,7 @@ class MoEUTPretrainedModel(PreTrainedModel):
 
 
 class MoEUT(MoEUTPretrainedModel):
-    """MoEUT transformer model with early exit capability."""
+    """MoEUT transformer model with configurable behavior."""
     
     def __init__(self, config: MoEUTConfig):
         super().__init__(config)
@@ -970,36 +1044,66 @@ class MoEUT(MoEUTPretrainedModel):
         self.entropy_reg = config.entropy_reg
         self.att_entropy_reg = config.att_entropy_reg
         self.group_size = config.group_size
-        self.n_repeats = 4
+        self.n_repeats = config.n_layers // config.group_size if config.enable_early_exit else config.n_layers
         self.d_model = config.d_model
-        
-        # Model components
+        self.enable_early_exit = config.enable_early_exit
+        self.collect_reg_loss = config.collect_reg_loss
+
         self.layers = torch.nn.ModuleList([
             MoEUTLayer(config) for _ in range(config.group_size)
         ])
         
-        # Early exit parameters
-        self.router = torch.nn.Parameter(torch.empty(self.d_model))
-        self.tau = torch.nn.Parameter(torch.ones(1))
+        # Early exit parameters (only if enabled)
+        if config.enable_early_exit:
+            self.router = torch.nn.Parameter(torch.empty(self.d_model))
+            self.tau = torch.nn.Parameter(torch.ones(1))
+        else:
+            self.router = None
+            self.tau = None
         
         # Initialize parameters
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         """Initialize all model parameters."""
-        scale = math.sqrt(2 / (self.n_repeats * len(self.layers)))
-        torch.nn.init.normal_(self.router, 0, scale / math.sqrt(self.d_model))
+        if self.enable_early_exit:
+            scale = math.sqrt(2 / (self.n_repeats * len(self.layers)))
+            torch.nn.init.normal_(self.router, 0, scale / math.sqrt(self.d_model))
+        else:
+            scale = math.sqrt(2 / len(self.layers))
         
         # Initialize tracking variables
         self._layer_index_abs = 0
-        self._seq_len_evolve = []
+        self._seq_len= []
+        self._latent_vectors = []
+        self._exit_logits = []
         
+        
+
         # Initialize layer parameters
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, RMSNorm):
-                layer.reset_parameters()
+            elif isinstance(layer, (RMSNorm, torch.nn.LayerNorm)):
+                if hasattr(layer, 'reset_parameters'):
+                    layer.reset_parameters()
+                else:
+                    # For standard LayerNorm
+                    torch.nn.init.ones_(layer.weight)
+                    torch.nn.init.zeros_(layer.bias)
+
+    def _collect_regularization_loss(self) -> torch.Tensor:
+        """Collect regularization losses from all layers."""
+        if not self.collect_reg_loss:
+            return torch.tensor(0.0, device=next(self.parameters()).device)
+            
+        reg_loss = torch.zeros(1, device=next(self.parameters()).device, dtype=torch.float32)
+        for layer in self.modules():
+            if isinstance(layer, SigmaMoE) and hasattr(layer, 'get_reg_loss'):
+                reg_loss = reg_loss + self.entropy_reg * layer.get_reg_loss()
+            elif isinstance(layer, SwitchHeadCore) and hasattr(layer, 'get_reg_loss'):
+                reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
+        return reg_loss
 
     def forward(
         self,
@@ -1009,35 +1113,53 @@ class MoEUT(MoEUTPretrainedModel):
         kv_cache: MultilayerKVCache = None,
     ) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
-        # Initialize state
         new_cache = {}
-        self._seq_len_evolve = []
-        cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
+        self._seq_len = []
+        self._latent_vectors = []
+        self._exit_logits = []
         
-        # Process layers with early exit
-        layer_index_abs = 0
-        continue_processing = True
         
-        while continue_processing:
-            for layer in self.layers:
-                # Forward through layer
-                x, _, continue_processing, seq_lengths = layer(
-                    x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
+        if self.enable_early_exit:
+            # New model: early exit with groups
+            cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
+            layer_index_abs = 0
+            continue_processing = True
+            
+            while continue_processing:
+                for layer in self.layers:
+                    # Forward through layer
+                    x, _, continue_processing, seq_lengths, s_exit = layer(
+                        x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
+                    )
+                    
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len.append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors.append(x.detach().clone())
+                    self._exit_logits.append(s_exit.detach().clone())
+                    
+                    
+                    if not continue_processing:
+                        break
+                    
+                    layer_index_abs += 1
+            
+            # Store layer usage for callbacks
+            self._layer_index_abs = layer_index_abs
+            
+        else:
+            # Old model style: process all layers sequentially
+            for li, layer in enumerate(self.layers):
+                cache = kv_cache.get(li, {}) if kv_cache is not None else None
+                x, new_cache[li] = layer(
+                    x, li, e, None, None, None, mask, kv_cache=cache
                 )
                 
-                # Track sequence lengths for analysis
-                self._seq_len_evolve.append(copy.deepcopy(seq_lengths))
-                
-                if not continue_processing:
-                    break
-                
-                layer_index_abs += 1
         
-        # Store layer usage for callbacks
-        self._layer_index_abs = layer_index_abs
+        # Collect regularization loss if enabled
+        reg_loss = self._collect_regularization_loss()
         
         return CausalLMOutputWithPast(
-            loss=None,
+            loss=reg_loss if self.collect_reg_loss else None,
             logits=x,
             past_key_values=new_cache if kv_cache is not None else None
         )
@@ -1055,14 +1177,25 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Model configuration
         self.n_layers = config.n_layers
         self.prot_emb = config.prot_emb
+        self.use_rms_norm = config.use_rms_norm
         
         # Input/output layers
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size)
-        self.out_norm = RMSNorm(config.d_model)
+        
+        # Output normalization - configurable type
+        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
+        self.out_norm = norm_class(config.d_model)
+        
+        # Storage for intermediate logits (for entropy analysis)
+        self.intermediate_logits = []
+        self.intermediate_layer_indices = []
         
         # Initialize parameters
         self.reset_parameters()
+        
+        # Provide LM head to transformer for entropy computation
+        self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
 
     def reset_parameters(self) -> None:
         """Initialize embedding and transformer parameters."""
@@ -1084,6 +1217,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         inputs_embeds: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         src_len_mask: Optional[torch.Tensor] = None,
+        save_intermediate_logits: bool = False,
     ) -> CausalLMOutputWithPast:
         """Forward pass through the language model."""
         # Validate inputs
@@ -1105,13 +1239,15 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Prepare protected embeddings if enabled
         e = x.clone() if self.prot_emb else None
         
-        # Forward through transformer
-        outputs = self.transformer(x, e, (attention_mask, src_len_mask), {})
+        # Forward through transformer with intermediate logit saving
+        outputs = self.transformer(
+            x, e, (attention_mask, src_len_mask), {})
         
         # Apply output projection
         outputs.logits = self.lm_head(self.out_norm(outputs.logits))
         
         return outputs
+
 
 
 class ComposerMoEUT(HuggingFaceModel):
@@ -1147,10 +1283,14 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
+        # Check if we should save intermediate logits (for entropy analysis)
+        save_intermediate = getattr(self, '_save_intermediate_logits', False)
+        
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),
             attention_mask=batch.get("attention_mask", None),
+            save_intermediate_logits=save_intermediate,
         )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
