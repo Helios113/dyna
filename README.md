@@ -90,12 +90,18 @@ pos_offset and kv caching
 Add all hyper params like learned tau and bias to the hf checkpoint
 
 How do we verify everything
-    We need statistics
-    and two entropies to finish it off
 
+    Plot entropy and maybe seq length as a graph that can scroll and as a total graph -- done
 
-    Plot expert selection
-    Plot entropy and maybe seq length as a graph that can scroll and as a total graph
+    Plot expert selection -- almost done
+    Do the same reg loss as they had
+    Make ACT for comparisons 
+    Paramterise everything and run
+    Fix initialisation
+    batch packing
+    Shanon entropy being 10 seems highly unlikely
+
+Entropy calc before applying sigmoid apparently1!!
 
 
 Mixture of Reccurance routing examples

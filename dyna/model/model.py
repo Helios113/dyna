@@ -228,6 +228,9 @@ class SigmaMoE(torch.nn.Module):
             torch.arange(n_experts - self.shared_expert_number, n_experts, dtype=torch.long)
         )
 
+        # Add selection history tracking
+        self.sel_hist = []
+
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
         torch.nn.init.normal_(self.expert_sel, 0, std_scale / math.sqrt(self.k_dim))
@@ -297,6 +300,16 @@ class SigmaMoE(torch.nn.Module):
                 -c_i[:self.routed_expert_number] + c_i_avg
             )
 
+    def get_reg_loss(self) -> torch.Tensor:
+        """Get regularization loss and reset selection history."""
+        if not self.sel_hist:
+            return torch.tensor(0.0, device=self.keys.device)
+        
+        # Average over time and layers
+        loss = entropy_reg(torch.stack(self.sel_hist, dim=-2).flatten(-3, -2), -2)
+        self.sel_hist = []
+        return loss
+
     def forward(
         self, 
         input_tensor: torch.Tensor, 
@@ -305,6 +318,7 @@ class SigmaMoE(torch.nn.Module):
         """Forward pass through the MoE layer."""
         # Get expert selection
         sel_val, sel_index = self._compute_expert_selection(input_tensor, sel_input)
+        self.sel_hist.append(sel_val)
         
         # Prepare selection indices for CVMM operations
         sel_indices = cvmm_prepare_sel2(sel_index.int())
@@ -321,7 +335,7 @@ class SigmaMoE(torch.nn.Module):
         
         out = cvmm(scores, sel_indices, self.values)
         
-        return out.view(*input_tensor.shape[:-1], self.v_dim)
+        return out.view(*input_tensor.shape[:-1], self.v_dim), sel_index
 
 
 class SwitchHeadCore(torch.nn.Module):
@@ -481,6 +495,17 @@ class SwitchHeadCore(torch.nn.Module):
         
         return attention_mask
 
+    def get_reg_loss(self) -> torch.Tensor:
+        """Get regularization loss from selection history."""
+        loss = torch.tensor(0.0, device=next(self.parameters()).device)
+        if self.sel_hist:
+            for i in range(len(self.sel_hist[0])):
+                loss = loss + entropy_reg(
+                    torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3), -3
+                )
+        self.sel_hist = []
+        return loss
+
     def _get_expert_selection(
         self, 
         input_tensor: torch.Tensor, 
@@ -539,8 +564,8 @@ class SwitchHeadCore(torch.nn.Module):
             torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype)
             * self.n_experts
         ).unsqueeze(-1) + sel_index
-        
-        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_index
+
+        return cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val), sel_raw, sel_index
 
     def attend(
         self,
@@ -573,8 +598,10 @@ class SwitchHeadCore(torch.nn.Module):
         
         # Handle expert routing for values and outputs
         if self.n_experts > 1:
-            v_sel, v_sel_index = self._get_expert_selection(k_src, self.sel_v, self.bias_v)
-            o_sel, o_sel_index = self._get_expert_selection(q_src, self.sel_o, self.bias_o)
+            v_sel, v_sel_r, v_sel_index = self._get_expert_selection(k_src, self.sel_v, self.bias_v)
+            o_sel, o_sel_r, o_sel_inedx = self._get_expert_selection(q_src, self.sel_o, self.bias_o)
+            if self.training:
+                self.sel_hist.append((o_sel_r, v_sel_r))
             v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
         else:
             o_gate = F.sigmoid(F.linear(q_src, self.sel_o))
@@ -605,7 +632,7 @@ class SwitchHeadCore(torch.nn.Module):
             res = res * o_gate[..., None]
             out = F.linear(res.flatten(-2), self.o)
         
-        return out, kv_cache
+        return out, kv_cache, (v_sel_index,o_sel_inedx)
 
 
 class RotaryPosEncoding(torch.nn.Module):
@@ -945,7 +972,7 @@ class MoEUTLayer(torch.nn.Module):
             )
             
             if not continue_processing:
-                return x, kv_cache, False, 0, s_exit
+                return x, kv_cache, False, 0, s_exit, ((None,None),None)
         else:
             # Process all tokens when early exit is disabled
             skip_mask = torch.ones(x.shape[0], x.shape[1], dtype=torch.bool, device=x.device)
@@ -966,7 +993,7 @@ class MoEUTLayer(torch.nn.Module):
             max_len = x.shape[1]
         
         # Attention computation
-        att, kv_cache = self.attention(
+        att, kv_cache, expert_sel_attn = self.attention(
             packed_x, xnorm, xnorm, mask,
             kv_cache=kv_cache, pos_offset=0, positions=positions_arg, skip_mask=skip_mask_arg
         )
@@ -999,7 +1026,7 @@ class MoEUTLayer(torch.nn.Module):
                 ffn_norm_input = xnorm
         
         # FFN computation
-        ffn_out = self.ffn(ffn_input, ffn_norm_input)
+        ffn_out, expert_sel_ffn = self.ffn(ffn_input, ffn_norm_input)
         
         # Apply residual connection
         if self.use_simple_residual:
@@ -1021,7 +1048,7 @@ class MoEUTLayer(torch.nn.Module):
             else:
                 x = x + self.drop(ffn_processed)
         
-        return x, kv_cache, continue_processing, max_len, s_exit
+        return x, kv_cache, continue_processing, max_len, s_exit, (expert_sel_attn,expert_sel_ffn)
 
 
 class MoEUTPretrainedModel(PreTrainedModel):
@@ -1077,6 +1104,7 @@ class MoEUT(MoEUTPretrainedModel):
         self._seq_len= []
         self._latent_vectors = []
         self._exit_logits = []
+        self._expert_sel = []
         
         
 
@@ -1117,6 +1145,7 @@ class MoEUT(MoEUTPretrainedModel):
         self._seq_len = []
         self._latent_vectors = []
         self._exit_logits = []
+        self._expert_sel = []
         
         
         if self.enable_early_exit:
@@ -1128,7 +1157,7 @@ class MoEUT(MoEUTPretrainedModel):
             while continue_processing:
                 for layer in self.layers:
                     # Forward through layer
-                    x, _, continue_processing, seq_lengths, s_exit = layer(
+                    x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                         x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
                     )
                     
@@ -1136,7 +1165,7 @@ class MoEUT(MoEUTPretrainedModel):
                     self._seq_len.append(copy.deepcopy(seq_lengths))
                     self._latent_vectors.append(x.detach().clone())
                     self._exit_logits.append(s_exit.detach().clone())
-                    
+                    self._expert_sel.append(expert_sel)
                     
                     if not continue_processing:
                         break
@@ -1153,7 +1182,6 @@ class MoEUT(MoEUTPretrainedModel):
                 x, new_cache[li] = layer(
                     x, li, e, None, None, None, mask, kv_cache=cache
                 )
-                
         
         # Collect regularization loss if enabled
         reg_loss = self._collect_regularization_loss()

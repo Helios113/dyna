@@ -32,6 +32,10 @@ callbacks:
       log_interval: "1ba"
     entropy_callback: {}
     exit_callback: {}
+    expert_selection_callback: 
+      attn_experts: ${model_config.n_att_experts}
+      ffn_experts: ${model_config.n_ffn_experts}
+    
 
 data_config:
   path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
