@@ -1,7 +1,6 @@
 import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
-from composer.loggers.wandb_logger import WandBLogger
 from typing import Any, Dict, Optional, Union
 import wandb
 
@@ -20,10 +19,12 @@ class LayerUsageMonitor(Callback):
         self.log_interval = Time.from_timestring(log_interval) if isinstance(log_interval, str) else Time(log_interval, TimeUnit.BATCH)
         # Store the layer usage data between batches
         self.layer_usage_data = []
+        self.block_indices = []
         # Track total blocks processed so far
         self.total_blocks_so_far = 0
         self.last_batch_logged = -1
         self.metric_defined = False
+        self.seq_len_data = []
     def _should_log(self, state: State) -> bool:
         """Determine if it's time to log based on the log_interval."""
         if isinstance(self.log_interval, Time):
@@ -34,47 +35,42 @@ class LayerUsageMonitor(Callback):
         """Log layer usage information at the end of each batch."""
         if not state.model.training or not self._should_log(state):
             return
-        if self.metric_defined == False:
-            wandb.run.define_metric(step_metric = "layer_usage/block_index", name = "block_index")
-            self.metric_defined = True
-        
+     
 
-        # Access the transformer model
-        if hasattr(state.model, "model") and hasattr(state.model.model, "transformer"):
-            transformer = state.model.model.transformer
+        transformer = state.model.model.transformer
             
-            # Check if layer_index_abs is tracked by the model
-            if hasattr(transformer, "_layer_index_abs"):
-                layer_usage = transformer._layer_index_abs
-                _tau = transformer.tau.item()
-                # Store layer usage for epoch statistics
-                self.layer_usage_data.append(layer_usage)
+        # Check if layer_index_abs is tracked by the model
+        if hasattr(transformer, "_layer_index_abs"):
+            layer_usage = transformer._layer_index_abs
+            _tau = transformer.tau.item()
+            # Store layer usage for epoch statistics
+            self.layer_usage_data.append(layer_usage)
+            # Log other metrics with regular steps (default behavior)
+            
+            # Access sequence length evolution if available
+            if hasattr(transformer, "_seq_len_evolve"):
+                seq_len_evolve = transformer._seq_len_evolve
                 
-                # Access sequence length evolution if available
-                if hasattr(transformer, "_seq_len_evolve"):
-                    seq_len_evolve = transformer._seq_len_evolve
-                    
-                    # Log sequence length at each block point on the total blocks axis
-                    for i, seq_len in enumerate(seq_len_evolve):
-                        block_index = self.total_blocks_so_far + i + 1  # Calculate absolute block index
-                        
-                        # Also log using a consistent metric name for better plotting
-                        logger.log_metrics({
-                            'layer_usage/seq_len_vs_blocks': i,
-                            'layer_usage/block_index': block_index
-                        })
-                    
-                    # Update total blocks so far
-                    self.total_blocks_so_far += layer_usage
-                
-                # Log metrics dictionary
+                # Log sequence length with custom step metric
+                for i, seq_len in enumerate(seq_len_evolve):
+                    print(seq_len)
+                    self.seq_len_data.append(seq_len)
+                    self.block_indices.append(self.total_blocks_so_far)
+                    self.total_blocks_so_far += 1
+
                 metrics_dict = {
-                    'layer_usage/tau': _tau,
-                    'layer_usage/average_layers': layer_usage,
-                    'layer_usage/total_blocks': self.total_blocks_so_far
+                    'layer/tau': _tau,
+                    'layer/layers_activated': layer_usage,
+                    'layer/total_blocks': self.total_blocks_so_far,
+                    "layer/seq_len": wandb.plot.line_series(
+                            xs=self.block_indices,
+                            ys=[self.seq_len_data],
+                            keys=["seq_len"],
+                            title="Sequence Length in transformer depth",
+                            xname="Block Index",
+                        )
                 }
                 logger.log_metrics(metrics_dict)
-                
-                # Update last logged batch
-                self.last_batch_logged = state.timestamp.batch
-                
+    
+            # Update last logged batch
+            self.last_batch_logged = state.timestamp.batch

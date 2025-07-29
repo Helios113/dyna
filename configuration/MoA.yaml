@@ -30,6 +30,8 @@ callbacks:
     activation_monitor_c: {}
     layer_usage_monitor:
       log_interval: "1ba"
+    entropy_callback: {}
+    exit_callback: {}
 
 data_config:
   path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
