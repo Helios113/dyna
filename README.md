@@ -94,12 +94,36 @@ How do we verify everything
     Plot entropy and maybe seq length as a graph that can scroll and as a total graph -- done
 
     Plot expert selection -- almost done
+        -- see that it works with microbatching
+
     Do the same reg loss as they had
+        -- will do
+
     Make ACT for comparisons 
+        -- will do
+    
+
     Paramterise everything and run
+
     Fix initialisation
     batch packing
+
     Shanon entropy being 10 seems highly unlikely
+        -- make shanon entropy for final token as well
+        -- make shanon entropy work as the expert select
+        -- make exit entropy the same and show final entropy as well
+
+    
+    Exit expert -- might be very good
+
+        -- we maybe we can look at the entropy
+
+    For a policy
+        -- give it more info 
+    use RL to improve the router's descicion process
+    Temporal iterations
+    Multiple rollouts
+        -- route several times the same tokens
 
 Entropy calc before applying sigmoid apparently1!!
 

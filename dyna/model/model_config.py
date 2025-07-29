@@ -34,7 +34,7 @@ class ModelConfig:
     d_head: int | None = None
     group_size: int = 2
     ff_k: int = 8
-    att_k: int = 2
+    attn_k: int = 2
     ff_expert_dropout: float = 0.0
     att_expert_dropout: float = 0.0
     ff_expert_size: int = 128
@@ -45,6 +45,9 @@ class ModelConfig:
     shift_labels: bool | None = None
     scale_add: bool = True
     prot_emb: bool = False
+    shared_expert_number_attn: int = 1
+    shared_expert_number_ffn: int = 2
+    collect_reg_loss: bool = False
 
 
 @dataclass
@@ -134,7 +137,6 @@ class TrainerConfig:
     compile_config: dict[str, Any] | None = None
 
 
-
 @dataclass
 class DatasetConfig:
     streams: dict | None = None
@@ -165,11 +167,10 @@ class DatasetConfig:
     max_seq_len: int | None = 2048
 
 
-
 @dataclass
 class DataConfig:
-    path : str
-    dataset : DatasetConfig = field(default_factory=DatasetConfig)
+    path: str
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
     name: str = "text"
     drop_last: bool = True
     num_workers: int = 4

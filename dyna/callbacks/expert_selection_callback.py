@@ -48,6 +48,7 @@ class ExpertSelectionCallback(Callback):
         self.ffn_experts = ffn_experts
         self.attn_experts = attn_experts
         self.run_data = None
+        self.samples_eaten = 1
 
     def _should_log(self, state: State) -> bool:
         """Determine if it's time to log based on the log_interval."""
@@ -69,11 +70,10 @@ class ExpertSelectionCallback(Callback):
         
         data = model.transformer._expert_sel
         for i in data:
-            (attn_o, attn_v), ffn = i
+            (attn_v, attn_o), ffn = i
+            if attn_v is None:
+                continue
             # check that o and v are correct order
-            print(attn_o)
-            print(attn_o.flatten() if attn_o is not None else torch.tensor(0))
-            
             # Ensure tensors are integers for bincount, then convert to float
             attn_o_int = attn_o.flatten().int() if attn_o is not None else torch.zeros(self.attn_experts, dtype=torch.int)
             attn_v_int = attn_v.flatten().int() if attn_v is not None else torch.zeros(self.attn_experts, dtype=torch.int)
@@ -82,7 +82,7 @@ class ExpertSelectionCallback(Callback):
             attn_o_counts.append(torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
             attn_v_counts.append(torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
             ffn_counts.append(torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
-        
+            
         expert_data = {
             "attn_o": torch.stack(attn_o_counts, dim=0),  # [num_layers, num_attn_experts]
             "attn_v": torch.stack(attn_v_counts, dim=0),  # [num_layers, num_attn_experts]
@@ -96,88 +96,59 @@ class ExpertSelectionCallback(Callback):
         self, 
         selection_data: torch.Tensor, 
     ) -> plt.Figure:
-        """Create a heatmap showing expert selection patterns."""
+        """Create a heatmap showing expert selection patterns and a heatmap for mean expert selection."""
         # Ensure tensor is on CPU
-        selection_data = selection_data.cpu()
+        # Compute mean expert probabilities across layers
+        heatmap_data = selection_data
+        sum_probs = selection_data.sum(dim=0, keepdim=True)
         
-        # Convert to probabilities
-        probs = F.softmax(selection_data, dim=1)
+        # Convert tensors to numpy arrays
+        heatmap_data = heatmap_data.detach().cpu()
+        # For the line plot, compute mean along layers (squeeze to shape (num_experts,))
+        mean_probs = selection_data.mean(dim=0).detach().cpu()
         
-        # Average across batch and sequence dimensions, keep layer and expert dims
-        if len(probs.shape) == 4:  # [batch, seq, heads, experts] or [time, batch, seq, experts]
-            # Average over batch and sequence
-            avg_probs = probs.mean(dim=(0, 1))  # [heads/time, experts] or [experts]
-        elif len(probs.shape) == 3:  # [batch, seq, experts]
-            avg_probs = probs.mean(dim=(0, 1))  # [experts]
-        else:
-            avg_probs = probs.mean(dim=0)  # Fallback
+        # Compute common vmin and vmax for the heatmap (if needed)
+        common_vmin = heatmap_data.min()
+        common_vmax = heatmap_data.max()
         
-        # Ensure we have a 2D tensor for heatmap
-        if len(avg_probs.shape) == 1:
-            avg_probs = avg_probs.unsqueeze(0)
+        # Create figure with subplots - top: heatmap, bottom: line plot, sharing common width
+        fig = plt.figure(figsize=self.figsize)
+        gs = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.3)
         
-        # Convert to numpy
-        heatmap_data = avg_probs.detach().cpu().numpy()
-        
-        # Create figure
-        fig, ax = plt.subplots(figsize=self.figsize)
-        
-        # Create heatmap
+        # Main heatmap (per layer)
+        ax1 = fig.add_subplot(gs[0])
         sns.heatmap(
             heatmap_data,
-            ax=ax,
+            ax=ax1,
             cmap='viridis',
             cbar=True,
+            vmin=common_vmin,
+            vmax=common_vmax,
             xticklabels=[f'Expert {i}' for i in range(heatmap_data.shape[1])],
-            yticklabels=[f'Head/Step {i}' for i in range(heatmap_data.shape[0])],
-            annot=heatmap_data.shape[1] <= 20,  # Only annotate if not too many experts
+            yticklabels=[f'Layer {i}' for i in range(heatmap_data.shape[0])],
             fmt='.3f'
         )
+        ax1.set_title("Expert Selection by Layer")
+        ax1.set_xlabel('')  # Remove x-label from top plot
+        ax1.set_ylabel('Layer')
         
-        ax.set_title("test")
-        ax.set_xlabel('Expert Index')
-        ax.set_ylabel('Head/Time Step')
+        # Line plot for mean expert selection
+        ax2 = fig.add_subplot(gs[1])
+        x = range(len(mean_probs))
+        ax2.plot(x, mean_probs, marker='o', linestyle='-', color='blue')
+        ax2.set_xlabel('Expert Index')
+        ax2.set_ylabel('Mean Prob')
+        ax2.set_title('Mean Expert Selection Across Layers')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels([f'E{i}' for i in x])
         
-        plt.tight_layout()
-        return fig
-
-    # def _create_layer_comparison_plot(
-    # Plot the entropy of the expert selection process
-    #     self, 
-    #     selections_by_layer: List[Dict], 
-    #     title: str
-    # ) -> plt.Figure:
-    #     """Create a plot comparing expert usage across layers."""
-    #     if not selections_by_layer:
-    #         return None
-            
-    #     fig, ax = plt.subplots(figsize=self.figsize)
-        
-    #     layer_indices = []
-    #     expert_entropies = []
-        
-    #     for layer_data in selections_by_layer:
-    #         selection_tensor = layer_data['data']
-    #         layer_idx = layer_data['layer_idx']
-            
-    #         # Convert to probabilities
-    #         probs = F.softmax(selection_tensor, dim=-1)
-            
-    #         # Compute entropy across experts (higher = more diverse usage)
-    #         log_probs = F.log_softmax(selection_tensor, dim=-1)
-    #         entropy = -(probs * log_probs).sum(dim=-1).mean()
-            
-    #         layer_indices.append(layer_idx)
-    #         expert_entropies.append(entropy.item())
-        
-    #     ax.plot(layer_indices, expert_entropies, 'o-', linewidth=2, markersize=8)
-    #     ax.set_xlabel('Layer Index')
-    #     ax.set_ylabel('Expert Selection Entropy')
-    #     ax.set_title(title)
-    #     ax.grid(True, alpha=0.3)
-        
-    #     plt.tight_layout()
-    #     return fig
+        # Updated log_softmax call with explicit dim
+        load_balance = torch.nn.functional.kl_div(
+            torch.nn.functional.log_softmax(mean_probs/torch.sum(mean_probs), dim=0),
+            torch.ones(mean_probs.shape)/mean_probs.shape[0],
+            reduction="sum"
+        )
+        return fig, load_balance
 
     # Plot the expert selections
     def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
@@ -206,33 +177,53 @@ class ExpertSelectionCallback(Callback):
 
         # Collect expert selection data
         selections = self._collect_expert_selections(state.model.model)
+        print(selections["attn_o"].shape)
         if self.run_data is None:
-            self.run_data = selections
+            self.run_data = {}
+            for key in selections.keys():
+                self.run_data[key] = torch.sum(selections[key], dim=0)
         else:
             for key in self.run_data:
                 if key in selections:
-                    self.run_data[key] = torch.cat([self.run_data[key], selections[key]], dim=0)
+                    self.run_data[key] = torch.add(self.run_data[key], torch.sum(selections[key], dim=0))
 
         # batched
-        heat_map_attn_o = self._create_expert_heatmap(selections["attn_o"])
-        heat_map_attn_v = self._create_expert_heatmap(selections["attn_v"])
-        heat_map_ffn = self._create_expert_heatmap(selections["ffn"])
+        heat_map_attn_o, load_balance_attn_o = self._create_expert_heatmap(selections["attn_o"])
+        heat_map_attn_v, load_balance_attn_v = self._create_expert_heatmap(selections["attn_v"])
+        heat_map_ffn, load_balance_ffn = self._create_expert_heatmap(selections["ffn"])
+    
         
-        # Total
-        print(self.run_data["ffn"].shape)
-        print(self.run_data["attn_o"].shape)
+        load_balance_attn_o_tot = torch.nn.functional.kl_div(
+            torch.nn.functional.log_softmax(self.run_data["attn_o"]/torch.sum(self.run_data["attn_o"]), dim=0),
+            torch.ones(self.run_data["attn_o"].shape)/self.run_data["attn_o"].shape[0],
+            reduction="sum"
+        )
+        load_balance_attn_v_tot = torch.nn.functional.kl_div(
+            torch.nn.functional.log_softmax(self.run_data["attn_v"]/torch.sum(self.run_data["attn_v"]), dim=0),
+            torch.ones(self.run_data["attn_v"].shape)/self.run_data["attn_v"].shape[0],
+            reduction="sum"
+        )
+        load_balance_ffn_tot = torch.nn.functional.kl_div(
+            torch.nn.functional.log_softmax(self.run_data["ffn"]/torch.sum(self.run_data["ffn"]), dim=0),
+            torch.ones(self.run_data["ffn"].shape)/self.run_data["ffn"].shape[0],
+            reduction="sum"
+        )
         
-        heat_map_attn_o_total = self._create_expert_heatmap(self.run_data["attn_o"])
-        heat_map_attn_v_total = self._create_expert_heatmap(self.run_data["attn_v"])
-        heat_map_ffn_total = self._create_expert_heatmap(self.run_data["ffn"])
+
         
         metrics_dict = {}
         metrics_dict[f"{self.log_key_prefix}/ffn_layer"] = self._fig_to_wandb_image(heat_map_ffn)
         metrics_dict[f"{self.log_key_prefix}/attn_o_layer"] = self._fig_to_wandb_image(heat_map_attn_o)
         metrics_dict[f"{self.log_key_prefix}/attn_v_layer"] = self._fig_to_wandb_image(heat_map_attn_v)
         
-        # # Log all metrics
-        # if metrics_dict:
+        metrics_dict[f"metrics/load_balance_attn_o"] = load_balance_attn_o
+        metrics_dict[f"metrics/load_balance_attn_v"] = load_balance_attn_v
+        metrics_dict[f"metrics/load_balance_ffn"] = load_balance_ffn
+        
+        metrics_dict[f"metrics/load_balance_attn_total_o"] = load_balance_attn_o_tot
+        metrics_dict[f"metrics/load_balance_attn_total_v"] = load_balance_attn_v_tot
+        metrics_dict[f"metrics/load_balance_total_ffn"] = load_balance_ffn_tot
+        
         logger.log_metrics(metrics_dict)
 
         # Update last logged batch
@@ -247,5 +238,7 @@ class ExpertSelectionCallback(Callback):
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Load callback state from checkpoint."""
+        self.last_batch_logged = state_dict.get("last_batch_logged", -1)
+        self.log_key_prefix = state_dict.get("log_key_prefix", self.log_key_prefix)
         self.last_batch_logged = state_dict.get("last_batch_logged", -1)
         self.log_key_prefix = state_dict.get("log_key_prefix", self.log_key_prefix)

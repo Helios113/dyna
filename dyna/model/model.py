@@ -112,7 +112,7 @@ class MoEUTConfig(PretrainedConfig):
         d_head: Optional[int] = None,
         group_size: int = 2,
         ff_k: int = 8,
-        att_k: int = 2,
+        attn_k: int = 2,
         ff_expert_dropout: float = 0.0,
         att_expert_dropout: float = 0.0,
         ff_expert_size: int = 128,
@@ -122,7 +122,8 @@ class MoEUTConfig(PretrainedConfig):
         shift_labels: bool = True,
         scale_add: bool = True,
         prot_emb: bool = False,
-        shared_expert_number: int = 1,
+        shared_expert_number_ffn: int = 1,
+        shared_expert_number_attn: int = 1,
         # New configurable options for backward compatibility
         enable_early_exit: bool = True,
         use_rms_norm: bool = True,
@@ -144,12 +145,14 @@ class MoEUTConfig(PretrainedConfig):
         self.n_ffn_experts = n_ffn_experts
         self.n_att_experts = n_att_experts
         self.ff_expert_size = ff_expert_size
-        self.shared_expert_number = shared_expert_number
+        self.shared_expert_number_ffn = shared_expert_number_ffn
+        self.shared_expert_number_attn = shared_expert_number_attn
+        
         
         # Routing configuration
         self.group_size = group_size
         self.ff_k = ff_k
-        self.att_k = att_k
+        self.attn_k = attn_k
         
         # Dropout and regularization
         self.ff_expert_dropout = ff_expert_dropout
@@ -187,7 +190,7 @@ class SigmaMoE(torch.nn.Module):
         activation=F.relu,
         v_dim: Optional[int] = None,
         expert_dropout: float = 0.0,
-        shared_expert_number: int = 1,
+        shared_expert_number_ffn: int = 1,
     ):
         super().__init__()
         
@@ -199,16 +202,16 @@ class SigmaMoE(torch.nn.Module):
         # Expert configuration
         self.n_experts = n_experts
         self.expert_size = expert_size
-        self.shared_expert_number = min(shared_expert_number, n_experts)
+        self.shared_expert_number = min(shared_expert_number_ffn, n_experts)
         self.routed_expert_number = n_experts - self.shared_expert_number
         
         # Routing configuration
-        self.n_heads = k
+        self.ffn_k = k
         self.activation = activation
         self.expert_dropout = expert_dropout
         
         # Bias tracking for load balancing
-        self.bias = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
+        self.bias_ffn = torch.nn.Parameter(torch.zeros(n_experts), requires_grad=False)
         self.bias_update_lr = 0.001
         
         # Expert parameters
@@ -255,12 +258,10 @@ class SigmaMoE(torch.nn.Module):
         """Compute expert selection scores and indices."""
         # Compute selection scores
         sel = F.linear(
-            sel_input if sel_input is not None else input_tensor, 
-            self.expert_sel, 
-            None
+            input_tensor, 
+            self.expert_sel,
         )
         sel = F.sigmoid(sel)
-        
         # Apply expert dropout during training
         if self.training and self.expert_dropout > 0:
             mask = torch.rand_like(sel) < self.expert_dropout
@@ -268,13 +269,12 @@ class SigmaMoE(torch.nn.Module):
         
         # Select top-k routed experts
         _, sel_index = torch.topk(
-            sel[:, :, :self.routed_expert_number] + self.bias[:self.routed_expert_number],
-            self.routed_expert_number,
+            sel[:, :, :self.routed_expert_number]+ self.bias_ffn[:self.routed_expert_number],
+            self.ffn_k,
             dim=-1,
             sorted=False
         )
         
-        # Add shared experts to selection
         if self.shared_expert_number > 0:
             shared_shape = sel_index.shape[:-1] + (self.shared_expert_number,)
             shared_expert_expanded = self.shared_expert.view(
@@ -296,7 +296,7 @@ class SigmaMoE(torch.nn.Module):
             c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
             c_i_avg = torch.mean(c_i, dtype=torch.float32)
             
-            self.bias[:self.routed_expert_number] += self.bias_update_lr * torch.sign(
+            self.bias_ffn[:self.routed_expert_number] += self.bias_update_lr * torch.sign(
                 -c_i[:self.routed_expert_number] + c_i_avg
             )
 
@@ -350,7 +350,7 @@ class SwitchHeadCore(torch.nn.Module):
         d_head: Optional[int] = None,
         expert_dropout: float = 0.0,
         moe_k: int = 2,
-        shared_expert_number: int = 1,
+        shared_expert_number_attn: int = 0,
     ):
         super().__init__()
         
@@ -362,7 +362,7 @@ class SwitchHeadCore(torch.nn.Module):
         
         # Expert configuration
         self.n_experts = n_experts
-        self.shared_expert_number = min(shared_expert_number, n_experts)
+        self.shared_expert_number = min(shared_expert_number_attn, n_experts)
         self.routed_expert_number = n_experts - self.shared_expert_number
         self.moe_k = moe_k
         self.expert_dropout = expert_dropout
@@ -735,10 +735,10 @@ class SwitchHeadRope(SwitchHeadCore):
         moe_k: int = 2,
         rotate_fraction: float = 0.5,
         rope_base: float = 10000,
-        shared_expert_number: int = 1,
+        shared_expert_number_attn: int = 0,
     ):
         super().__init__(
-            d_model, n_heads, n_experts, dropout, d_head, expert_dropout, moe_k, shared_expert_number
+            d_model, n_heads, n_experts, dropout, d_head, expert_dropout, moe_k, shared_expert_number_attn
         )
         
         # RoPE configuration
@@ -795,18 +795,15 @@ class MoEUTLayer(torch.nn.Module):
     def __init__(self, config: MoEUTConfig):
         super().__init__()
         
-        # Get shared expert configuration
-        shared_expert_number = getattr(config, 'shared_expert_number', 1)
-        
         # Initialize attention and FFN components
         self.attention = SwitchHeadRope(
             config.d_model,
             config.n_heads,
             config.n_att_experts,
             d_head=config.d_head,
-            moe_k=config.att_k,
+            moe_k=config.attn_k,
             expert_dropout=config.att_expert_dropout,
-            shared_expert_number=shared_expert_number,
+            shared_expert_number_attn=config.shared_expert_number_attn,
         )
         
         self.ffn = SigmaMoE(
@@ -815,7 +812,7 @@ class MoEUTLayer(torch.nn.Module):
             config.ff_expert_size,
             k=config.ff_k,
             expert_dropout=config.ff_expert_dropout,
-            shared_expert_number=shared_expert_number,
+            shared_expert_number_ffn=config.shared_expert_number_ffn,
         )
         
         # Layer normalization - configurable type
@@ -1184,10 +1181,12 @@ class MoEUT(MoEUTPretrainedModel):
                 )
         
         # Collect regularization loss if enabled
-        reg_loss = self._collect_regularization_loss()
+        reg_loss = None
+        if self.collect_reg_loss:
+            reg_loss = self._collect_regularization_loss()
         
         return CausalLMOutputWithPast(
-            loss=reg_loss if self.collect_reg_loss else None,
+            loss=reg_loss,
             logits=x,
             past_key_values=new_cache if kv_cache is not None else None
         )
