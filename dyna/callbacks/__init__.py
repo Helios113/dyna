@@ -3,6 +3,7 @@ from dyna.callbacks.activation_monitor import ActivationMonitor
 from dyna.callbacks.layer_usage_monitor import LayerUsageMonitor
 from dyna.callbacks.entropy_callback import ShannonEntropyCallback
 from dyna.callbacks.exit_entropy_callback import ExitEntropyCallback
+from dyna.callbacks.expert_selection_callback import ExpertSelectionCallback
 
 
 
@@ -18,3 +19,6 @@ callbacks.register(
 )
 callbacks.register("entropy_callback", func=ShannonEntropyCallback)
 callbacks.register("exit_callback", func=ExitEntropyCallback)
+callbacks.register("expert_selection_callback", func=ExpertSelectionCallback)
+
+
