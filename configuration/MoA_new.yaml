@@ -11,13 +11,13 @@ model_config:
   group_size: 2
   vocab_size: 49152
   max_seq_len: 1024
-  scale_add: False
+  scale_add: True
   prot_emb: True
   shared_expert_number_attn: 0
   shared_expert_number_ffn: 0
   collect_reg_loss: False
-  enable_early_exit: False
-  use_simple_residual: True
+  enable_early_exit: True
+  use_simple_residual: False
 train:
   max_duration: "5980ba"
   warmup: "1196ba"
@@ -36,6 +36,8 @@ callbacks:
     attn_experts: ${model_config.n_att_experts}
     ffn_experts: ${model_config.n_ffn_experts}
   entropy_callback: {}
+  exit_callback: {}
+  layer_usage_monitor: {}
   # activation_monitor_c: {}
 
 
@@ -51,7 +53,7 @@ trainer_config:
   eval_interval: 100ba
   eval_subset_num_batches: -1
   train_dataloader_label: "train"
-  device_train_microbatch_size: 32
+  device_train_microbatch_size: 64
   precision: "amp_bf16"
   device: "gpu"
   parallelism_config:

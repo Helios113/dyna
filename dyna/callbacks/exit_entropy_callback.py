@@ -5,6 +5,10 @@ import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
+from matplotlib.ticker import ScalarFormatter
 
 class ExitEntropyCallback(Callback):
     """
@@ -17,10 +21,8 @@ class ExitEntropyCallback(Callback):
     def __init__(
         self,
         log_interval: str = "1ba",
-        log_key: str = "metrics/exit_entropy",
-        log_key_batch: str = "metrics/batch_exit_entropy",
-        log_key_seq: str = "metrics/seq_exit_entropy",  # Add this back
         epsilon: float = 1e-10,
+        figsize: tuple[int, int] = (12, 8),
     ):
         """
         Initialize the Shannon entropy callback.
@@ -35,14 +37,11 @@ class ExitEntropyCallback(Callback):
             if isinstance(log_interval, str)
             else Time(log_interval, TimeUnit.BATCH)
         )
-        self.log_key = log_key
-        self.log_key_batch = log_key_batch
-        self.log_key_seq = log_key_seq  # Add this back
         self.epsilon = epsilon
         self.last_batch_logged = -1
-
+        self.figsize = figsize
         # Storage for per-layer entropy data
-        self.entropy_data = []  # Add this back for the plot
+        # self.entropy_data = []  # Add this back for the plot
         self.block_indices = []
         self.total_blocks_so_far = 0
         self.wandb_table_data = None
@@ -78,9 +77,11 @@ class ExitEntropyCallback(Callback):
         entropy_per_position = -probs * torch.log(probs) - (1-probs) * torch.log(1-probs)
         
         # Average across all dimensions
-        mean_entropy = torch.mean(entropy_per_position)
+        mean_entropy = torch.mean(entropy_per_position, dim=1)
+        fin_entropy = entropy_per_position[-1]
         
-        return mean_entropy
+        
+        return mean_entropy, fin_entropy
 
     def batch_end(self, state: State, logger: Logger) -> None:
         """
@@ -91,57 +92,41 @@ class ExitEntropyCallback(Callback):
             logger: Composer logger instance
         """
         if not state.model.training or not self._should_log(state):
+            # Always clear to avoid memory leak, even if not logging
+            state.model.model.transformer._exit_logits = []
             return
         
         metrics_dict = {}
         
-        batch_logits = state.model.model.transformer._exit_logits
+        batch_latentes = state.model.model.transformer._exit_logits
         batch_entropy = []
+        batch_last_token_entrp = []
         entropy = None
-        
-        for elem in batch_logits:
-            entropy = self._compute_binary_entropy(elem).item()
+        last_token_entrp = None
+        data_proc = []
+        for elem in batch_latentes:
+            for i, sample in enumerate(elem):
+                if i == len(data_proc):
+                    data_proc.append(sample)
+                else:
+                    data_proc[i] = torch.cat((data_proc[i],sample))
+        for elem in data_proc:
+            entropy, last_token_entrp = self._compute_binary_entropy(elem)
             batch_entropy.append(entropy)
-            self.block_indices.append(self.total_blocks_so_far)
-            self.total_blocks_so_far += 1
-        metrics_dict[self.log_key] = entropy
-        self.entropy_data.extend(batch_entropy)  # Add this back for the plot
+            batch_last_token_entrp.append(last_token_entrp)
+        metrics_dict["metrics/exit_entropy"] = torch.mean(entropy)
+        metrics_dict["metrics/last_token_exit_entropy"] = torch.mean(last_token_entrp)
         
-
-        # Create a numpy array for the current batch
-        batch_size = len(batch_entropy)
-        batch_data = np.zeros((batch_size, 4))  # 4 columns: entropy, local_steps, global_steps, batch_index
-        batch_data[:, 0] = batch_entropy  # entropy
-        batch_data[:, 1] = np.arange(batch_size)  # local_steps
-        batch_data[:, 2] = np.arange(self.total_blocks_so_far - batch_size, self.total_blocks_so_far)  # global_steps
-        batch_data[:, 3] = state.timestamp.batch  # batch_index
+        metrics_dict["entropy/exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
+        metrics_dict["entropy/last_token_exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_last_token_entrp))
         
-        # Create wandb table from the numpy data
-        if self.wandb_table_data is None:
-            table_data = [[row[0], int(row[1]), int(row[2]), int(row[3])] for row in batch_data]
-            self.wandb_table_data = wandb.Table(
-                data=table_data,
-                columns=["entropy", "local_steps", "global_steps", "batch_index"]
-            )
-        else:
-            for row in batch_data:
-                self.wandb_table_data.add_data(row[0], int(row[1]), int(row[2]), int(row[3]))
-        
-        metrics_dict[self.log_key_batch] = self.wandb_table_data
-        
-        # Add entropy plot
-        metrics_dict[self.log_key_seq] = wandb.plot.line_series(
-            xs=self.block_indices,
-            ys=[self.entropy_data],
-            keys=["entropy"],
-            title="Per-Layer Exit Entropy",
-            xname="Block Index",
-        )
-
         logger.log_metrics(metrics_dict)
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
+
+        # Always clear after use to avoid memory leak
+        state.model.model.transformer._exit_logits = []
 
     def state_dict(self) -> Dict[str, Any]:
         """Return callback state for checkpointing."""
@@ -158,3 +143,51 @@ class ExitEntropyCallback(Callback):
         self.log_key = state_dict.get("log_key", self.log_key)
         self.epsilon = state_dict.get("epsilon", self.epsilon)
         self.total_blocks_so_far = state_dict.get("total_blocks_so_far", 0)
+    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+        """Convert matplotlib figure to wandb Image."""
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        
+        # Create wandb image from PIL Image
+        from PIL import Image
+        pil_img = Image.open(buf)
+        img = wandb.Image(pil_img)
+        plt.close(fig)
+        return img
+
+
+    def _create_entropy_plot(self, data: list[torch.Tensor]) -> plt.Figure:
+        """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
+
+        # Compute mean and std per step
+        means = torch.stack([d.mean() for d in data]).to(torch.float32).cpu()
+        stds = torch.stack([d.std() for d in data]).to(torch.float32).cpu()
+        x = np.arange(len(means))
+
+        fig, ax = plt.subplots(figsize=self.figsize)
+
+        # Plot mean line
+        sns.lineplot(x=x, y=means, ax=ax, marker='o', color='royalblue', linewidth=2.0, label='Mean Entropy')
+
+        # Fill ±1 std area
+        ax.fill_between(x, means - stds, means + stds, color='blue', alpha=0.1, label='±1 Std Dev')
+        ax.set_yscale('linear')
+
+        # Force plain (non-scientific) y-axis formatting
+        ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+        ax.ticklabel_format(style='plain', axis='y')  # avoid 1.0e+03 notation
+
+        # Axis and formatting
+        ax.set_title("Entropy Trend", fontsize=14)
+        ax.set_xlabel("Index", fontsize=12)
+        ax.set_ylabel("Entropy", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.legend()
+
+        sns.despine()
+        fig.tight_layout()
+
+        return fig
+
+

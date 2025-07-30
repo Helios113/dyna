@@ -8,8 +8,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
-import base64
-from dyna.model.model import SigmaMoE, SwitchHeadCore
 
 
 class ExpertSelectionCallback(Callback):
@@ -69,20 +67,26 @@ class ExpertSelectionCallback(Callback):
         ffn_counts = []
         
         data = model.transformer._expert_sel
-        for i in data:
-            (attn_v, attn_o), ffn = i
-            if attn_v is None:
-                continue
-            # check that o and v are correct order
-            # Ensure tensors are integers for bincount, then convert to float
-            attn_o_int = attn_o.flatten().int() if attn_o is not None else torch.zeros(self.attn_experts, dtype=torch.int)
-            attn_v_int = attn_v.flatten().int() if attn_v is not None else torch.zeros(self.attn_experts, dtype=torch.int)
-            ffn_int = ffn.flatten().int() if ffn is not None else torch.zeros(self.ffn_experts, dtype=torch.int)
-            
-            attn_o_counts.append(torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
-            attn_v_counts.append(torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
-            ffn_counts.append(torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
-            
+        for _, batch in enumerate(data):
+            for idx, elem in enumerate(batch):
+                (attn_v, attn_o), ffn = elem
+                if attn_v is None:
+                    continue
+                # check that o and v are correct order
+                # Ensure tensors are integers for bincount, then convert to float
+                attn_o_int = attn_o.flatten().int()
+                attn_v_int = attn_v.flatten().int()
+                ffn_int = ffn.flatten().int()
+                
+                if idx == len(attn_o_counts):
+                    attn_o_counts.append(torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
+                    attn_v_counts.append(torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
+                    ffn_counts.append(torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
+                else:
+                    attn_o_counts[idx] = torch.add(attn_o_counts[idx],torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
+                    attn_v_counts[idx] = torch.add(attn_v_counts[idx],torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
+                    ffn_counts[idx] = torch.add(ffn_counts[idx],torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
+                                                      
         expert_data = {
             "attn_o": torch.stack(attn_o_counts, dim=0),  # [num_layers, num_attn_experts]
             "attn_v": torch.stack(attn_v_counts, dim=0),  # [num_layers, num_attn_experts]
@@ -177,7 +181,6 @@ class ExpertSelectionCallback(Callback):
 
         # Collect expert selection data
         selections = self._collect_expert_selections(state.model.model)
-        print(selections["attn_o"].shape)
         if self.run_data is None:
             self.run_data = {}
             for key in selections.keys():
@@ -228,6 +231,7 @@ class ExpertSelectionCallback(Callback):
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
+        state.model.model.transformer._expert_sel = []
 
     def state_dict(self) -> Dict[str, Any]:
         """Return callback state for checkpointing."""

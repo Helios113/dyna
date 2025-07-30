@@ -48,6 +48,8 @@ class ModelConfig:
     shared_expert_number_attn: int = 1
     shared_expert_number_ffn: int = 2
     collect_reg_loss: bool = False
+    enable_early_exit: bool = True
+    use_simple_residual: bool = False
 
 
 @dataclass

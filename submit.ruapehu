@@ -13,5 +13,4 @@
 
 
 
-
-HYDRA_FULL_ERROR=1 uv run python main.py
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_new

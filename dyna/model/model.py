@@ -172,7 +172,8 @@ class MoEUTConfig(PretrainedConfig):
         self.enable_sequence_packing = enable_sequence_packing
         self.use_simple_residual = use_simple_residual
         self.collect_reg_loss = collect_reg_loss
-        
+        print(self.use_simple_residual)
+        print(self.enable_early_exit)
         # Store additional kwargs for forward compatibility
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -480,6 +481,9 @@ class SwitchHeadCore(torch.nn.Module):
             m = mask[1].unsqueeze(-2).unsqueeze(-2) | pm
         
         # Create efficient batched mask
+        if skip_mask is None:
+            return m
+            
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
         attention_mask = torch.zeros(
@@ -862,7 +866,7 @@ class MoEUTLayer(torch.nn.Module):
         # Check if all sequences are done
         continue_processing = not torch.all(skip_mask == False)
         
-        return skip_mask, continue_processing, s_exit
+        return skip_mask, continue_processing, s_exit, cum_sum
 
     def _pack_sequence(
         self, 
@@ -1068,7 +1072,7 @@ class MoEUT(MoEUTPretrainedModel):
         self.entropy_reg = config.entropy_reg
         self.att_entropy_reg = config.att_entropy_reg
         self.group_size = config.group_size
-        self.n_repeats = config.n_layers // config.group_size if config.enable_early_exit else config.n_layers
+        self.n_repeats = config.n_layers // config.group_size
         self.d_model = config.d_model
         self.enable_early_exit = config.enable_early_exit
         self.collect_reg_loss = config.collect_reg_loss
@@ -1097,14 +1101,11 @@ class MoEUT(MoEUTPretrainedModel):
             scale = math.sqrt(2 / len(self.layers))
         
         # Initialize tracking variables
-        self._layer_index_abs = 0
         self._seq_len= []
         self._latent_vectors = []
         self._exit_logits = []
         self._expert_sel = []
         
-        
-
         # Initialize layer parameters
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
@@ -1139,11 +1140,11 @@ class MoEUT(MoEUTPretrainedModel):
     ) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
         new_cache = {}
-        self._seq_len = []
-        self._latent_vectors = []
-        self._exit_logits = []
-        self._expert_sel = []
         
+        self._expert_sel.append([])
+        self._exit_logits.append([])
+        self._latent_vectors.append([])
+        self._seq_len.append([])
         
         if self.enable_early_exit:
             # New model: early exit with groups
@@ -1157,28 +1158,31 @@ class MoEUT(MoEUTPretrainedModel):
                     x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                         x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
                     )
-                    
-                    # Track sequence lengths and entropy for analysis
-                    self._seq_len.append(copy.deepcopy(seq_lengths))
-                    self._latent_vectors.append(x.detach().clone())
-                    self._exit_logits.append(s_exit.detach().clone())
-                    self._expert_sel.append(expert_sel)
-                    
+                    # make continue_processing just be conditioned on the last token
                     if not continue_processing:
                         break
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors[-1].append(x.detach().clone())
+                    self._exit_logits[-1].append(s_exit.detach().clone())
+                    self._expert_sel[-1].append(expert_sel)
                     
-                    layer_index_abs += 1
+                    layer_index_abs += 1 
             
-            # Store layer usage for callbacks
-            self._layer_index_abs = layer_index_abs
             
         else:
             # Old model style: process all layers sequentially
-            for li, layer in enumerate(self.layers):
-                cache = kv_cache.get(li, {}) if kv_cache is not None else None
-                x, new_cache[li] = layer(
-                    x, li, e, None, None, None, mask, kv_cache=cache
-                )
+            for li in range(self.n_repeats):
+                for layer in self.layers:
+                    # cache = kv_cache.get(li, {}) if kv_cache is not None else None
+                    x, _, continue_processing, seq_lengths, s_exit, expert_sel  = layer(
+                        x, li, e, None, None, None, mask, kv_cache=None
+                    )
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors[-1].append(x.detach().clone())
+                    self._exit_logits[-1].append(s_exit)
+                    self._expert_sel[-1].append(expert_sel)
         
         # Collect regularization loss if enabled
         reg_loss = None
@@ -1214,10 +1218,6 @@ class MoEUTLM(MoEUTPretrainedModel):
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
         
-        # Storage for intermediate logits (for entropy analysis)
-        self.intermediate_logits = []
-        self.intermediate_layer_indices = []
-        
         # Initialize parameters
         self.reset_parameters()
         
@@ -1243,8 +1243,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         input_ids: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        src_len_mask: Optional[torch.Tensor] = None,
-        save_intermediate_logits: bool = False,
+        src_len_mask: Optional[torch.Tensor] = None
     ) -> CausalLMOutputWithPast:
         """Forward pass through the language model."""
         # Validate inputs
@@ -1310,14 +1309,11 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
-        # Check if we should save intermediate logits (for entropy analysis)
-        save_intermediate = getattr(self, '_save_intermediate_logits', False)
         
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),
-            attention_mask=batch.get("attention_mask", None),
-            save_intermediate_logits=save_intermediate,
+            attention_mask=batch.get("attention_mask", None)
         )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
