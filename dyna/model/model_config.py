@@ -50,6 +50,7 @@ class ModelConfig:
     collect_reg_loss: bool = False
     enable_early_exit: bool = True
     use_simple_residual: bool = False
+    run_id: str | None = None
 
 
 @dataclass
