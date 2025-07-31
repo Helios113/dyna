@@ -1,14 +1,14 @@
 model_config:
   d_model: 412
   n_layers: 16
-  n_heads: 4
-  n_ffn_experts: 155
-  n_att_experts: 8
-  d_head: 84
+  n_heads: 8
+  n_ffn_experts: 1
+  n_att_experts: 1
+  d_head: 168
   ff_k: 12
   attn_k: 2
   ff_expert_size: 128
-  group_size: 2
+  group_size: 16
   vocab_size: 49152
   max_seq_len: 1024
   scale_add: False
@@ -18,6 +18,7 @@ model_config:
   collect_reg_loss: False
   enable_early_exit: False
   use_simple_residual: True
+  run_id: "transformer"
 train:
   max_duration: "1495ba"
   warmup: "299ba"

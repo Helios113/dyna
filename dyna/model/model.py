@@ -599,7 +599,8 @@ class SwitchHeadCore(torch.nn.Module):
         scale = self.scale.sqrt()
         q = self.q(q_src) * scale.type_as(q_src)
         k = self.k(k_src) * scale.type_as(k_src)
-        
+        v_sel_index = None
+        o_sel_inedx = None
         # Handle expert routing for values and outputs
         if self.n_experts > 1:
             v_sel, v_sel_r, v_sel_index = self._get_expert_selection(k_src, self.sel_v, self.bias_v)
@@ -866,7 +867,7 @@ class MoEUTLayer(torch.nn.Module):
         # Check if all sequences are done
         continue_processing = not torch.all(skip_mask == False)
         
-        return skip_mask, continue_processing, s_exit, cum_sum
+        return skip_mask, continue_processing, s_exit
 
     def _pack_sequence(
         self, 
