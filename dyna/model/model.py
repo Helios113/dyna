@@ -20,6 +20,10 @@ from torch.nn import Module, ModuleList
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
 
+# Add jaxtyping imports
+from jaxtyping import Float, Int, Bool
+from torch import Tensor
+
 # Constants
 CROSS_ENTROPY_IGNORE_INDEX = -100
 DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
@@ -32,37 +36,41 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
 KVCache = dict[str, torch.Tensor]
 MultilayerKVCache = dict[int, KVCache]
 
+
 @beartype
 @dataclass
 class AttentionMask:
     """Container for attention mask components."""
 
-    src_length_mask: Optional[torch.Tensor]
-    position_mask: Optional[torch.Tensor]
+    src_length_mask: Optional[Int[Tensor, "batch seq"]]
+    position_mask: Optional[Int[Tensor, "batch seq"]]
+
 
 @beartype
 @dataclass
 class MoEUTOutput:
     """Output container for MoEUT model."""
 
-    outputs: torch.Tensor
-    reg_loss: torch.Tensor
+    outputs: Float[Tensor, "batch seq d_model"]
+    reg_loss: Float[Tensor, ""]
     cache: MultilayerKVCache
 
+
 @beartype
-def get_targets(labels: torch.Tensor) -> torch.Tensor:
+def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
     """Shift labels for causal language modeling."""
     targets = torch.roll(labels, shifts=-1)
     targets[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
     return targets
 
+
 @beartype
 def compute_loss_from_logits(
     outputs: CausalLMOutputWithPast,
     shift_labels: bool,
-    labels: torch.Tensor,
+    labels: Int[Tensor, "batch seq"],
     loss_fn: Module,
-) -> torch.Tensor:
+) -> Float[Tensor, ""]:
     """Compute cross-entropy loss from logits and labels."""
     targets = get_targets(labels) if shift_labels else labels
 
@@ -78,6 +86,7 @@ def compute_loss_from_logits(
 
     return loss
 
+
 @beartype
 def round_up_to_multiple_of_256(n: int) -> int:
     """Return the smallest number divisible by 256 that is >= n."""
@@ -85,22 +94,26 @@ def round_up_to_multiple_of_256(n: int) -> int:
         return 256
     return ((n - 1) // 256 + 1) * 256
 
+
 @beartype
-def log_mean(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
+def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
     """Compute log of mean along specified dimension."""
     return x.logsumexp(dim) - math.log(x.shape[dim])
 
+
 @beartype
-def entropy_l(l: torch.Tensor) -> torch.Tensor:
+def entropy_l(l: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
     """Compute entropy from log probabilities."""
     return -(l * l.exp()).sum(-1)
 
+
 @beartype
-def entropy_reg(sel: torch.Tensor, dim: int) -> torch.Tensor:
+def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tensor, ""]:
     """Compute entropy regularization term."""
     sel = F.log_softmax(sel, dim=-1)
     sel = log_mean(sel, dim)
     return -entropy_l(sel).mean()
+
 
 @beartype
 class MoEUTConfig(PretrainedConfig):
@@ -188,6 +201,7 @@ class DynaModule(Module, ABC):
     def reset_parameters(self, std_scale: float) -> None:
         pass
 
+
 @beartype
 class AttentionModule(DynaModule):
     @abstractmethod
@@ -201,6 +215,7 @@ class AttentionModule(DynaModule):
         mask: torch.Tensor,
     ) -> torch.Tensor:
         pass
+
 
 @beartype
 class SigmaMoE(DynaModule):
@@ -272,11 +287,13 @@ class SigmaMoE(DynaModule):
             weight.mul_(std / weight.std())
 
     def _compute_expert_selection(
-        self, selection_input: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, selection_input: Float[Tensor, "batch seq d_model"]
+    ) -> tuple[
+        Float[Tensor, "batch seq k_experts"], Int[Tensor, "batch seq k_experts"]
+    ]:
         """Compute expert selection scores and indices."""
         # Compute selection scores
-        affinity = F.sigmoid(
+        affinity: Float[Tensor, "batch seq n_experts"] = F.sigmoid(
             F.linear(
                 selection_input,
                 self.expert_sel,
@@ -315,7 +332,9 @@ class SigmaMoE(DynaModule):
 
         return affinity, selection_index
 
-    def _update_load_balancing_bias(self, selection_index: torch.Tensor) -> None:
+    def _update_load_balancing_bias(
+        self, selection_index: Int[Tensor, "batch seq k_experts"]
+    ) -> None:
         """Update bias for load balancing."""
         with torch.no_grad():
             c_i = torch.bincount(
@@ -327,8 +346,10 @@ class SigmaMoE(DynaModule):
             )
 
     def forward(
-        self, token_stream: torch.Tensor, selection_input: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        token_stream: Float[Tensor, "batch seq d_model"],
+        selection_input: Float[Tensor, "batch seq d_model"],
+    ) -> tuple[Float[Tensor, "batch seq d_model"], Int[Tensor, "batch seq k_experts"]]:
         """Forward pass through the MoE layer."""
 
         # Get expert selection
@@ -339,7 +360,9 @@ class SigmaMoE(DynaModule):
         selection_indices = cvmm_prepare_sel2(selection_index.int())
 
         # Up-projection: input * expert_keys
-        scores = cvmm(token_stream, selection_indices, self.keys)
+        scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(
+            token_stream, selection_indices, self.keys
+        )
         scores = self.activation(scores)
 
         # Down-projection: scores * expert_values
@@ -352,7 +375,7 @@ class SigmaMoE(DynaModule):
 
         return out.view(*token_stream.shape[:-1], self.d_model), selection_index
 
-    def get_reg_loss(self) -> torch.Tensor:
+    def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss and reset selection history."""
         if not self.selection_history_s_moe:
             return torch.tensor(0.0, device=self.keys.device)
@@ -576,40 +599,17 @@ class SwitchHeadCore(AttentionModule):
         """Reshape tensor to PyTorch attention format."""
         return x.view(*x.shape[:-1], self.n_heads, -1).transpose(-2, -3)
 
-    def _create_attention_mask(
+    def _trim_attention_mask(
         self,
         src_len: int,
-        mask: tuple[torch.Tensor, torch.Tensor],
-        skip_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """Create attention mask tensor."""
-        if mask is None or (mask[0] is None and mask[1] is None):
-            return None
-
-        # Process position and length masks
-        if mask[0] is not None:
-            n_pad = src_len - mask[0].shape[-1]
-            pm = (
-                F.pad(mask[0], (n_pad, 0), "constant", value=False)
-                if n_pad > 0
-                else mask[0]
-            )
-
-        # Combine masks
-        if mask[0] is None:
-            m = mask[1].unsqueeze(-2).unsqueeze(-2)
-        elif mask[1] is None:
-            m = pm
-        else:
-            m = mask[1].unsqueeze(-2).unsqueeze(-2) | pm
-
-        # Create efficient batched mask
-        if skip_mask is None:
-            return m
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        skip_mask: Bool[Tensor, "batch seq"],
+    ) -> Optional[Bool[Tensor, "batch n_heads max_len src_len"]]:
 
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
-        attention_mask = torch.zeros(
+        
+        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"] = torch.zeros(
             skip_mask.shape[0],
             self.n_heads,
             max_len,
@@ -617,16 +617,17 @@ class SwitchHeadCore(AttentionModule):
             dtype=torch.bool,
             device=self.v.device,
         )
+        
 
         for i in range(skip_mask.shape[0]):
             idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
             n = idx.numel()
             if n > 0:
-                attention_mask[i, :, :n] = m[idx]
+                attention_mask[i, :, :n] = mask[0][idx]
 
         return attention_mask
 
-    def get_reg_loss(self) -> torch.Tensor:
+    def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss from selection history."""
         loss = torch.tensor(0.0, device=next(self.parameters()).device)
         if self.sel_hist:
@@ -640,14 +641,22 @@ class SwitchHeadCore(AttentionModule):
 
     def _get_expert_selection(
         self,
-        input_tensor: torch.Tensor,
-        weight: torch.Tensor,
-        bias: Optional[torch.Tensor] = None,
-    ) -> tuple[CVMMSel, torch.Tensor]:
+        input_tensor: Float[Tensor, "batch seq d_model"],
+        weight: Float[Tensor, "n_heads_x_experts d_model"],
+        bias: Optional[Float[Tensor, "n_experts"]] = None,
+    ) -> tuple[
+        CVMMSel,
+        Float[Tensor, "batch seq n_heads n_experts"],
+        Int[Tensor, "batch seq n_heads k_experts"],
+    ]:
         """Get expert selection indices and weights."""
         # Compute selection scores
-        sel = F.linear(input_tensor, weight).float()
-        sel_raw = sel.view(*sel.shape[:-1], self.n_heads, -1)
+        sel: Float[Tensor, "batch seq n_heads_x_experts"] = F.linear(
+            input_tensor, weight
+        ).float()
+        sel_raw: Float[Tensor, "batch seq n_heads n_experts"] = sel.view(
+            *sel.shape[:-1], self.n_heads, -1
+        )
         sel = sel_raw.sigmoid()
 
         with torch.no_grad():
@@ -690,12 +699,12 @@ class SwitchHeadCore(AttentionModule):
                 )
 
         # Get selection values and create CVMM selection object
-        sel_val = torch.gather(
+        sel_val: Float[Tensor, "batch seq n_heads k_experts"] = torch.gather(
             sel.view(*sel.shape[:-2], -1), -1, sel_index.view(*sel_index.shape[:-2], -1)
         ).view(*sel_index.shape)
 
         # Create shifted indices for expert matrix operations
-        sel_index_shifted = (
+        sel_index_shifted: Int[Tensor, "batch seq n_heads k_experts"] = (
             torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype)
             * self.n_experts_attn
         ).unsqueeze(-1) + sel_index
@@ -708,22 +717,27 @@ class SwitchHeadCore(AttentionModule):
 
     def forward(
         self,
-        q_src: torch.Tensor,
-        k_src: torch.Tensor,
-        v_src: torch.Tensor,
-        mask: tuple[torch.Tensor, torch.Tensor],
-        kv_cache: KVCache = None,
-        pos_offset: torch.Tensor = None,
-        positions: torch.Tensor = None,
-        skip_mask: torch.Tensor = None,
-    ) -> tuple[torch.Tensor, KVCache]:
+        q_src: Float[Tensor, "batch seq d_model"],
+        k_src: Float[Tensor, "batch seq d_model"],
+        v_src: Float[Tensor, "batch seq d_model"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        positions: Int[Tensor, "batch seq"],
+        skip_mask: Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"],
+        tuple[
+            Int[Tensor, "batch seq n_heads k_experts"],
+            Int[Tensor, "batch seq n_heads k_experts"],
+        ],
+    ]:
         """Forward pass through the attention layer."""
         # Apply scaling to queries and keys
         scale = self.scale.sqrt()
-        q = self.q(q_src) * scale.type_as(q_src)
-        k = self.k(k_src) * scale.type_as(k_src)
+        q: Float[Tensor, "batch seq d_model"] = self.q(q_src) * scale.type_as(q_src)
+        k: Float[Tensor, "batch seq d_model"] = self.k(k_src) * scale.type_as(k_src)
         v_sel_index = None
         o_sel_inedx = None
+
         # Handle expert routing for values and outputs
         if self.n_experts_attn > 1:
             v_sel, v_sel_r, v_sel_index = self._get_expert_selection(
@@ -734,37 +748,40 @@ class SwitchHeadCore(AttentionModule):
             )
             if self.training:
                 self.sel_hist.append((o_sel_r, v_sel_r))
-            v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
+            v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
+                v_src, v_sel, self.v
+            ).transpose(-2, -3)
         else:
-            o_gate = F.sigmoid(F.linear(q_src, self.sel_o))
+            o_gate: Float[Tensor, "batch seq d_model"] = F.sigmoid(
+                F.linear(q_src, self.sel_o)
+            )
             v = self.project_to_torch_order(F.linear(v_src, self.v))
 
         # Project to attention format
-        q = self.project_to_torch_order(q)
-        k = self.project_to_torch_order(k)
-
-        # Handle KV cache
-        if kv_cache is not None:
-            v = torch.cat([kv_cache["v"], v], dim=-2) if "v" in kv_cache else v
-            k = torch.cat([kv_cache["k"], k], dim=-2) if "k" in kv_cache else k
-            kv_cache = {"v": v, "k": k}
+        q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(q)
+        k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(k)
 
         # Apply dropout and attention
         q = self.dropout(q)
-        attention_mask = self._create_attention_mask(v.shape[-2], mask, skip_mask)
-        res = self.attend(pos_offset, positions, v, k, q, attention_mask)
+        attention_mask = self._trim_attention_mask(v.shape[-2], mask, skip_mask)
+        res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
+            positions, v, k, q, attention_mask
+        )
         res = res.transpose(-2, -3)
 
         # Apply output projection
         if self.n_experts_attn > 1:
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
-            out = cvmm(res, o_sel, self.o)
+            out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
         else:
             res = res * o_gate[..., None]
             out = F.linear(res.flatten(-2), self.o)
 
-        return out, kv_cache, (v_sel_index, o_sel_inedx)
+        assert isinstance(out, torch.Tensor)
+        assert isinstance(v_sel_index, torch.Tensor)
+        assert isinstance(o_sel_inedx, torch.Tensor)
+        return out, (v_sel_index, o_sel_inedx)
 
 
 @beartype
@@ -791,22 +808,23 @@ class RotaryPosEncoding(Module):
 
     def apply_rot(
         self,
-        x: torch.Tensor,
-        offset: torch.Tensor,
-        positions: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        x: Float[Tensor, "batch n_heads seq d_head"],
+        positions: Optional[Int[Tensor, "batch seq"]] = None,
+    ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Apply rotary position encoding to input tensor."""
         if positions is None:
             sin, cos = self.get_sincos_cached(x)
         else:
             sin, cos = self.get_sincos_positions(positions, x)
 
-        sin = sin.narrow(self.seq_dim, offset, x.shape[self.seq_dim])
-        cos = cos.narrow(self.seq_dim, offset, x.shape[self.seq_dim])
+        sin = sin.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
+        cos = cos.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
 
         return (x * cos) + (self.rotate_half(x) * sin)
 
-    def get_sincos_cached(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_sincos_cached(
+        self, x: Float[Tensor, "batch n_heads seq d_head"]
+    ) -> tuple[Float[Tensor, "1 1 seq d_head"], Float[Tensor, "1 1 seq d_head"]]:
         """Get cached sin/cos values or compute new ones."""
         seq_len = x.shape[self.seq_dim]
 
@@ -828,8 +846,12 @@ class RotaryPosEncoding(Module):
         return self.sin_cached, self.cos_cached
 
     def get_sincos_positions(
-        self, positions: torch.Tensor, q: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self,
+        positions: Int[Tensor, "batch seq"],
+        q: Float[Tensor, "batch n_heads seq d_head"],
+    ) -> tuple[
+        Float[Tensor, "batch 1 seq d_head"], Float[Tensor, "batch 1 seq d_head"]
+    ]:
         """Get sin/cos values for specific positions."""
         freqs = torch.einsum("ki,j->kij", positions, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1).to(positions.device)
@@ -844,13 +866,16 @@ class RotaryPosEncoding(Module):
 
     def forward(
         self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        pos_offset: int = 0,
-        positions: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        q: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        positions: Optional[Int[Tensor, "batch seq"]] = None,
+    ) -> tuple[
+        Float[Tensor, "batch n_heads seq d_head"],
+        Float[Tensor, "batch n_heads seq d_head"],
+    ]:
         """Apply RoPE to query and key tensors."""
-        return (self.apply_rot(q, pos_offset, positions), self.apply_rot(k, 0, None))
+        return (self.apply_rot(q, positions), self.apply_rot(k, 0, None))
+
 
 @beartype
 class SwitchHeadRope(SwitchHeadCore):
@@ -886,8 +911,14 @@ class SwitchHeadRope(SwitchHeadCore):
             self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
     def _apply_rope(
-        self, q: torch.Tensor, k: torch.Tensor, offset: int, positions: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self,
+        q: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        positions: Int[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch n_heads seq d_head"],
+        Float[Tensor, "batch n_heads seq d_head"],
+    ]:
         """Apply rotary position encoding to queries and keys."""
         if self.n_rotate < self.d_head:
             # Split rotated and non-rotated parts
@@ -895,30 +926,30 @@ class SwitchHeadRope(SwitchHeadCore):
             r_q, nr_q = q[..., : self.n_rotate], q[..., self.n_rotate :]
 
             # Apply RoPE to rotated parts
-            r_q, r_k = self.pe(r_q, r_k, torch.tensor(offset), positions)
+            r_q, r_k = self.pe(r_q, r_k, positions)
 
             # Concatenate back
             return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
         else:
             # Apply RoPE to entire tensors
-            return self.pe(q, k, torch.tensor(offset), positions)
+            return self.pe(q, k, positions)
 
     def attend(
         self,
-        pos_offset: int,
-        positions: torch.Tensor,
-        v: torch.Tensor,
-        k: torch.Tensor,
-        q: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
+        positions: Int[Tensor, "batch seq"],
+        v: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        q: Float[Tensor, "batch n_heads seq d_head"],
+        mask: Optional[Bool[Tensor, "batch n_heads max_len src_len"]],
+    ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE."""
         # Apply rotary position encoding
         if self.n_rotate > 0:
-            q, k = self._apply_rope(q, k, pos_offset or 0, positions)
+            q, k = self._apply_rope(q, k, positions)
 
         # Compute scaled dot-product attention
         return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=mask)
+
 
 @beartype
 class MoEUTLayer(Module):
@@ -962,24 +993,24 @@ class MoEUTLayer(Module):
 
     def _check_early_exit(
         self,
-        x: torch.Tensor,
+        x: Float[Tensor, "batch seq d_model"],
         router: torch.nn.Parameter,
-        cum_sum: torch.Tensor,
-        tau: torch.Tensor,
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
         layer_index: int,
-    ) -> tuple[torch.Tensor, bool]:
+    ) -> tuple[Bool[Tensor, "batch seq"], bool, Float[Tensor, "batch seq"]]:
         """Check if tokens should exit early and create skip mask."""
         if not self.enable_early_exit:
             # Return mask that keeps all tokens
             skip_mask = torch.ones_like(cum_sum, dtype=torch.bool)
-            return skip_mask, True
+            return skip_mask, True, torch.zeros_like(skip_mask, dtype=torch.float)
 
         # Compute exit scores
-        s_exit = F.sigmoid(F.linear(x, router))
+        s_exit: Float[Tensor, "batch seq"] = F.sigmoid(F.linear(x, router))
         cum_sum += s_exit
 
         # Create skip mask (True = continue processing)
-        skip_mask = cum_sum < tau
+        skip_mask: Bool[Tensor, "batch seq"] = cum_sum < tau
 
         # Handle sequence-level early exit
         last_token_idx = x.shape[1] - 1
@@ -995,24 +1026,24 @@ class MoEUTLayer(Module):
         return skip_mask, continue_processing, s_exit
 
     def _pack_sequence(
-        self, x: torch.Tensor, skip_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        skip_mask: Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch max_len d_model"], Int[Tensor, "batch max_len"], int
+    ]:
         """Pack sequences for efficient processing."""
-        if not self.enable_sequence_packing:
-            # Return original sequence without packing
-            positions = (
-                torch.arange(x.shape[1], device=x.device)
-                .unsqueeze(0)
-                .expand(x.shape[0], -1)
-            )
-            return x, positions, x.shape[1]
 
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
 
         # Initialize output tensors
-        packed_x = torch.zeros(x.shape[0], max_len, x.shape[-1], device=x.device)
-        positions = torch.zeros(x.shape[0], max_len, dtype=torch.long, device=x.device)
+        packed_x: Float[Tensor, "batch max_len d_model"] = torch.zeros(
+            x.shape[0], max_len, x.shape[-1], device=x.device
+        )
+        positions: Int[Tensor, "batch max_len"] = torch.zeros(
+            x.shape[0], max_len, dtype=torch.long, device=x.device
+        )
 
         # Get valid positions
         batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
@@ -1044,14 +1075,14 @@ class MoEUTLayer(Module):
 
     def _apply_residual_update(
         self,
-        x: torch.Tensor,
-        update: torch.Tensor,
-        skip_mask: torch.Tensor,
-        cum_sum: torch.Tensor,
-        tau: torch.Tensor,
+        x: Float[Tensor, "batch seq d_model"],
+        update: Float[Tensor, "batch seq d_model"],
+        skip_mask: Bool[Tensor, "batch seq"],
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
         layer_index: int,
-        e: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        e: Optional[Float[Tensor, "batch seq d_model"]] = None,
+    ) -> Float[Tensor, "batch seq d_model"]:
         """Apply residual connection with optional scaling."""
         if self.use_simple_residual:
             # Simple residual connection like old model
@@ -1088,68 +1119,45 @@ class MoEUTLayer(Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
-        e: Optional[torch.Tensor] = None,
-        router: Optional[torch.nn.Parameter] = None,
-        cum_sum: Optional[torch.Tensor] = None,
-        tau: Optional[torch.Tensor] = None,
-        mask: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        kv_cache: KVCache = None,
-    ) -> tuple[torch.Tensor, KVCache, bool, int]:
+        e: Float[Tensor, "batch seq d_model"],
+        router: torch.nn.Parameter,
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"], bool, int, Float[Tensor, "batch seq"], tuple
+    ]:
         """Forward pass through the layer with configurable behavior."""
         # Update layer index for group processing
         if self.enable_early_exit:
             layer_index = self.n_group * layer_index + 1
         s_exit = 0
         # Check for early exit
-        if (
-            self.enable_early_exit
-            and router is not None
-            and cum_sum is not None
-            and tau is not None
-        ):
-            skip_mask, continue_processing, s_exit = self._check_early_exit(
-                x, router, cum_sum, tau, layer_index
-            )
 
-            if not continue_processing:
-                return x, kv_cache, False, 0, s_exit, ((None, None), None)
-        else:
-            # Process all tokens when early exit is disabled
-            skip_mask = torch.ones(
-                x.shape[0], x.shape[1], dtype=torch.bool, device=x.device
-            )
-            continue_processing = True
+        skip_mask, continue_processing, s_exit = self._check_early_exit(
+            x, router, cum_sum, tau, layer_index
+        )
+
+        if not continue_processing:
+            return x, False, 0, s_exit, ((None, None), None)
 
         # === ATTENTION BLOCK ===
         # Pre-normalization and packing
         xnorm = self.attn_pre(x)
 
-        if self.enable_sequence_packing and self.enable_early_exit:
-            packed_x, positions, max_len = self._pack_sequence(xnorm, skip_mask)
-            positions_arg = positions
-            skip_mask_arg = skip_mask
-        else:
-            packed_x = xnorm
-            positions_arg = (
-                torch.arange(x.shape[1], device=x.device)
-                .unsqueeze(0)
-                .expand(x.shape[0], -1)
-            )
-            skip_mask_arg = None
-            max_len = x.shape[1]
+        packed_x, positions, max_len = self._pack_sequence(xnorm, skip_mask)
 
         # Attention computation
-        att, kv_cache, expert_sel_attn = self.attention(
+        # att, kv_cache, expert_sel_attn = self.attention(
+        att, expert_sel_attn = self.attention(
             packed_x,
             xnorm,
             xnorm,
             mask,
-            kv_cache=kv_cache,
-            pos_offset=0,
-            positions=positions_arg,
-            skip_mask=skip_mask_arg,
+            positions=positions,
+            skip_mask=skip_mask,
         )
 
         # Apply residual connection
@@ -1208,7 +1216,6 @@ class MoEUTLayer(Module):
 
         return (
             x,
-            kv_cache,
             continue_processing,
             max_len,
             s_exit,
@@ -1243,13 +1250,9 @@ class MoEUT(MoEUTPretrainedModel):
 
         self.layers = ModuleList([MoEUTLayer(config) for _ in range(config.n_group)])
 
-        # Early exit parameters (only if enabled)
-        if config.enable_early_exit:
-            self.router = torch.nn.Parameter(torch.empty(self.d_model))
-            self.tau = torch.nn.Parameter(torch.ones(1))
-        else:
-            self.router = None
-            self.tau = None
+
+        self.router = torch.nn.Parameter(torch.empty(self.d_model))
+        self.tau = torch.nn.Parameter(torch.ones(1))
 
         # Initialize parameters
         self.reset_parameters()
@@ -1295,68 +1298,71 @@ class MoEUT(MoEUTPretrainedModel):
 
     def forward(
         self,
-        x: torch.Tensor,
-        e: Optional[torch.Tensor] = None,
-        mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        kv_cache: MultilayerKVCache = None,
+        x: Float[Tensor, "batch seq d_model"],
+        e: Float[Tensor, "batch seq d_model"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
     ) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
         new_cache = {}
-        self._seq_len = []
-        self._latent_vectors = []
-        self._exit_logits = []
-        
-        
+
+        self._expert_sel.append([])
+        self._exit_logits.append([])
+        self._latent_vectors.append([])
+        self._seq_len.append([])
+        cum_sum = torch.zeros(
+                x.shape[0], x.shape[1], device=x.device, dtype=x.dtype
+            )
         if self.enable_early_exit:
             # New model: early exit with groups
-            cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
             layer_index_abs = 0
             continue_processing = True
-            
+
             while continue_processing:
                 for layer in self.layers:
                     # Forward through layer
-                    x, _, continue_processing, seq_lengths, s_exit = layer(
-                        x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
+                    print(self.router)
+                    x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                        x, layer_index_abs, e, self.router, cum_sum, self.tau, mask
                     )
-                    
-                    # Track sequence lengths and entropy for analysis
-                    self._seq_len.append(copy.deepcopy(seq_lengths))
-                    self._latent_vectors.append(x.detach().clone())
-                    self._exit_logits.append(s_exit.detach().clone())
-                    
-                    
+                    # make continue_processing just be conditioned on the last token
                     if not continue_processing:
                         break
-                    
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors[-1].append(x.detach().clone())
+                    self._exit_logits[-1].append(s_exit.detach().clone())
+                    self._expert_sel[-1].append(expert_sel)
+
                     layer_index_abs += 1
-            
-            # Store layer usage for callbacks
-            self._layer_index_abs = layer_index_abs
-            
         else:
             # Old model style: process all layers sequentially
-            for li, layer in enumerate(self.layers):
-                cache = kv_cache.get(li, {}) if kv_cache is not None else None
-                x, new_cache[li] = layer(
-                    x, li, e, None, None, None, mask, kv_cache=cache
-                )
-                
-        
+            for li in range(self.n_repeats):
+                for layer in self.layers:
+                    # cache = kv_cache.get(li, {}) if kv_cache is not None else None
+                    x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                        x, li, e, self.router, cum_sum, self.tau, mask
+                    )
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors[-1].append(x.detach().clone())
+                    self._exit_logits[-1].append(s_exit)
+                    self._expert_sel[-1].append(expert_sel)
+
         # Collect regularization loss if enabled
-        reg_loss = self._collect_regularization_loss()
-        
+        reg_loss = None
+        if self.collect_reg_loss:
+            reg_loss = self._collect_regularization_loss()
+
         return CausalLMOutputWithPast(
-            loss=reg_loss if self.collect_reg_loss else None,
-            logits=x,
-            past_key_values=new_cache if kv_cache is not None else None
+            loss=reg_loss, logits=x.to(torch.float), past_key_values=None
         )
+
 
 @beartype
 class MoEUTLM(MoEUTPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
-    def __init__(self, config: MoEUTConfig, eos_token_id:int):
+    def __init__(self, config: MoEUTConfig, eos_token_id: int):
         super().__init__(config)
 
         # Core transformer
@@ -1388,21 +1394,19 @@ class MoEUTLM(MoEUTPretrainedModel):
         )
         self.transformer.reset_parameters()
 
-    def _generate_causal_mask(self, input_ids):
-        """
-        Create a causal attention mask for packed sequences.
-        Each sequence in the batch should not attend to tokens from other sequences.
-        """
-        
-        print("inp shape", input_ids.shape)
-        batch_size, seq_len,_ = input_ids.shape
+    def _generate_causal_mask(
+        self, input_ids: Float[Tensor, "batch seq d_model"]
+    ) -> Bool[Tensor, "batch seq seq"]:
+        """Create a causal attention mask for packed sequences."""
 
+        print("inp shape", input_ids.shape)
+        batch_size, seq_len, _ = input_ids.shape
+        device = input_ids.device
         # Create causal mask for each sample in the batch
         attention_masks = []
 
-        
         print("eos token id:", self.eos_token_id)
-        
+
         for batch_idx in range(batch_size):
             x = input_ids[batch_idx]
             T = x.size(0)
@@ -1418,8 +1422,12 @@ class MoEUTLM(MoEUTPretrainedModel):
                 mask = torch.tril(torch.ones(T, T, dtype=torch.bool))
 
                 # Add sequence boundaries
-                sequence_starts = torch.cat([torch.tensor([0]), eos_positions + 1])
-                sequence_ends = torch.cat([eos_positions, torch.tensor([T - 1])])
+                sequence_starts = torch.cat(
+                    [torch.tensor([0]).to(device), eos_positions + 1]
+                )
+                sequence_ends = torch.cat(
+                    [eos_positions, torch.tensor([T - 1]).to(device)]
+                )
 
                 print(sequence_starts, sequence_ends)
 
@@ -1433,14 +1441,39 @@ class MoEUTLM(MoEUTPretrainedModel):
 
             attention_masks.append(mask)
 
-        return torch.stack(attention_masks)
+        return torch.stack(attention_masks).to(input_ids.device)
+
+    def _generate_source_len_mask(
+        self, attention_mask: Bool[Tensor, "batch seq seq"]
+    ) -> Int[Tensor, "batch seq"]:
+        """Generate source length mask with position indices for each sequence."""
+        batch_size, seq_len, _ = attention_mask.shape
+
+        # Initialize position mask
+        position_mask = torch.zeros(
+            batch_size, seq_len, dtype=torch.long, device=attention_mask.device
+        )
+
+        for batch_idx in range(batch_size):
+            mask = attention_mask[batch_idx]
+
+            # Find where attention is allowed (causal mask pattern)
+            # For each position, count how many previous positions it can attend to
+            for pos in range(seq_len):
+                # Count valid positions this token can attend to (including itself)
+                valid_positions = mask[pos, : pos + 1].sum().item()
+                position_mask[batch_idx, pos] = (
+                    valid_positions - 1
+                )  # 0-indexed positions
+
+        return position_mask
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        src_len_mask: Optional[torch.Tensor] = None,
+        input_ids: Optional[Int[Tensor, "batch seq"]] = None,
+        inputs_embeds: Optional[Float[Tensor, "batch seq d_model"]] = None,
+        attention_mask: Optional[Bool[Tensor, "batch seq seq"]] = None,
+        src_len_mask: Optional[Int[Tensor, "batch seq"]] = None,
     ) -> CausalLMOutputWithPast:
         """Forward pass through the language model."""
         # Validate inputs
@@ -1452,22 +1485,24 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Get embeddings
         if input_ids is not None:
             x = self.embedding(input_ids)
-        else:
+        elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
 
-        
-        print("the type of x is",type(x))
-        
-        
+        print("the type of x is", type(x))
+
         # Generate default attention mask if needed
         if attention_mask is None:
             attention_mask = self._generate_causal_mask(x)
+        if src_len_mask is None:
+            src_len_mask = self._generate_source_len_mask(attention_mask)
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.prot_emb else None
 
         # Forward through transformer with intermediate logit saving
-        outputs = self.transformer(x, e, (attention_mask, src_len_mask), {})
+        print(attention_mask)
+        print(src_len_mask)
+        outputs = self.transformer(x, e, (attention_mask, src_len_mask))
 
         # Apply output projection
         outputs.logits = self.lm_head(self.out_norm(outputs.logits))
@@ -1484,7 +1519,7 @@ class ComposerMoEUT(HuggingFaceModel):
         config: MoEUTConfig,
         tokenizer: PreTrainedTokenizerBase,
     ):
-        
+
         model = MoEUTLM(config, tokenizer.eos_token_id)
 
         # Configuration
@@ -1515,13 +1550,15 @@ class ComposerMoEUT(HuggingFaceModel):
             attention_mask=batch.get("attention_mask", None),
         )
 
-    def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
+    def loss(self, outputs: CausalLMOutputWithPast, batch) -> Float[Tensor, ""]:
         """Compute training loss."""
         loss_fn = torch.nn.CrossEntropyLoss(
             ignore_index=CROSS_ENTROPY_IGNORE_INDEX,
             reduction="mean",
         )
 
-        labels = batch["input_ids"] if "input_ids" in batch else batch["labels"]
+        labels: Int[Tensor, "batch seq"] = (
+            batch["input_ids"] if "input_ids" in batch else batch["labels"]
+        )
 
         return compute_loss_from_logits(outputs, self.shift_labels, labels, loss_fn)
