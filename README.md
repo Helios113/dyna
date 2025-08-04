@@ -125,10 +125,15 @@ How do we verify everything
     Multiple rollouts
         -- route several times the same tokens
 
+
+    Visualise the attention mask
+
 Entropy calc before applying sigmoid apparently1!!
 
 
 Mixture of Reccurance routing examples
+
+
 
 
 Parameters:
@@ -144,3 +149,13 @@ Future work:
     Multi Token prediction
     The cool attention from Meta
     Dynamic number of experts per iteration
+
+
+
+
+
+
+Where will I handle the rescaling
+    In the main body I guess
+    What about the norming, I think it should be hidden in the modules
+    
