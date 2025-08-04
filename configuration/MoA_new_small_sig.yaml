@@ -1,8 +1,8 @@
 model_config:
   d_model: 412
-  n_layers: 16
+  n_layers: 2
   n_heads: 4
-  n_ffn_experts: 155
+  n_ffn_experts: 48
   n_att_experts: 8
   d_head: 84
   ff_k: 12
@@ -11,13 +11,13 @@ model_config:
   group_size: 2
   vocab_size: 49152
   max_seq_len: 1024
-  scale_add: False
+  scale_add: True
   prot_emb: True
   shared_expert_number_attn: 0
   shared_expert_number_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  use_simple_residual: True
+  use_simple_residual: False
 train:
   max_duration: "1495ba"
   warmup: "299ba"
@@ -36,13 +36,15 @@ callbacks:
     attn_experts: ${model_config.n_att_experts}
     ffn_experts: ${model_config.n_ffn_experts}
   entropy_callback: {}
+  exit_callback: {}
+  layer_usage_monitor: {}
   # activation_monitor_c: {}
 
 
   
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 
@@ -51,7 +53,7 @@ trainer_config:
   eval_interval: 100ba
   eval_subset_num_batches: -1
   train_dataloader_label: "train"
-  device_train_microbatch_size: 32
+  device_train_microbatch_size: 64
   precision: "amp_bf16"
   device: "gpu"
   parallelism_config:

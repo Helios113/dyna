@@ -4,40 +4,72 @@ import time
 from flash_attn import flash_attn_func
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-def benchmark_attention(batch_size=1024, seq_len=2048, n_heads=8, head_dim=64, device="cuda", steps=1000):
-    # Use fp16 for compatibility with FlashAttention
-    with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
-        dtype = torch.bfloat16
-        q = torch.randn(batch_size, n_heads, seq_len, head_dim, device=device, dtype=dtype)
-        k = torch.randn(batch_size, n_heads, seq_len, head_dim, device=device, dtype=dtype)
-        v = torch.randn(batch_size, n_heads, seq_len, head_dim, device=device, dtype=dtype)
-        mask = torch.zeros(batch_size, 1, seq_len, seq_len, dtype=torch.bool, device=device)  # no masking
+def benchmark_attention(batch_size=32, seq_len=2048, n_heads=8, head_dim=64, device="cuda", steps=100):
+    dtype = torch.bfloat16
+    
+    # Create tensors with correct dimensions
+    # For PyTorch SDPA: (batch_size, n_heads, seq_len, head_dim)
+    q_sdpa = torch.randn(batch_size, n_heads, seq_len//2, head_dim, device=device, dtype=dtype)
+    k_sdpa = torch.randn(batch_size, n_heads, seq_len, head_dim, device=device, dtype=dtype)
+    v_sdpa = torch.randn(batch_size, n_heads, seq_len, head_dim, device=device, dtype=dtype)
+    
+    # For FlashAttention: (batch_size, seq_len, n_heads, head_dim)
+    q_flash = q_sdpa.transpose(1, 2).contiguous()  # (batch_size, seq_len//2, n_heads, head_dim)
+    k_flash = k_sdpa.transpose(1, 2).contiguous()
+    v_flash = v_sdpa.transpose(1, 2).contiguous()
 
-        # Warmup
-        for _ in range(3):
-            _ = F.scaled_dot_product_attention(q, k, v, attn_mask=None, scale=None, dropout_p=0.0, is_causal=False)
-            _ = flash_attn_func(q, k, v, dropout_p=0.0, causal=False)
+    # Since q and k have different sequence lengths, we cannot use causal attention
+    is_causal = False
+    
+    print(f"Benchmarking with batch_size={batch_size}, seq_len_q={seq_len//2}, seq_len_k={seq_len}, n_heads={n_heads}, head_dim={head_dim}")
+    print(f"SDPA tensor shapes: q={q_sdpa.shape}, k={k_sdpa.shape}")
+    print(f"FlashAttention tensor shapes: q={q_flash.shape}, k={k_flash.shape}")
+    print(f"Using causal attention: {is_causal}")
 
-        torch.cuda.synchronize()
-        # Benchmark flash_attn_func
-        t0 = time.time()
+    # Warm up
+    with torch.no_grad():
+        _ = flash_attn_func(q_flash, k_flash, v_flash, dropout_p=0.0, causal=False)
+        
+        _ = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, dropout_p=0.0, is_causal=is_causal)
+
+    torch.cuda.synchronize()
+
+    # Benchmark FlashAttention
+    t0 = time.time()
+    with torch.no_grad():
         for _ in range(steps):
-            out1 = flash_attn_func(q, k, v, dropout_p=0.0, causal=False)
-        torch.cuda.synchronize()
-        t1 = time.time()
-        avg_flash = (t1 - t0) / steps
+            _ = flash_attn_func(q_flash, k_flash, v_flash, dropout_p=0.0, causal=is_causal)
+    torch.cuda.synchronize()
+    t1 = time.time()
+    avg_flash = (t1 - t0) / steps
 
-        # Benchmark scaled_dot_product_attention
-        t2 = time.time()
-        for _ in range(steps):
-            out2 = F.scaled_dot_product_attention(q, k, v, attn_mask=None, scale=None, dropout_p=0.0, is_causal=False)
-        torch.cuda.synchronize()
-        t3 = time.time()
-        avg_sdpa = (t3 - t2) / steps
+    # Benchmark PyTorch SDPA with FlashAttention backend
+    t2 = time.time()
+    with torch.no_grad():
+        with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
+            for _ in range(steps):
+                _ = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, dropout_p=0.0, is_causal=is_causal)
+    torch.cuda.synchronize()
+    t3 = time.time()
+    avg_sdpa_flash = (t3 - t2) / steps
 
-        print(f"flash_attn_func avg time: {avg_flash:.6f}s")
-        print(f"scaled_dot_product_attention avg time: {avg_sdpa:.6f}s")
-        print(f"Max abs diff: {(out1-out2).abs().max().item():.6e}")
+    # Benchmark PyTorch SDPA with Math backend (fallback)
+    t4 = time.time()
+    with torch.no_grad():
+        with sdpa_kernel([SDPBackend.MATH]):
+            for _ in range(steps):
+                _ = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, dropout_p=0.0, is_causal=is_causal)
+    torch.cuda.synchronize()
+    t5 = time.time()
+    avg_sdpa_math = (t5 - t4) / steps
+
+    print(f"\nResults:")
+    print(f"FlashAttention (direct)     avg time: {avg_flash:.6f}s")
+    print(f"PyTorch SDPA (Flash backend) avg time: {avg_sdpa_flash:.6f}s")
+    print(f"PyTorch SDPA (Math backend)  avg time: {avg_sdpa_math:.6f}s")
+    print(f"\nSpeedup vs Math backend:")
+    print(f"FlashAttention (direct):     {avg_sdpa_math/avg_flash:.2f}x")
+    print(f"PyTorch SDPA (Flash):        {avg_sdpa_math/avg_sdpa_flash:.2f}x")
 
 if __name__ == "__main__":
     benchmark_attention()

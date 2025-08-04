@@ -66,3 +66,96 @@ Add Muon
 ## The KV cache
     From the Mixture of Reccurence paper
 
+
+
+The loss function should balance itself. For better science I need some hypothesis to see if this will work.
+1 . Tau is multiplied together with S into each token. works really well I think.
+2. Tau is both multiplied at each token and loss. Not great
+3. Tau is just multipled with the loss
+
+
+
+New masking for the attention
+    Take the regular mask and just assembled it as before
+
+
+    
+    
+
+pos_offset and kv caching 
+
+
+1 expert case is handled
+
+Add all hyper params like learned tau and bias to the hf checkpoint
+
+How do we verify everything
+
+    Plot entropy and maybe seq length as a graph that can scroll and as a total graph -- done
+
+    Plot expert selection -- almost done
+        -- see that it works with microbatching
+
+    Do the same reg loss as they had
+        -- will do
+
+    Make ACT for comparisons 
+        -- will do
+    
+
+    Paramterise everything and run
+
+    Fix initialisation
+    batch packing
+
+    Shanon entropy being 10 seems highly unlikely
+        -- make shanon entropy for final token as well
+        -- make shanon entropy work as the expert select
+        -- make exit entropy the same and show final entropy as well
+
+    
+    Exit expert -- might be very good
+
+        -- we maybe we can look at the entropy
+
+    For a policy
+        -- give it more info 
+    use RL to improve the router's descicion process
+    Temporal iterations
+    Multiple rollouts
+        -- route several times the same tokens
+
+
+    Visualise the attention mask
+
+Entropy calc before applying sigmoid apparently1!!
+
+
+Mixture of Reccurance routing examples
+
+
+
+
+Parameters:
+    Token exit
+    Peri-LN
+    Attn experts
+    FFN experts
+    Shared experts
+    Expert balancing
+    Early exiting losses
+
+Future work:
+    Multi Token prediction
+    The cool attention from Meta
+    Dynamic number of experts per iteration
+
+
+
+
+
+
+Where will I handle the rescaling
+    In the main body I guess
+    What about the norming, I think it should be hidden in the modules
+    

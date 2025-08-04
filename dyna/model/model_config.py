@@ -1,25 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence, Callable, Any, TextIO
-import torch
-from composer.optim import ComposerScheduler
-from composer.models import ComposerModel
-from composer.profiler import Profiler
-from composer.distributed import DDPSyncStrategy
-from composer.loggers import LoggerDestination
-from composer.utils import ObjectStore, ParallelismConfig
-from composer.core import (
-    Algorithm,
-    AlgorithmPass,
-    Callback,
-    DataSpec,
-    Evaluator,
-    Event,
-    Precision,
-    State,
-    Time,
-)
-from composer.devices import Device
-
 
 @dataclass
 class ModelConfig:
@@ -32,19 +11,25 @@ class ModelConfig:
     n_ffn_experts: int = 10
     n_att_experts: int = 2
     d_head: int | None = None
-    group_size: int = 2
-    ff_k: int = 8
-    att_k: int = 2
-    ff_expert_dropout: float = 0.0
-    att_expert_dropout: float = 0.0
-    ff_expert_size: int = 128
+    n_group: int = 2
+    k_ffn: int = 8
+    k_attn: int = 2
+    dropout_expert_ffn: float = 0.0
+    dropout_expert_attn: float = 0.0
+    d_expert_ffn: int = 128
     dropout: float = 0.0
-    entropy_reg: float = 0.01
-    att_entropy_reg: float = 0.001
+    reg_entropy: float = 0.01
+    reg_entropy_attn: float = 0.001
     attention: str = "SwitchHeadRope"
     shift_labels: bool | None = None
     scale_add: bool = True
     prot_emb: bool = False
+    n_expert_shared_attn: int = 1
+    n_expert_shared_ffn: int = 2
+    collect_reg_loss: bool = False
+    enable_early_exit: bool = True
+    use_simple_residual: bool = False
+    run_id: str | None = None
 
 
 @dataclass
@@ -74,7 +59,7 @@ class TrainerConfig:
     progress_bar: bool = False
     log_to_console: bool = True
     console_stream: str | None = "stderr"
-    console_log_interval: str | None = "100ba"
+    console_log_interval: str | None = "10ba"
     log_traces: bool = False
     auto_log_hparams: bool = False
 
@@ -131,8 +116,7 @@ class TrainerConfig:
     python_log_level: str | None = None
 
     # compile config for PyTorch 2.0 or higher
-    compile_config: dict[str, Any] | None = None
-
+    compile_config: dict | None = None
 
 
 @dataclass
@@ -165,11 +149,10 @@ class DatasetConfig:
     max_seq_len: int | None = 2048
 
 
-
 @dataclass
 class DataConfig:
-    path : str
-    dataset : DatasetConfig = field(default_factory=DatasetConfig)
+    path: str
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
     name: str = "text"
     drop_last: bool = True
     num_workers: int = 4

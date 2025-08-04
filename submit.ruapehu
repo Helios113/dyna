@@ -8,10 +8,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=11:58:00
 #! specify node
-#SBATCH -w mauao
+#SBATCH -w ruapehu
 #SBATCH --output=tests_new/%x.%j.ans
 
 
 
-
-HYDRA_FULL_ERROR=1 uv run python main.py
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_new_small_sig
