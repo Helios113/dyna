@@ -14,9 +14,11 @@ from dyna.utils.utils import (
     build_full_concrete_config,
     get_scheduler,
 )
+from beartype import beartype
 
 
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA")
+@beartype
 def main(cfg: DictConfig):
     cfg = build_full_concrete_config(cfg)
 

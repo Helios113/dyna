@@ -26,24 +26,24 @@ def count_parameters(cfg):
     group_size = cfg.group_size
     n_heads = cfg.n_heads
     d_head = cfg.d_head or (d_model // n_heads)
-    n_ffn_experts = cfg.n_ffn_experts
-    n_att_experts = cfg.n_att_experts  # <-- fix here
+    n_experts_ffn = cfg.n_experts_ffn
+    n_experts_attn = cfg.n_experts_attn  # <-- fix here
     ff_expert_size = cfg.ff_expert_size
 
     # --- Per-layer parameter count (matches MoEUTLayer) ---
     # Attention (SwitchHeadRope)
     att_q = d_model * d_head * n_heads
     att_k = d_model * d_head * n_heads
-    att_sel_v = n_heads * n_att_experts * d_model
-    att_sel_o = n_heads * n_att_experts * d_model
-    att_v = n_heads * n_att_experts * d_model * d_head
-    att_o = n_heads * n_att_experts * d_head * d_model
+    att_sel_v = n_heads * n_experts_attn * d_model
+    att_sel_o = n_heads * n_experts_attn * d_model
+    att_v = n_heads * n_experts_attn * d_model * d_head
+    att_o = n_heads * n_experts_attn * d_head * d_model
     att_total = att_q + att_k + att_sel_v + att_sel_o + att_v + att_o
 
     # FFN (SigmaMoE)
-    ff_keys = n_ffn_experts * d_model * ff_expert_size
-    ff_values = n_ffn_experts * ff_expert_size * d_model
-    ff_expert_sel = n_ffn_experts * d_model
+    ff_keys = n_experts_ffn * d_model * ff_expert_size
+    ff_values = n_experts_ffn * ff_expert_size * d_model
+    ff_expert_sel = n_experts_ffn * d_model
     ffn_total = ff_keys + ff_values + ff_expert_sel
 
     # 4 RMSNorms per layer (each d_model, no bias)

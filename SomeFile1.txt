@@ -8,7 +8,7 @@ wandb: Currently logged in as: preslav-aleksandrov (camlsys). Use `wandb login -
 wandb: Tracking run with wandb version 0.18.7
 wandb: Run data is saved locally in /nfs-share/pa511/code_bases/dyna_project/dyna/wandb/run-20250729_180722-9c43iczg
 wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run ttkunurg_29jul25_t5dwfglh_scale_add=True_prot_emb=True_d_model=412_n_layers=16_n_heads=4_n_ffn_experts=180_n_att_experts=10_ff_expert_size=10_dropout=0.0
+wandb: Syncing run ttkunurg_29jul25_t5dwfglh_scale_add=True_prot_emb=True_d_model=412_n_layers=16_n_heads=4_n_experts_ffn=180_n_experts_attn=10_ff_expert_size=10_dropout=0.0
 wandb: ⭐️ View project at https://wandb.ai/camlsys/dyna
 wandb: 🚀 View run at https://wandb.ai/camlsys/dyna/runs/9c43iczg
 /nfs-share/pa511/code_bases/dyna_project/dyna/.venv/lib/python3.12/site-packages/composer/callbacks/speed_monitor.py:290: UserWarning: gpu_flop count not found for nvidia h100 nvl with precision=amp_bf16 so MFU cannot be calculated and reported. gpu_flops_available can be manually overridden by setting gpu_flops_available in SpeedMonitor or nvidia h100 nvl can be added to GPU_AVAILABLE_FLOPS in composer/callbacks/speed_monitor.py
@@ -23348,7 +23348,7 @@ wandb:                                                            time/train 0.0
 wandb:                                                              time/val 0
 wandb:                                  trainer/device_train_microbatch_size 10
 wandb: 
-wandb: 🚀 View run ttkunurg_29jul25_t5dwfglh_scale_add=True_prot_emb=True_d_model=412_n_layers=16_n_heads=4_n_ffn_experts=180_n_att_experts=10_ff_expert_size=10_dropout=0.0 at: https://wandb.ai/camlsys/dyna/runs/9c43iczg
+wandb: 🚀 View run ttkunurg_29jul25_t5dwfglh_scale_add=True_prot_emb=True_d_model=412_n_layers=16_n_heads=4_n_experts_ffn=180_n_experts_attn=10_ff_expert_size=10_dropout=0.0 at: https://wandb.ai/camlsys/dyna/runs/9c43iczg
 wandb: ⭐️ View project at: https://wandb.ai/camlsys/dyna
 wandb: Synced 5 W&B file(s), 0 media file(s), 320 artifact file(s) and 280 other file(s)
 wandb: Find logs at: ./wandb/run-20250729_180722-9c43iczg/logs

@@ -39,7 +39,7 @@ def main(cfg: DictConfig):
 
     seed_everything()
     model_old = MoEUTLM_old(model_config.vocab_size,model_config.d_model, model_config.n_layers, model_config.n_heads,
-                            model_config.n_ffn_experts, model_config.n_att_experts, d_head=model_config.d_head,
+                            model_config.n_experts_ffn, model_config.n_experts_attn, d_head=model_config.d_head,
                             group_size=model_config.group_size, ff_k=model_config.ff_k, att_k=model_config.att_k,
                             ff_expert_dropout=model_config.ff_expert_dropout, att_expert_dropout=model_config.att_expert_dropout,
                             ff_expert_size=model_config.ff_expert_size).cuda()

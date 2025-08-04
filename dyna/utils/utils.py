@@ -50,8 +50,8 @@ def make_wandb_run_name(config: DictConfig) -> str:
         "d_model",
         "n_layers",
         "n_heads",
-        "n_ffn_experts",
-        "n_att_experts",
+        "n_experts_ffn",
+        "n_experts_attn",
         "ff_expert_size",
         "dropout",
     ]

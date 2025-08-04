@@ -3,6 +3,7 @@ import copy
 import math
 from dataclasses import dataclass
 from collections.abc import Callable
+from typing import Optional
 import torch
 import torch.nn.functional as F
 from composer.models import HuggingFaceModel
@@ -15,8 +16,9 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
 )
-from torch.nn import Module
+from torch.nn import Module, ModuleList
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
+from beartype import beartype
 
 # Constants
 CROSS_ENTROPY_IGNORE_INDEX = -100
@@ -30,7 +32,7 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
 KVCache = dict[str, torch.Tensor]
 MultilayerKVCache = dict[int, KVCache]
 
-
+@beartype
 @dataclass
 class AttentionMask:
     """Container for attention mask components."""
@@ -38,7 +40,7 @@ class AttentionMask:
     src_length_mask: Optional[torch.Tensor]
     position_mask: Optional[torch.Tensor]
 
-
+@beartype
 @dataclass
 class MoEUTOutput:
     """Output container for MoEUT model."""
@@ -47,14 +49,14 @@ class MoEUTOutput:
     reg_loss: torch.Tensor
     cache: MultilayerKVCache
 
-
+@beartype
 def get_targets(labels: torch.Tensor) -> torch.Tensor:
     """Shift labels for causal language modeling."""
     targets = torch.roll(labels, shifts=-1)
     targets[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
     return targets
 
-
+@beartype
 def compute_loss_from_logits(
     outputs: CausalLMOutputWithPast,
     shift_labels: bool,
@@ -76,31 +78,31 @@ def compute_loss_from_logits(
 
     return loss
 
-
+@beartype
 def round_up_to_multiple_of_256(n: int) -> int:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
         return 256
     return ((n - 1) // 256 + 1) * 256
 
-
+@beartype
 def log_mean(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
     """Compute log of mean along specified dimension."""
     return x.logsumexp(dim) - math.log(x.shape[dim])
 
-
+@beartype
 def entropy_l(l: torch.Tensor) -> torch.Tensor:
     """Compute entropy from log probabilities."""
     return -(l * l.exp()).sum(-1)
 
-
+@beartype
 def entropy_reg(sel: torch.Tensor, dim: int) -> torch.Tensor:
     """Compute entropy regularization term."""
     sel = F.log_softmax(sel, dim=-1)
     sel = log_mean(sel, dim)
     return -entropy_l(sel).mean()
 
-
+@beartype
 class MoEUTConfig(PretrainedConfig):
     """Configuration class for MoEUT model."""
 
@@ -112,9 +114,9 @@ class MoEUTConfig(PretrainedConfig):
         d_model: int,
         n_layers: int,
         n_heads: int,
-        n_ffn_experts: int,
-        n_att_experts: int,
-        d_head: int = None,
+        n_experts_ffn: int,
+        n_experts_attn: int,
+        d_head: int,
         n_group: int = 2,
         k_ffn: int = 8,
         k_attn: int = 2,
@@ -143,8 +145,8 @@ class MoEUTConfig(PretrainedConfig):
         self.n_heads = n_heads
         self.d_head = d_head
 
-        self.n_ffn_experts = n_ffn_experts
-        self.n_att_experts = n_att_experts
+        self.n_experts_ffn = n_experts_ffn
+        self.n_experts_attn = n_experts_attn
         self.d_expert_ffn = d_expert_ffn
         self.n_expert_shared_ffn = n_expert_shared_ffn
         self.n_expert_shared_attn = n_expert_shared_attn
@@ -170,24 +172,23 @@ class MoEUTConfig(PretrainedConfig):
         self.collect_reg_loss = collect_reg_loss
 
 
-
-
 # No selection input. We will only do this inside the module forward\
-    # I mean we apply the normalisation and related things inside
+# I mean we apply the normalisation and related things inside
+@beartype
 class DynaModule(Module, ABC):
     @abstractmethod
     def get_reg_loss(self) -> torch.Tensor:
         pass
 
     @abstractmethod
-    def forward(
-        self, token_stream: torch.Tensor) -> torch.Tensor:
+    def forward(self, token_stream: torch.Tensor) -> torch.Tensor:
         pass
 
     @abstractmethod
     def reset_parameters(self, std_scale: float) -> None:
         pass
 
+@beartype
 class AttentionModule(DynaModule):
     @abstractmethod
     def attend(
@@ -201,6 +202,7 @@ class AttentionModule(DynaModule):
     ) -> torch.Tensor:
         pass
 
+@beartype
 class SigmaMoE(DynaModule):
     """Sigma Mixture of Experts layer for feed-forward networks."""
 
@@ -219,7 +221,7 @@ class SigmaMoE(DynaModule):
         self.n_experts_ffn = n_experts_ffn
         self.d_expert_ffn = d_expert_ffn
         self.n_expert_shared_ffn = min(n_expert_shared_ffn, n_experts_ffn)
-        self.n_expert_routed_ffn = n_experts_ffn - self.n_expert_shared
+        self.n_expert_routed_ffn = n_experts_ffn - self.n_expert_shared_ffn
         self.k_ffn = k_ffn
         self.activation = activation
         self.dropout_expert = dropout_expert
@@ -230,18 +232,22 @@ class SigmaMoE(DynaModule):
 
         # Expert parameters
         self.keys = torch.nn.Parameter(
-            torch.empty(self.n_experts, self.d_model, self.d_expert_ffn)
+            torch.empty(self.n_experts_ffn, self.d_model, self.d_expert_ffn)
         )
         self.values = torch.nn.Parameter(
-            torch.empty(self.n_experts, self.d_expert_ffn, self.d_model)
+            torch.empty(self.n_experts_ffn, self.d_expert_ffn, self.d_model)
         )
-        self.expert_sel = torch.nn.Parameter(torch.empty(self.n_experts, self.d_model))
+        self.expert_sel = torch.nn.Parameter(
+            torch.empty(self.n_experts_ffn, self.d_model)
+        )
 
         # Register shared expert indices
         self.register_buffer(
             "expert_shared",
             torch.arange(
-                n_experts_ffn - self.n_expert_shared, n_experts_ffn, dtype=torch.long
+                n_experts_ffn - self.n_expert_shared_ffn,
+                n_experts_ffn,
+                dtype=torch.long,
             ),
         )
 
@@ -251,7 +257,9 @@ class SigmaMoE(DynaModule):
         """Initialize parameters with proper scaling."""
         torch.nn.init.normal_(self.keys, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(
-            self.values, 0, std_scale / math.sqrt(self.n_experts * self.d_expert)
+            self.values,
+            0,
+            std_scale / math.sqrt(self.n_experts_ffn * self.d_expert_ffn),
         )
         torch.nn.init.normal_(self.expert_sel, 0, std_scale / math.sqrt(self.d_model))
         self.renorm_keep_std(self.expert_sel, dim=1)
@@ -288,8 +296,10 @@ class SigmaMoE(DynaModule):
             sorted=False,
         )
 
-        if self.n_expert_shared > 0:
-            shape_expert_shared = selection_index.shape[:-1] + (self.n_expert_shared,)
+        if self.n_expert_shared_ffn > 0:
+            shape_expert_shared = selection_index.shape[:-1] + (
+                self.n_expert_shared_ffn,
+            )
             expert_shared_expanded = self.expert_shared.view(
                 *([1] * (selection_index.dim() - 1)), -1
             ).expand(shape_expert_shared)
@@ -308,7 +318,9 @@ class SigmaMoE(DynaModule):
     def _update_load_balancing_bias(self, selection_index: torch.Tensor) -> None:
         """Update bias for load balancing."""
         with torch.no_grad():
-            c_i = torch.bincount(selection_index.flatten(), minlength=self.n_experts)
+            c_i = torch.bincount(
+                selection_index.flatten(), minlength=self.n_experts_ffn
+            )
             c_i_avg = torch.mean(c_i, dtype=torch.float32)
             self.bias_ffn[: self.n_expert_routed] += self.bias_update_lr * torch.sign(
                 -c_i[: self.n_expert_routed] + c_i_avg
@@ -353,111 +365,103 @@ class SigmaMoE(DynaModule):
         return loss
 
 
-class BasicFFN(DynaModule):
-    def __init__(
-        self,
-        d_model: int,
-        n_experts_ffn: int,
-        d_expert_ffn: int,
-        activation: Callable[[torch.Tensor], torch.Tensor] = F.silu,
-    ):
+# class BasicFFN(DynaModule):
+#     def __init__(
+#         self,
+#         d_model: int,
+#         n_experts_ffn: int,
+#         d_expert_ffn: int,
+#         activation: Callable[[torch.Tensor], torch.Tensor] = F.silu,
+#     ):
 
-        assert n_experts_ffn == 1
-        self.d_model = d_model
-        self.d_expert_ffn = d_expert_ffn
-        self.activation = activation
-        self.projection_up = torch.nn.Linear(self.d_model, self.d_expert_ffn)
-        self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
+#         assert n_experts_ffn == 1
+#         self.d_model = d_model
+#         self.d_expert_ffn = d_expert_ffn
+#         self.activation = activation
+#         self.projection_up = torch.nn.Linear(self.d_model, self.d_expert_ffn)
+#         self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
 
-    def forward(
-        self, token_stream: torch.Tensor, selection_input: torch.Tensor
-    ) -> torch.Tensor:
-        return self.projection_down(self.activation(self.projection_up(token_stream)))
+#     def forward(
+#         self, token_stream: torch.Tensor, selection_input: torch.Tensor
+#     ) -> torch.Tensor:
+#         return self.projection_down(self.activation(self.projection_up(token_stream)))
 
-    def get_reg_loss(self) -> torch.Tensor:
-        return torch.tensor(0.0, device=self.keys.device)
+#     def get_reg_loss(self) -> torch.Tensor:
+#         return torch.tensor(0.0, device=self.keys.device)
 
 
-class BasicAttn(AttentionModule):
-    def __init__(
-        self,
-        d_model: int,
-        n_heads: int,
-        n_experts: int,
-        d_head: int,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        assert (n_experts == 1)
-        # Model configuration
-        self.d_model = d_model
-        self.n_heads = n_heads
-        self.d_head = d_head
-        self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
+# class BasicAttn(AttentionModule):
+#     def __init__(
+#         self,
+#         d_model: int,
+#         n_heads: int,
+#         n_experts: int,
+#         d_head: int,
+#         dropout: float = 0.0,
+#     ):
+#         super().__init__()
+#         assert (n_experts == 1)
+#         # Model configuration
+#         self.d_model = d_model
+#         self.n_heads = n_heads
+#         self.d_head = d_head
+#         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
 
-        # Query and Key projections (shared)
-        self.q = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-        self.k = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-        self.v = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-        self.o = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-        
-        # build_norms
-        # We don't want nones do we?
-        # We do not pass None variables
-        # None's can only be non passed variables
-        # Some flag for which norms to use
-        self.pre_norm = 
-        self.post_norm = 
-        
-        # Expert-specific parameters
-        self._init_expert_parameters()
+#         # Query and Key projections (shared)
+#         self.q = torch.nn.Linear(self.d_model, self.d_model, bias=False)
+#         self.k = torch.nn.Linear(self.d_model, self.d_model, bias=False)
+#         self.v = torch.nn.Linear(self.d_model, self.d_model, bias=False)
+#         self.o = torch.nn.Linear(self.d_model, self.d_model, bias=False)
 
-        # Attention scale
-        self.register_buffer(
-            "scale",
-            torch.full([1], 1.0 / math.sqrt(self.d_head)),
-            persistent=False,
-        )
+#         # build_norms
+#         # We don't want nones do we?
+#         # We do not pass None variables
+#         # None's can only be non passed variables
+#         # Some flag for which norms to use
+#         self.pre_norm =
+#         self.post_norm =
 
-    def reset_parameters(self, std_scale: float) -> None:
+#         # Expert-specific parameters
+#         self._init_expert_parameters()
 
-        # Initialize projection parameters
-        torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
-        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
-        torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
-        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
-        
-        
-    def attend():
-        
-        
-        
-    def forward(self, token_stream):
-        # norming based on the recieved config
-        
-        if self.pre_norm:
-            
-        
-        
-        # projecting
-        
-        
-        # attending
-        
-        
-        # projection
-        
-        # return
-        
-        
-        
-        
-        
-        
-        
-    
+#         # Attention scale
+#         self.register_buffer(
+#             "scale",
+#             torch.full([1], 1.0 / math.sqrt(self.d_head)),
+#             persistent=False,
+#         )
+
+#     def reset_parameters(self, std_scale: float) -> None:
+
+#         # Initialize projection parameters
+#         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
+#         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
+#         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
+#         torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+
+
+#     def attend():
+
+
+#     def forward(self, token_stream):
+#         # norming based on the recieved config
+
+#         if self.pre_norm:
+
+
+#         # projecting
+
+
+#         # attending
+
+
+#         # projection
+
+#         # return
+
 
 # HERE
+@beartype
 class SwitchHeadCore(AttentionModule):
     """Core attention mechanism with expert routing."""
 
@@ -465,7 +469,7 @@ class SwitchHeadCore(AttentionModule):
         self,
         d_model: int,
         n_heads: int,
-        n_experts: int,
+        n_experts_attn: int,
         d_head: int,
         dropout: float = 0.0,
         dropout_expert: float = 0.0,
@@ -480,11 +484,11 @@ class SwitchHeadCore(AttentionModule):
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
 
         # Expert configuration
-        self.n_experts = n_experts
+        self.n_experts_attn = n_experts_attn
         self.dropout_expert = dropout_expert
         self.k_attn = k_attn
-        self.n_expert_shared = min(n_expert_shared_attn, n_experts)
-        self.n_expert_routed = n_experts - self.n_expert_shared
+        self.n_expert_shared_attn = min(n_expert_shared_attn, n_experts_attn)
+        self.n_expert_routed = n_experts_attn - self.n_expert_shared_attn
 
         # Bias tracking
         self.bias_update_lr = 0.001
@@ -499,7 +503,11 @@ class SwitchHeadCore(AttentionModule):
         # Shared expert indices
         self.register_buffer(
             "expert_shared",
-            torch.arange(n_experts - self.n_expert_shared, n_experts, dtype=torch.long),
+            torch.arange(
+                n_experts_attn - self.n_expert_shared_attn,
+                n_experts_attn,
+                dtype=torch.long,
+            ),
         )
 
         # Attention scale
@@ -515,35 +523,34 @@ class SwitchHeadCore(AttentionModule):
 
     def _init_expert_parameters(self) -> None:
         """Initialize expert-specific parameters."""
-            # Value and output projections for multiple experts
+        # Value and output projections for multiple experts
         self.v = torch.nn.Parameter(
-            torch.empty(self.n_heads * self.n_experts, self.d_model, self.d_head)
+            torch.empty(self.n_heads * self.n_experts_attn, self.d_model, self.d_head)
         )
         self.o = torch.nn.Parameter(
-            torch.empty(self.n_heads * self.n_experts, self.d_head, self.d_model)
+            torch.empty(self.n_heads * self.n_experts_attn, self.d_head, self.d_model)
         )
 
         # Expert selection parameters
         self.sel_v = torch.nn.Parameter(
-            torch.empty(self.n_heads * self.n_experts, self.d_model)
+            torch.empty(self.n_heads * self.n_experts_attn, self.d_model)
         )
         self.sel_o = torch.nn.Parameter(
-            torch.empty(self.n_heads * self.n_experts, self.d_model)
+            torch.empty(self.n_heads * self.n_experts_attn, self.d_model)
         )
 
         # Bias parameters for load balancing
         self.bias_v = torch.nn.Parameter(
-            torch.zeros(self.n_experts), requires_grad=False
+            torch.zeros(self.n_experts_attn), requires_grad=False
         )
         self.bias_o = torch.nn.Parameter(
-            torch.zeros(self.n_experts), requires_grad=False
+            torch.zeros(self.n_experts_attn), requires_grad=False
         )
-          
 
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize all parameters with proper scaling."""
         # Initialize selection parameters
-        if self.n_experts > 1:
+        if self.n_experts_attn > 1:
             torch.nn.init.normal_(self.sel_v, 0, std_scale / math.sqrt(self.d_model))
             self.renorm_rows(self.sel_v)
 
@@ -636,7 +643,7 @@ class SwitchHeadCore(AttentionModule):
         input_tensor: torch.Tensor,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
-    ) -> Tuple[CVMMSel, torch.Tensor]:
+    ) -> tuple[CVMMSel, torch.Tensor]:
         """Get expert selection indices and weights."""
         # Compute selection scores
         sel = F.linear(input_tensor, weight).float()
@@ -652,7 +659,7 @@ class SwitchHeadCore(AttentionModule):
                 sel2 = sel
 
             # Select routed experts
-            routed_k = max(1, self.k_expert - self.n_expert_shared)
+            routed_k = max(1, self.k_attn - self.n_expert_shared_attn)
             bias_term = bias[: self.n_expert_routed] if bias is not None else None
 
             _, sel_index = torch.topk(
@@ -667,16 +674,16 @@ class SwitchHeadCore(AttentionModule):
             )
 
             # Add shared experts
-            if self.n_expert_shared > 0:
-                shared_shape = sel_index.shape[:-1] + (self.n_expert_shared,)
+            if self.n_expert_shared_attn > 0:
+                shared_shape = sel_index.shape[:-1] + (self.n_expert_shared_attn,)
                 expert_shared_expanded = self.expert_shared.view(
                     *([1] * (sel_index.dim() - 1)), -1
                 ).expand(shared_shape)
-                sel_index = torch.cat([sel_index, shared_expert_expanded], dim=-1)
+                sel_index = torch.cat([sel_index, expert_shared_expanded], dim=-1)
 
             # Update bias for load balancing
             if self.training and bias is not None:
-                c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts)
+                c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts_attn)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
                 bias[: self.n_expert_routed] += self.bias_update_lr * torch.sign(
                     -c_i[: self.n_expert_routed] + c_i_avg
@@ -690,7 +697,7 @@ class SwitchHeadCore(AttentionModule):
         # Create shifted indices for expert matrix operations
         sel_index_shifted = (
             torch.arange(self.n_heads, device=sel_index.device, dtype=sel_index.dtype)
-            * self.n_experts
+            * self.n_experts_attn
         ).unsqueeze(-1) + sel_index
 
         return (
@@ -718,7 +725,7 @@ class SwitchHeadCore(AttentionModule):
         v_sel_index = None
         o_sel_inedx = None
         # Handle expert routing for values and outputs
-        if self.n_experts > 1:
+        if self.n_experts_attn > 1:
             v_sel, v_sel_r, v_sel_index = self._get_expert_selection(
                 k_src, self.sel_v, self.bias_v
             )
@@ -749,7 +756,7 @@ class SwitchHeadCore(AttentionModule):
         res = res.transpose(-2, -3)
 
         # Apply output projection
-        if self.n_experts > 1:
+        if self.n_experts_attn > 1:
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out = cvmm(res, o_sel, self.o)
@@ -760,6 +767,7 @@ class SwitchHeadCore(AttentionModule):
         return out, kv_cache, (v_sel_index, o_sel_inedx)
 
 
+@beartype
 class RotaryPosEncoding(Module):
     """Rotary Position Encoding (RoPE) implementation."""
 
@@ -798,7 +806,7 @@ class RotaryPosEncoding(Module):
 
         return (x * cos) + (self.rotate_half(x) * sin)
 
-    def get_sincos_cached(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def get_sincos_cached(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Get cached sin/cos values or compute new ones."""
         seq_len = x.shape[self.seq_dim]
 
@@ -821,7 +829,7 @@ class RotaryPosEncoding(Module):
 
     def get_sincos_positions(
         self, positions: torch.Tensor, q: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get sin/cos values for specific positions."""
         freqs = torch.einsum("ki,j->kij", positions, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1).to(positions.device)
@@ -840,11 +848,11 @@ class RotaryPosEncoding(Module):
         k: torch.Tensor,
         pos_offset: int = 0,
         positions: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Apply RoPE to query and key tensors."""
         return (self.apply_rot(q, pos_offset, positions), self.apply_rot(k, 0, None))
 
-
+@beartype
 class SwitchHeadRope(SwitchHeadCore):
     """Attention head with Rotary Position Encoding."""
 
@@ -853,10 +861,10 @@ class SwitchHeadRope(SwitchHeadCore):
         d_model: int,
         n_heads: int,
         d_head: int,
-        n_experts: int,
+        n_experts_attn: int,
         dropout: float = 0.0,
         dropout_expert: float = 0.0,
-        k_expert: int = 2,
+        k_attn: int = 2,
         rotate_fraction: float = 0.5,
         rope_base: float = 10000,
         n_expert_shared_attn: int = 0,
@@ -864,12 +872,12 @@ class SwitchHeadRope(SwitchHeadCore):
         super().__init__(
             d_model,
             n_heads,
-            n_experts,
-            dropout,
+            n_experts_attn,
             d_head,
-            dropout_expert,
-            k_expert,
-            n_expert_shared_attn,
+            dropout=dropout,
+            dropout_expert=dropout_expert,
+            k_attn=k_attn,
+            n_expert_shared_attn=n_expert_shared_attn,
         )
 
         # RoPE configuration
@@ -912,26 +920,28 @@ class SwitchHeadRope(SwitchHeadCore):
         # Compute scaled dot-product attention
         return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=mask)
 
-
+@beartype
 class MoEUTLayer(Module):
     """Single layer of the MoEUT model with configurable behavior."""
 
     def __init__(self, config: MoEUTConfig):
         super().__init__()
+        print(config.n_experts_attn)
         self.attention = SwitchHeadRope(
-            config.d_model,
-            config.n_heads,
-            config.n_att_experts,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
             d_head=config.d_head,
-            k_expert=config.k_attn,
+            n_experts_attn=config.n_experts_attn,
+            dropout=config.dropout_expert_attn,
             dropout_expert=config.dropout_expert_attn,
+            k_attn=config.k_attn,
             n_expert_shared_attn=config.n_expert_shared_attn,
         )
         self.ffn = SigmaMoE(
             config.d_model,
-            config.n_ffn_experts,
+            config.n_experts_ffn,
             config.d_expert_ffn,
-            k=config.k_ffn,
+            k_ffn=config.k_ffn,
             dropout_expert=config.dropout_expert_ffn,
             n_expert_shared_ffn=config.n_expert_shared_ffn,
         )
@@ -957,7 +967,7 @@ class MoEUTLayer(Module):
         cum_sum: torch.Tensor,
         tau: torch.Tensor,
         layer_index: int,
-    ) -> Tuple[torch.Tensor, bool]:
+    ) -> tuple[torch.Tensor, bool]:
         """Check if tokens should exit early and create skip mask."""
         if not self.enable_early_exit:
             # Return mask that keeps all tokens
@@ -986,7 +996,7 @@ class MoEUTLayer(Module):
 
     def _pack_sequence(
         self, x: torch.Tensor, skip_mask: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Pack sequences for efficient processing."""
         if not self.enable_sequence_packing:
             # Return original sequence without packing
@@ -1084,9 +1094,9 @@ class MoEUTLayer(Module):
         router: Optional[torch.nn.Parameter] = None,
         cum_sum: Optional[torch.Tensor] = None,
         tau: Optional[torch.Tensor] = None,
-        mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        mask: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
         kv_cache: KVCache = None,
-    ) -> Tuple[torch.Tensor, KVCache, bool, int]:
+    ) -> tuple[torch.Tensor, KVCache, bool, int]:
         """Forward pass through the layer with configurable behavior."""
         # Update layer index for group processing
         if self.enable_early_exit:
@@ -1206,6 +1216,7 @@ class MoEUTLayer(Module):
         )
 
 
+@beartype
 class MoEUTPretrainedModel(PreTrainedModel):
     """Base class for MoEUT pretrained models."""
 
@@ -1216,6 +1227,7 @@ class MoEUTPretrainedModel(PreTrainedModel):
     load_tf_weights = None
 
 
+@beartype
 class MoEUT(MoEUTPretrainedModel):
     """MoEUT transformer model with configurable behavior."""
 
@@ -1281,11 +1293,70 @@ class MoEUT(MoEUTPretrainedModel):
                 reg_loss = reg_loss + self.reg_entropy_attn * layer.get_reg_loss()
         return reg_loss
 
+    def forward(
+        self,
+        x: torch.Tensor,
+        e: Optional[torch.Tensor] = None,
+        mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        kv_cache: MultilayerKVCache = None,
+    ) -> CausalLMOutputWithPast:
+        """Forward pass through the model."""
+        new_cache = {}
+        self._seq_len = []
+        self._latent_vectors = []
+        self._exit_logits = []
+        
+        
+        if self.enable_early_exit:
+            # New model: early exit with groups
+            cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
+            layer_index_abs = 0
+            continue_processing = True
+            
+            while continue_processing:
+                for layer in self.layers:
+                    # Forward through layer
+                    x, _, continue_processing, seq_lengths, s_exit = layer(
+                        x, layer_index_abs, e, self.router, cum_sum, self.tau, mask, kv_cache=None
+                    )
+                    
+                    # Track sequence lengths and entropy for analysis
+                    self._seq_len.append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors.append(x.detach().clone())
+                    self._exit_logits.append(s_exit.detach().clone())
+                    
+                    
+                    if not continue_processing:
+                        break
+                    
+                    layer_index_abs += 1
+            
+            # Store layer usage for callbacks
+            self._layer_index_abs = layer_index_abs
+            
+        else:
+            # Old model style: process all layers sequentially
+            for li, layer in enumerate(self.layers):
+                cache = kv_cache.get(li, {}) if kv_cache is not None else None
+                x, new_cache[li] = layer(
+                    x, li, e, None, None, None, mask, kv_cache=cache
+                )
+                
+        
+        # Collect regularization loss if enabled
+        reg_loss = self._collect_regularization_loss()
+        
+        return CausalLMOutputWithPast(
+            loss=reg_loss if self.collect_reg_loss else None,
+            logits=x,
+            past_key_values=new_cache if kv_cache is not None else None
+        )
 
+@beartype
 class MoEUTLM(MoEUTPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
-    def __init__(self, config: MoEUTConfig):
+    def __init__(self, config: MoEUTConfig, eos_token_id:int):
         super().__init__(config)
 
         # Core transformer
@@ -1303,7 +1374,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Output normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
-
+        self.eos_token_id = eos_token_id
         # Initialize parameters
         self.reset_parameters()
 
@@ -1317,12 +1388,52 @@ class MoEUTLM(MoEUTPretrainedModel):
         )
         self.transformer.reset_parameters()
 
-    def _generate_causal_mask(self, size: int) -> torch.Tensor:
-        """Generate causal attention mask."""
-        return torch.triu(
-            torch.ones(size, size, dtype=torch.bool, device=self.lm_head.weight.device),
-            diagonal=1,
-        )
+    def _generate_causal_mask(self, input_ids):
+        """
+        Create a causal attention mask for packed sequences.
+        Each sequence in the batch should not attend to tokens from other sequences.
+        """
+        
+        print("inp shape", input_ids.shape)
+        batch_size, seq_len,_ = input_ids.shape
+
+        # Create causal mask for each sample in the batch
+        attention_masks = []
+
+        
+        print("eos token id:", self.eos_token_id)
+        
+        for batch_idx in range(batch_size):
+            x = input_ids[batch_idx]
+            T = x.size(0)
+
+            # Find EOS token positions
+            eos_positions = (x == self.eos_token_id).nonzero(as_tuple=True)[0]
+
+            if len(eos_positions) == 0:
+                # No EOS tokens found, treat as single sequence
+                mask = torch.tril(torch.ones(T, T, dtype=torch.bool))
+            else:
+                # Create base causal mask
+                mask = torch.tril(torch.ones(T, T, dtype=torch.bool))
+
+                # Add sequence boundaries
+                sequence_starts = torch.cat([torch.tensor([0]), eos_positions + 1])
+                sequence_ends = torch.cat([eos_positions, torch.tensor([T - 1])])
+
+                print(sequence_starts, sequence_ends)
+
+                # Mask out attention between different sequences
+                for i, (start, end) in enumerate(zip(sequence_starts, sequence_ends)):
+                    if i < len(sequence_starts) - 1:  # Not the last sequence
+                        # Tokens in current sequence shouldn't attend to future sequences
+                        mask[start : end + 1, end + 1 :] = False
+                        # Tokens in future sequences shouldn't attend to current sequence
+                        mask[end + 1 :, start : end + 1] = False
+
+            attention_masks.append(mask)
+
+        return torch.stack(attention_masks)
 
     def forward(
         self,
@@ -1344,9 +1455,13 @@ class MoEUTLM(MoEUTPretrainedModel):
         else:
             x = inputs_embeds
 
+        
+        print("the type of x is",type(x))
+        
+        
         # Generate default attention mask if needed
         if attention_mask is None:
-            attention_mask = self._generate_causal_mask(x.shape[-2])
+            attention_mask = self._generate_causal_mask(x)
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.prot_emb else None
@@ -1360,16 +1475,17 @@ class MoEUTLM(MoEUTPretrainedModel):
         return outputs
 
 
+@beartype
 class ComposerMoEUT(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
 
     def __init__(
         self,
         config: MoEUTConfig,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        tokenizer: PreTrainedTokenizerBase,
     ):
-        # Create model
-        model = MoEUTLM(config)
+        
+        model = MoEUTLM(config, tokenizer.eos_token_id)
 
         # Configuration
         self.vocab_size = config.vocab_size

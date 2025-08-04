@@ -8,8 +8,8 @@ class ModelConfig:
     d_model: int = 1024
     n_layers: int = 12
     n_heads: int = 12
-    n_ffn_experts: int = 10
-    n_att_experts: int = 2
+    n_experts_ffn: int = 10
+    n_experts_attn: int = 2
     d_head: int | None = None
     n_group: int = 2
     k_ffn: int = 8
@@ -21,7 +21,7 @@ class ModelConfig:
     reg_entropy: float = 0.01
     reg_entropy_attn: float = 0.001
     attention: str = "SwitchHeadRope"
-    shift_labels: bool | None = None
+    shift_labels: bool = True
     scale_add: bool = True
     prot_emb: bool = False
     n_expert_shared_attn: int = 1

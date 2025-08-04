@@ -17,6 +17,8 @@ dependencies = [
     "pyinstrument>=5.0.3",
     "pandas>=2.3.1",
     "seaborn>=0.13.2",
+    "ipykernel>=6.30.0",
+    "jaxtyping>=0.3.2",
 ]
 
 [build-system]

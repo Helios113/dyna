@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 from packaging import version
+from beartype import beartype, BeartypeConf, BeartypeStrategy
 
+# Dynamically create a new @nobeartype decorator disabling type-checking.
+nobeartype = beartype(conf=BeartypeConf(strategy=BeartypeStrategy.O0))
 # Based on https://github.com/openai/triton/blob/main/python/tutorials/03-matrix-multiplication.py
 # torch.compile() fixes by Julian Büchel <jub@zurich.ibm.com>, based on https://github.com/pytorch/pytorch/issues/115344
 
@@ -41,7 +44,6 @@ def dtype_to_type_id(dtype: torch.dtype):
         return 2
 
     raise ValueError("Unknown dtype")
-
 
 @triton.autotune(
     configs=[
@@ -167,7 +169,6 @@ def cvmm_kernel(
         c_mask = ((offs_cm[:, None] < M) & (sel_all[:, None] == matrix_id)) & (offs_cn[None, :] < N)
         tl.store(c_ptrs, c, mask=c_mask)
 
-
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 8, 'K_BLOCKS': 64}, num_stages=4, num_warps=4),
@@ -192,6 +193,7 @@ def cvmm_kernel(
     key=['M', 'N', 'K', 'out_dtype_id', 'allow_tf32', 'dtype_id'], reset_to_zero = ['c_ptr']
 )
 @triton.jit
+@nobeartype
 def cvmm_backward_kernel3(
     # Pointers to matrices
     a_ptr, b_ptr, c_ptr, index_ptr, sel_ptr, out_index_ptr,

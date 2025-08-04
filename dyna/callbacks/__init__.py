@@ -6,8 +6,6 @@ from dyna.callbacks.exit_entropy_callback import ExitEntropyCallback
 from dyna.callbacks.expert_selection_callback import ExpertSelectionCallback
 from dyna.callbacks.clean_stats import CleanMetrics
 
-from llmfoundry.registry import layers 
-
 
 callbacks.register(
     "activation_monitor_c",
