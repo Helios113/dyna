@@ -44,8 +44,6 @@ def make_wandb_run_name(config: DictConfig) -> str:
     unique = generate_id(8)
     # Important info: select a few key hyperparameters (customize as needed)
     keys = [
-        "scale_add",
-        "prot_emb",
         "model",
         "d_model",
         "n_layers",

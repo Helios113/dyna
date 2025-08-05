@@ -1,5 +1,18 @@
 from dataclasses import dataclass, field
-
+from enum import Enum
+class NormStructure(Enum):
+    Peri = 0
+    Pre = 1
+    Post = 2
+    MoUET = 3
+    
+class RescaleMethod(Enum):
+    none = 0
+    cum_avg_prot_emb = 1
+    cum_avg_no_prot_emb = 2
+    sqrt_prot_emb = 3
+    sqrt_no_prot_emb = 4
+    
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
@@ -22,13 +35,12 @@ class ModelConfig:
     reg_entropy_attn: float = 0.001
     attention: str = "SwitchHeadRope"
     shift_labels: bool = True
-    scale_add: bool = True
-    prot_emb: bool = False
     n_expert_shared_attn: int = 1
     n_expert_shared_ffn: int = 2
     collect_reg_loss: bool = False
     enable_early_exit: bool = True
-    use_simple_residual: bool = False
+    rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
+    norm_structure:NormStructure = NormStructure.Peri
     run_id: str | None = None
 
 

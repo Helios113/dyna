@@ -401,7 +401,7 @@ def cvmm_triton(
 
 
 if version.parse(torch.__version__) >= version.parse("2.2.0"):
-    @torch.library.impl_abstract("mylib::cvmm_triton", cvmm_triton)
+    @torch.library.register_fake("mylib::cvmm_triton", cvmm_triton)
     def cvmm_triton_abstract(x, sel_idx, sel, keys, out_dtype, out_index):
         sel_shape = sel.shape
         sel = sel.flatten()

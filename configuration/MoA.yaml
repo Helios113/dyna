@@ -2,27 +2,26 @@ model_config:
   d_model: 412
   n_layers: 16
   n_heads: 4
-  n_experts_ffn: 155
-  n_experts_attn: 8
+  n_experts_ffn: 1
+  n_experts_attn: 1
   d_head: 84
   k_ffn: 12
   k_attn: 2
-  d_expert_ffn: 128
+  d_expert_ffn: 2048
   n_group: 2
   vocab_size: 49152
   max_seq_len: 2048
-  scale_add: True
-  prot_emb: True
-  n_expert_shared_attn: 0
-  n_expert_shared_ffn: 0
+  n_expert_shared_attn: 1
+  n_expert_shared_ffn: 1
   collect_reg_loss: False
   enable_early_exit: True
-  use_simple_residual: False
+  norm_structure: "Peri"
+  rescaling_method: "cum_avg_prot_emb"
 train:
   max_duration: "1495ba"
   warmup: "299ba"
   cooldown: "299ba"
-  device_train_batch_size: 1024
+  device_train_batch_size: 32
 
 callbacks:
   clean_metrics: {}
@@ -42,7 +41,7 @@ callbacks:
   
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 
@@ -51,7 +50,7 @@ trainer_config:
   eval_interval: 100ba
   eval_subset_num_batches: -1
   train_dataloader_label: "train"
-  device_train_microbatch_size: 32
+  device_train_microbatch_size: 8
   precision: "amp_bf16"
   device: "gpu"
   parallelism_config:

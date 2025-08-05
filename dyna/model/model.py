@@ -19,6 +19,7 @@ from transformers.modeling_outputs import (
 from torch.nn import Module, ModuleList
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
+from .model_config import NormStructure, RescaleMethod
 
 # Add jaxtyping imports
 from jaxtyping import Float, Int, Bool
@@ -31,30 +32,15 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
     "language_perplexity",
     "token_accuracy",
 ]
+PROT_EMB_RESCALING_METHODS = [
+    RescaleMethod.cum_avg_prot_emb,
+    RescaleMethod.sqrt_prot_emb
+]
 from dyna.utils.utils import visualize_attention_mask, visualize_position_mask
 
 # Type aliases for better readability
 KVCache = dict[str, torch.Tensor]
 MultilayerKVCache = dict[int, KVCache]
-
-
-@beartype
-@dataclass
-class AttentionMask:
-    """Container for attention mask components."""
-
-    src_length_mask: Optional[Int[Tensor, "batch seq"]]
-    position_mask: Optional[Int[Tensor, "batch seq"]]
-
-
-@beartype
-@dataclass
-class MoEUTOutput:
-    """Output container for MoEUT model."""
-
-    outputs: Float[Tensor, "batch seq d_model"]
-    reg_loss: Float[Tensor, ""]
-    cache: MultilayerKVCache
 
 
 @beartype
@@ -131,6 +117,8 @@ class MoEUTConfig(PretrainedConfig):
         n_experts_ffn: int,
         n_experts_attn: int,
         d_head: int,
+        norm_structure: NormStructure,
+        rescaling_method: RescaleMethod,
         n_group: int = 2,
         k_ffn: int = 8,
         k_attn: int = 2,
@@ -141,14 +129,10 @@ class MoEUTConfig(PretrainedConfig):
         reg_entropy: float = 0.01,
         reg_entropy_attn: float = 0.001,
         shift_labels: bool = True,
-        scale_add: bool = True,
-        prot_emb: bool = False,
         n_expert_shared_ffn: int = 1,
         n_expert_shared_attn: int = 1,
         enable_early_exit: bool = True,
         use_rms_norm: bool = True,
-        enable_sequence_packing: bool = True,
-        use_simple_residual: bool = False,
         collect_reg_loss: bool = False,
         **kwargs,
     ):
@@ -176,18 +160,12 @@ class MoEUTConfig(PretrainedConfig):
         self.reg_entropy_attn = reg_entropy_attn
 
         self.shift_labels = shift_labels
-        self.scale_add = scale_add
-        self.prot_emb = prot_emb
-
         self.enable_early_exit = enable_early_exit
         self.use_rms_norm = use_rms_norm
-        self.enable_sequence_packing = enable_sequence_packing
-        self.use_simple_residual = use_simple_residual
         self.collect_reg_loss = collect_reg_loss
+        self.norm_structure = norm_structure
+        self.rescaling_method = rescaling_method
 
-
-# No selection input. We will only do this inside the module forward\
-# I mean we apply the normalisation and related things inside
 @beartype
 class DynaModule(Module, ABC):
     @abstractmethod
@@ -306,15 +284,25 @@ class SigmaMoE(DynaModule):
             mask = torch.rand_like(affinity) < self.dropout_expert
             affinity = affinity.masked_fill(mask, float("-inf"))
 
-        # Select top-k routed experts
-        _, selection_index = torch.topk(
-            affinity[:, :, : self.n_expert_routed_ffn]
-            + self.bias_ffn[: self.n_expert_routed_ffn],
-            self.k_ffn,
-            dim=-1,
-            sorted=False,
-        )
+        # Handle single expert case
+        if self.n_expert_routed_ffn == 0:
+            # No routed experts, only shared experts
+            selection_index = torch.empty(
+                affinity.shape[0], affinity.shape[1], 0, 
+                dtype=torch.long, device=affinity.device
+            )
+        else:
+            # Select top-k routed experts, but ensure k doesn't exceed available experts
+            k_actual = min(self.k_ffn, self.n_expert_routed_ffn)
+            _, selection_index = torch.topk(
+                affinity[:, :, : self.n_expert_routed_ffn]
+                + self.bias_ffn[: self.n_expert_routed_ffn],
+                k_actual,
+                dim=-1,
+                sorted=False,
+            )
 
+        # Add shared experts
         if self.n_expert_shared_ffn > 0:
             shape_expert_shared = selection_index.shape[:-1] + (
                 self.n_expert_shared_ffn,
@@ -326,10 +314,11 @@ class SigmaMoE(DynaModule):
                 [selection_index, expert_shared_expanded], dim=-1
             )
 
+        # Gather affinities for selected experts
         affinity = torch.gather(affinity, -1, selection_index)
 
         # Update bias for load balancing during training
-        if self.training:
+        if self.training and self.n_expert_routed_ffn > 0:
             self._update_load_balancing_bias(selection_index)
 
         return affinity, selection_index
@@ -343,7 +332,9 @@ class SigmaMoE(DynaModule):
                 selection_index.flatten(), minlength=self.n_experts_ffn
             )
             c_i_avg = torch.mean(c_i, dtype=torch.float32)
-            self.bias_ffn[: self.n_expert_routed_ffn] += self.bias_update_lr * torch.sign(
+            self.bias_ffn[
+                : self.n_expert_routed_ffn
+            ] += self.bias_update_lr * torch.sign(
                 -c_i[: self.n_expert_routed_ffn] + c_i_avg
             )
 
@@ -484,8 +475,6 @@ class SigmaMoE(DynaModule):
 
 #         # return
 
-
-# HERE
 @beartype
 class SwitchHeadCore(AttentionModule):
     """Core attention mechanism with expert routing."""
@@ -545,7 +534,7 @@ class SwitchHeadCore(AttentionModule):
         # Tracking variables for visualization
         self.selections_to_visualize = {}
         self.sel_hist = []
-        
+
         self.call_h = 0
 
     def _init_expert_parameters(self) -> None:
@@ -605,22 +594,22 @@ class SwitchHeadCore(AttentionModule):
 
     def _trim_attention_mask(
         self,
-        src_len: int,
+        seq_len: int,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         skip_mask: Bool[Tensor, "batch seq"],
     ) -> tuple[
-        Bool[Tensor, "batch n_heads max_len src_len"],
+        Bool[Tensor, "batch n_heads max_len seq"],
         Int[Tensor, "batch max_len"],
     ]:
-
+        # print("seq_len",seq_len)
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
 
-        attention_mask: Bool[Tensor, "batch max_len src_len"] = torch.zeros(
+        attention_mask: Bool[Tensor, "batch n_heads max_len seq"] = torch.zeros(
             skip_mask.shape[0],
             self.n_heads,
             max_len,
-            src_len,
+            seq_len,
             dtype=torch.bool,
             device=self.v.device,
         )
@@ -631,11 +620,17 @@ class SwitchHeadCore(AttentionModule):
             device=self.v.device,
         )
 
+        # print("attn mask trim shape",attention_mask.shape)
+        # print("attn mask shape",mask[0].shape)
+        
         for i in range(skip_mask.shape[0]):
             idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
             n = idx.numel()
             if n > 0:
-                attention_mask[i,:, :n] = mask[0][i, idx]
+                # print("attn mask trim slice",attention_mask[i, :, :n].shape)
+                # print("attn mask slice",mask[0][i, idx].shape)
+                
+                attention_mask[i, :, :n] = mask[0][i, idx]
                 position_ids[i, :n] = mask[1][i, idx]
 
         return (attention_mask, position_ids)
@@ -767,8 +762,13 @@ class SwitchHeadCore(AttentionModule):
             o_gate: Float[Tensor, "batch seq d_model"] = F.sigmoid(
                 F.linear(q_src, self.sel_o)
             )
-            v = self.project_to_torch_order(F.linear(v_src, self.v))
 
+            
+            v = torch.einsum('bsd,ndh->bsnh', v_src, self.v)
+            v = self.project_to_torch_order( v.reshape(v.shape[0], v.shape[1], -1) )
+            print("v_shape",v.shape)
+            print("seq_len",v.shape[-2])
+            
         # Project to attention format
         q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(q)
         k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(k)
@@ -776,19 +776,12 @@ class SwitchHeadCore(AttentionModule):
         # Apply dropout and attention
         q = self.dropout(q)
         attention_mask = self._trim_attention_mask(v.shape[-2], mask, skip_mask)
-    
-        
-        
-        # visualize_attention_mask(attention_mask[0], 2048, self.call_h)
-        # visualize_position_mask(attention_mask[1],self.call_h)
-        # self.call_h +=1
-        
-        
+
         res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-            v, k, q, attention_mask[0],attention_mask[1], mask[1]
+            v, k, q, attention_mask[0], attention_mask[1], mask[1]
         )
         res = res.transpose(-2, -3)
-
+        
         # Apply output projection
         if self.n_experts_attn > 1:
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
@@ -796,11 +789,21 @@ class SwitchHeadCore(AttentionModule):
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
         else:
             res = res * o_gate[..., None]
-            out = F.linear(res.flatten(-2), self.o)
+            
+            print(res.flatten(-2).shape)
+            print(self.o.shape)
+            res = res.view(res.shape[0], res.shape[1], self.n_heads * self.n_experts_attn, self.d_head)
+            # out = F.linear(res.view(res.shape[0], res.shape[1], self.n_heads * self.n_experts_attn, self.d_head), self.o)
+            out = torch.einsum('bsnh,nhd->bsd', res, self.o)
+            v_sel_index = torch.zeros_like(res, dtype=torch.int32)
+            o_sel_inedx = torch.zeros_like(res, dtype=torch.int32)
 
         assert isinstance(out, torch.Tensor)
         assert isinstance(v_sel_index, torch.Tensor)
         assert isinstance(o_sel_inedx, torch.Tensor)
+        
+        print("o_sel_inedx:",o_sel_inedx)
+        
         return out, (v_sel_index, o_sel_inedx)
 
 
@@ -832,7 +835,6 @@ class RotaryPosEncoding(Module):
         positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Apply rotary position encoding to input tensor."""
-
 
         sin, cos = self.get_sincos_positions(positions, x)
 
@@ -889,16 +891,22 @@ class RotaryPosEncoding(Module):
         k: Float[Tensor, "batch n_heads seq d_head"],
         position_mask_trimed: Int[Tensor, "batch max_len"],
         position_mask_full: Int[Tensor, "batch max_len"],
-        
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
     ]:
-
         """Apply RoPE to query and key tensors."""
-        return (self.apply_rot(q, position_mask_trimed), self.apply_rot(k, position_mask_full))
+        return (
+            self.apply_rot(q, position_mask_trimed),
+            self.apply_rot(k, position_mask_full),
+        )
 
 
+
+
+
+
+# HERE
 @beartype
 class SwitchHeadRope(SwitchHeadCore):
     """Attention head with Rotary Position Encoding."""
@@ -970,8 +978,16 @@ class SwitchHeadRope(SwitchHeadCore):
         # Apply rotary position encoding
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
+
+        print(q.shape)
+        print(k.shape)
+        print(v.shape)
+        print(attention_mask.shape)
         
-        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=attention_mask)
+        
+        return F.scaled_dot_product_attention(
+            q, k, v, scale=1.0, attn_mask=attention_mask
+        )
 
 
 @beartype
@@ -1007,12 +1023,12 @@ class MoEUTLayer(Module):
 
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
-        self.scale_add = config.scale_add
         self.n_group = config.n_group
         self.enable_early_exit = config.enable_early_exit
-        self.enable_sequence_packing = config.enable_sequence_packing
-        self.use_simple_residual = config.use_simple_residual
+        self.rescaling_method = config.rescaling_method
+        self.norm_structure = config.norm_structure
 
+    # Done
     def _check_early_exit(
         self,
         x: Float[Tensor, "batch seq d_model"],
@@ -1047,7 +1063,8 @@ class MoEUTLayer(Module):
 
         return skip_mask, continue_processing, s_exit
 
-    def _pack_sequence(
+    # Done
+    def _trim_sequence(
         self,
         x: Float[Tensor, "batch seq d_model"],
         skip_mask: Bool[Tensor, "batch seq"],
@@ -1058,7 +1075,7 @@ class MoEUTLayer(Module):
         max_len = round_up_to_multiple_of_256(lengths.max().item())
 
         # Initialize output tensors
-        packed_x: Float[Tensor, "batch max_len d_model"] = torch.zeros(
+        x_trimed: Float[Tensor, "batch max_len d_model"] = torch.zeros(
             x.shape[0], max_len, x.shape[-1], device=x.device
         )
 
@@ -1081,55 +1098,151 @@ class MoEUTLayer(Module):
 
             if valid_mask.any():
                 # Pack data efficiently
-                packed_x[batch_idx[valid_mask], local_indices[valid_mask]] = x[
+                x_trimed[batch_idx[valid_mask], local_indices[valid_mask]] = x[
                     batch_idx[valid_mask], seq_idx[valid_mask]
                 ]
 
-        return packed_x, max_len
+        return x_trimed, max_len
 
-    def _apply_residual_update(
+    # Done
+    def _apply_pre_norm_attn(
         self,
-        x: Float[Tensor, "batch seq d_model"],
-        update: Float[Tensor, "batch seq d_model"],
+        residual_stream: Float[Tensor, "batch seq d_model"],
+        skip_mask: Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch max_len d_model"],
+        Float[Tensor, "batch seq d_model"],
+        Float[Tensor, "batch seq d_model"],
+        int,
+    ]:
+        if (
+            self.norm_structure == NormStructure.Peri
+            or self.norm_structure == NormStructure.Pre
+        ):
+            # Peri, Pre
+            residual_stream_normed = self.attn_pre(residual_stream)
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream_normed, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream_normed
+            v_val = residual_stream_normed
+
+        elif self.norm_structure == NormStructure.Post:
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream
+            v_val = residual_stream
+
+        elif self.norm_structure == NormStructure.MoUET:
+            residual_stream_normed = self.attn_pre(residual_stream)
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream_normed, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream_normed
+            v_val = residual_stream
+        else:
+            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
+
+        return q_val, k_val, v_val, max_len
+ 
+    def _apply_update_to_residual(
+        self,
+        residual_stream: Float[Tensor, "batch seq d_model"],
+        update_on_stream: Float[Tensor, "batch seq d_model"],
         skip_mask: Bool[Tensor, "batch seq"],
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         layer_index: int,
+        norm_to_use: Module,
         e: Optional[Float[Tensor, "batch seq d_model"]] = None,
     ) -> Float[Tensor, "batch seq d_model"]:
-        """Apply residual connection with optional scaling."""
-        if self.use_simple_residual:
-            # Simple residual connection like old model
-            return x + self.drop(update)
+        update = update_on_stream
+        if self.norm_structure == NormStructure.Peri:
+            update = norm_to_use(update_on_stream)
+        update = self.drop(update_on_stream)
+        
+        match self.rescaling_method:
+            case RescaleMethod.none:
+                if self.enable_early_exit:
+                    residual_stream[skip_mask] = (
+                        residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                    )
+                else:
+                    residual_stream = residual_stream + update
+            case RescaleMethod.cum_avg_prot_emb | RescaleMethod.cum_avg_no_prot_emb:
+                if e is not None:
+                    residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    scale_factor = (layer_index-1) / layer_index 
+                    update_factor = (
+                        cum_sum[skip_mask].unsqueeze(1) * tau / layer_index
+                    )
 
-        if self.scale_add:
-            if e is not None:
-                x = x - e
+                    residual_stream[skip_mask] = (
+                        scale_factor * residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                    )
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    scale_factor = (layer_index - 1) / layer_index
+                    residual_stream = scale_factor * residual_stream + update / layer_index
+                if e is not None:
+                    residual_stream = residual_stream + e
+            case RescaleMethod.sqrt_prot_emb | RescaleMethod.sqrt_no_prot_emb:
+                if e is not None:
+                    residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    scale_factor = torch.sqrt(layer_index)- 1 / torch.sqrt(layer_index)
+                    update_factor = (
+                        cum_sum[skip_mask].unsqueeze(1) * tau / torch.sqrt(layer_index)
+                    )
 
-            # Apply scaled update
-            if self.enable_early_exit:
-                scale_factor = layer_index / (layer_index + 1)
-                update_factor = (
-                    cum_sum[skip_mask].unsqueeze(1) * tau / (layer_index + 1)
-                )
+                    residual_stream[skip_mask] = (
+                        scale_factor * residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                    )
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
+                    residual_stream = scale_factor * residual_stream + update / (
+                        torch.sqrt(layer_index)
+                    )
+                if e is not None:
+                    residual_stream = residual_stream + e
 
-                x[skip_mask] = (
-                    scale_factor * x[skip_mask]
-                    + update.view(-1, update.shape[-1])[: skip_mask.sum()]
-                    * update_factor
-                )
-            else:
-                # Apply to all tokens when early exit is disabled
-                scale_factor = layer_index / (layer_index + 1)
-                x = scale_factor * x + update * tau / (layer_index + 1)
+        if self.norm_structure == NormStructure.Post:
+            residual_stream = norm_to_use(residual_stream)
 
-            if e is not None:
-                x = x + e
+        return residual_stream
+
+    def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
+
+        if (
+            self.norm_structure == NormStructure.Peri
+            or self.norm_structure == NormStructure.Pre
+        ):
+            # Peri, Pre
+            residual_stream_normed = self.ffn_pre(residual_stream)
+            ffn_val_1 = residual_stream_normed
+            ffn_val_2 = residual_stream_normed
+        elif self.norm_structure == NormStructure.Post:
+            ffn_val_1 = residual_stream
+            ffn_val_2 = residual_stream
+        elif self.norm_structure == NormStructure.MoUET:
+            residual_stream_normed = self.ffn_pre(residual_stream)
+            ffn_val_1 = residual_stream_normed
+            ffn_val_2 = residual_stream
         else:
-            # Simple residual connection
-            x = x + self.drop(update)
+            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
 
-        return x
+        return ffn_val_1, ffn_val_2
 
     def forward(
         self,
@@ -1144,11 +1257,6 @@ class MoEUTLayer(Module):
         Float[Tensor, "batch seq d_model"], bool, int, Float[Tensor, "batch seq"], tuple
     ]:
         """Forward pass through the layer with configurable behavior."""
-        # Update layer index for group processing
-        if self.enable_early_exit:
-            layer_index = self.n_group * layer_index + 1
-        s_exit = 0
-        # Check for early exit
 
         skip_mask, continue_processing, s_exit = self._check_early_exit(
             x, router, cum_sum, tau, layer_index
@@ -1158,67 +1266,31 @@ class MoEUTLayer(Module):
             return x, False, 0, s_exit, ((None, None), None)
 
         # === ATTENTION BLOCK ===
-        # Pre-normalization and packing
-        xnorm = self.attn_pre(x)
 
-        packed_x, max_len = self._pack_sequence(xnorm, skip_mask)
+        q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
 
-        # Attention computation
-        # att, kv_cache, expert_sel_attn = self.attention(
-        att, expert_sel_attn = self.attention(
-            packed_x,
-            xnorm,
-            xnorm,
+        att_out, expert_sel_attn = self.attention(
+            q_val,
+            k_val,
+            v_val,
             mask,
             skip_mask=skip_mask,
         )
 
-        # Apply residual connection
-        if self.use_simple_residual:
-            x = x + self.drop(att)
-        else:
-            attn_out = self.attn_post(att)
-            x = self._apply_residual_update(
-                x, attn_out, skip_mask, cum_sum, tau, layer_index, e
-            )
-
-        if self.enable_early_exit:
-            layer_index += 1
+        x = self._apply_update_to_residual(
+            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post,e
+        )
 
         # === FFN BLOCK ===
-        # Pre-normalization and packing
-        # if self.use_simple_residual:
-        #     # Old model style: use x directly for FFN, apply layer norm inside FFN
-        #     ffn_input = x
-        #     ffn_norm_input = self.ffn_pre(x)
-        # else:
-            # New model style: pre-normalize then pack
-        xnorm = self.ffn_pre(x)
-            
+
+        ffn_val_1, ffn_val_2 = self._apply_pre_norm_ffn(x)
+
         # FFN computation
-        ffn_out, expert_sel_ffn = self.ffn(xnorm, xnorm)
+        ffn_out, expert_sel_ffn = self.ffn(ffn_val_1, ffn_val_2)
 
-        # Apply residual connection
-        if self.use_simple_residual:
-            x = x + ffn_out
-        else:
-            ffn_processed = self.ffn_post(ffn_out)
-
-            if self.scale_add:
-                if e is not None:
-                    x = x - e
-                    x = self._apply_residual_update(
-                        x, ffn_processed, skip_mask, cum_sum, tau, layer_index, None
-                    )
-                    x = x + e
-                else:
-                    if self.enable_early_exit:
-                        scale_factor = layer_index / (layer_index + 1)
-                        x = scale_factor * x + ffn_processed / (layer_index + 1)
-                    else:
-                        x = x + self.drop(ffn_processed)
-            else:
-                x = x + self.drop(ffn_processed)
+        x = self._apply_update_to_residual(
+            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post,e
+        )
 
         return (
             x,
@@ -1229,6 +1301,7 @@ class MoEUTLayer(Module):
         )
 
 
+# Done
 @beartype
 class MoEUTPretrainedModel(PreTrainedModel):
     """Base class for MoEUT pretrained models."""
@@ -1240,6 +1313,7 @@ class MoEUTPretrainedModel(PreTrainedModel):
     load_tf_weights = None
 
 
+# Done
 @beartype
 class MoEUT(MoEUTPretrainedModel):
     """MoEUT transformer model with configurable behavior."""
@@ -1304,7 +1378,7 @@ class MoEUT(MoEUTPretrainedModel):
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        e: Float[Tensor, "batch seq d_model"],
+        e: Float[Tensor, "batch seq d_model"] | None,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
     ) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
@@ -1315,40 +1389,26 @@ class MoEUT(MoEUTPretrainedModel):
         self._latent_vectors.append([])
         self._seq_len.append([])
         cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
-        if self.enable_early_exit:
-            # New model: early exit with groups
-            layer_index_abs = 0
-            continue_processing = True
 
-            while continue_processing:
-                for layer in self.layers:
-                    # Forward through layer
-                    x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
-                        x, layer_index_abs, e, self.router, cum_sum, self.tau, mask
-                    )
-                    # make continue_processing just be conditioned on the last token
-                    if not continue_processing:
-                        break
-                    # Track sequence lengths and entropy for analysis
-                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                    self._latent_vectors[-1].append(x.detach().clone())
-                    self._exit_logits[-1].append(s_exit.detach().clone())
-                    self._expert_sel[-1].append(expert_sel)
+        continue_processing = True
 
-                    layer_index_abs += 1
-        else:
-            # Old model style: process all layers sequentially
-            for li in range(self.n_repeats):
-                for layer in self.layers:
-                    # cache = kv_cache.get(li, {}) if kv_cache is not None else None
-                    x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
-                        x, li, e, self.router, cum_sum, self.tau, mask
-                    )
-                    # Track sequence lengths and entropy for analysis
-                    self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                    self._latent_vectors[-1].append(x.detach().clone())
-                    self._exit_logits[-1].append(s_exit)
-                    self._expert_sel[-1].append(expert_sel)
+        for li in range(self.n_repeats):
+            for idx, layer in enumerate(self.layers):
+                # Forward through layer
+                x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                    x, li + idx+2, e, self.router, cum_sum, self.tau, mask
+                )
+                # make continue_processing just be conditioned on the last token
+                if not continue_processing:
+                    break
+                # Track sequence lengths and entropy for analysis
+                self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                self._latent_vectors[-1].append(x.detach().clone())
+                self._exit_logits[-1].append(s_exit.detach().clone())
+                self._expert_sel[-1].append(expert_sel)
+
+            if not continue_processing:
+                break
 
         # Collect regularization loss if enabled
         reg_loss = None
@@ -1360,6 +1420,7 @@ class MoEUT(MoEUTPretrainedModel):
         )
 
 
+# Done except reset params
 @beartype
 class MoEUTLM(MoEUTPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
@@ -1372,7 +1433,6 @@ class MoEUTLM(MoEUTPretrainedModel):
 
         # Model configuration
         self.n_layers = config.n_layers
-        self.prot_emb = config.prot_emb
         self.use_rms_norm = config.use_rms_norm
 
         # Input/output layers
@@ -1383,6 +1443,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
         self.eos_token_id = eos_token_id
+        self.rescaling_method = config.rescaling_method
         # Initialize parameters
         self.reset_parameters()
 
@@ -1405,7 +1466,6 @@ class MoEUTLM(MoEUTPretrainedModel):
         device = input_ids.device
         # Create causal mask for each sample in the batch
         attention_masks = []
-
 
         for batch_idx in range(batch_size):
             x = input_ids[batch_idx]
@@ -1487,13 +1547,12 @@ class MoEUTLM(MoEUTPretrainedModel):
                 src_len_mask = self._generate_source_len_mask(attention_mask)
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
-            
-        assert(attention_mask is not None)
-        assert(src_len_mask is not None)       
+
+        assert attention_mask is not None
+        assert src_len_mask is not None
 
         # Prepare protected embeddings if enabled
-        e = x.clone() if self.prot_emb else None
-
+        e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
 
         outputs = self.transformer(x, e, (attention_mask, src_len_mask))
 
@@ -1503,6 +1562,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         return outputs
 
 
+# Done
 @beartype
 class ComposerMoEUT(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
@@ -1536,7 +1596,6 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
-        
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),

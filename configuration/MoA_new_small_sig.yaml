@@ -11,8 +11,6 @@ model_config:
   n_group: 2
   vocab_size: 49152
   max_seq_len: 1024
-  scale_add: False
-  prot_emb: True
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
