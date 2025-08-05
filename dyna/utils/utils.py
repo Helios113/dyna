@@ -199,3 +199,41 @@ def build_full_concrete_config(cfg):
     cfg.data_config = data_config
     cfg.scheduler_config = scheduler_config
     return cfg
+
+
+
+def visualize_attention_mask(mask, max_display=2048, index=0):
+    """Helper function to visualize the attention mask"""
+    import matplotlib.pyplot as plt
+    
+    # Only show first max_display tokens for readability
+    display_len = min(max_display, mask.shape[-1])
+    mask_subset = mask[0,0].cpu()
+    print(mask_subset)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(mask_subset.float(), cmap='Blues', aspect='equal')
+    
+
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
+    ax.set_title('Causal Attention Mask for Packed Sequence')
+    ax.set_xlabel('Key Positions')
+    ax.set_ylabel('Query Positions')
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(f"attn_mask_{index}.png")
+    
+def visualize_position_mask(mask, index=0):
+    """Helper function to visualize the attention mask"""
+    import matplotlib.pyplot as plt
+    
+    
+    fig, ax = plt.subplots(figsize=(10, 10))
+    print(mask[0])
+    ax.plot(mask[0].cpu())
+    
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(f"pos_mask_{index}.png")
+    

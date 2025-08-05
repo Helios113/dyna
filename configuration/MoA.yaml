@@ -10,7 +10,7 @@ model_config:
   d_expert_ffn: 128
   n_group: 2
   vocab_size: 49152
-  max_seq_len: 1024
+  max_seq_len: 2048
   scale_add: True
   prot_emb: True
   n_expert_shared_attn: 0
@@ -42,7 +42,7 @@ callbacks:
   
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 

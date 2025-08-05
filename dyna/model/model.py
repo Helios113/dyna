@@ -31,6 +31,7 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
     "language_perplexity",
     "token_accuracy",
 ]
+from dyna.utils.utils import visualize_attention_mask, visualize_position_mask
 
 # Type aliases for better readability
 KVCache = dict[str, torch.Tensor]
@@ -544,6 +545,8 @@ class SwitchHeadCore(AttentionModule):
         # Tracking variables for visualization
         self.selections_to_visualize = {}
         self.sel_hist = []
+        
+        self.call_h = 0
 
     def _init_expert_parameters(self) -> None:
         """Initialize expert-specific parameters."""
@@ -634,7 +637,6 @@ class SwitchHeadCore(AttentionModule):
             if n > 0:
                 attention_mask[i,:, :n] = mask[0][i, idx]
                 position_ids[i, :n] = mask[1][i, idx]
-                print(mask[1][i, idx])
 
         return (attention_mask, position_ids)
 
@@ -774,6 +776,14 @@ class SwitchHeadCore(AttentionModule):
         # Apply dropout and attention
         q = self.dropout(q)
         attention_mask = self._trim_attention_mask(v.shape[-2], mask, skip_mask)
+    
+        
+        
+        # visualize_attention_mask(attention_mask[0], 2048, self.call_h)
+        # visualize_position_mask(attention_mask[1],self.call_h)
+        # self.call_h +=1
+        
+        
         res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
             v, k, q, attention_mask[0],attention_mask[1], mask[1]
         )
@@ -960,9 +970,6 @@ class SwitchHeadRope(SwitchHeadCore):
         # Apply rotary position encoding
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
-        print(q.shape)
-        print(k.shape)
-        print(attention_mask.shape)
         
         return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=attention_mask)
 
@@ -1390,11 +1397,11 @@ class MoEUTLM(MoEUTPretrainedModel):
         self.transformer.reset_parameters()
 
     def _generate_causal_mask(
-        self, input_ids: Float[Tensor, "batch seq d_model"]
+        self, input_ids: Int[Tensor, "batch seq"]
     ) -> Bool[Tensor, "batch seq seq"]:
         """Create a causal attention mask for packed sequences."""
 
-        batch_size, seq_len, _ = input_ids.shape
+        batch_size, seq_len = input_ids.shape
         device = input_ids.device
         # Create causal mask for each sample in the batch
         attention_masks = []
@@ -1402,24 +1409,22 @@ class MoEUTLM(MoEUTPretrainedModel):
 
         for batch_idx in range(batch_size):
             x = input_ids[batch_idx]
-            T = x.size(0)
-
             # Find EOS token positions
             eos_positions = (x == self.eos_token_id).nonzero(as_tuple=True)[0]
 
             if len(eos_positions) == 0:
                 # No EOS tokens found, treat as single sequence
-                mask = torch.tril(torch.ones(T, T, dtype=torch.bool))
+                mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
             else:
                 # Create base causal mask
-                mask = torch.tril(torch.ones(T, T, dtype=torch.bool))
+                mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
 
                 # Add sequence boundaries
                 sequence_starts = torch.cat(
                     [torch.tensor([0]).to(device), eos_positions + 1]
                 )
                 sequence_ends = torch.cat(
-                    [eos_positions, torch.tensor([T - 1]).to(device)]
+                    [eos_positions, torch.tensor([seq_len - 1]).to(device)]
                 )
 
                 # Mask out attention between different sequences
@@ -1476,15 +1481,15 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Get embeddings
         if input_ids is not None:
             x = self.embedding(input_ids)
+            if attention_mask is None:
+                attention_mask = self._generate_causal_mask(input_ids)
+            if src_len_mask is None:
+                src_len_mask = self._generate_source_len_mask(attention_mask)
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
-
-
-        # Generate default attention mask if needed
-        if attention_mask is None:
-            attention_mask = self._generate_causal_mask(x)
-        if src_len_mask is None:
-            src_len_mask = self._generate_source_len_mask(attention_mask)
+            
+        assert(attention_mask is not None)
+        assert(src_len_mask is not None)       
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.prot_emb else None
@@ -1531,7 +1536,7 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         """Forward pass through the model."""
-
+        
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),
