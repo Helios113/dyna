@@ -207,13 +207,14 @@ class AttentionModule(DynaModule):
     @abstractmethod
     def attend(
         self,
-        pos_offset: int,
-        positions: torch.Tensor,
-        v: torch.Tensor,
-        k: torch.Tensor,
-        q: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
+        v: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        q: Float[Tensor, "batch n_heads seq d_head"],
+        mask: tuple[
+            Bool[Tensor, "batch n_heads max_len src_len"],
+            Int[Tensor, "batch n_heads max_len"],
+        ],
+    ) -> Float[Tensor, "batch n_heads seq d_head"]:
         pass
 
 
@@ -306,8 +307,8 @@ class SigmaMoE(DynaModule):
 
         # Select top-k routed experts
         _, selection_index = torch.topk(
-            affinity[:, :, : self.n_expert_routed]
-            + self.bias_ffn[: self.n_expert_routed],
+            affinity[:, :, : self.n_expert_routed_ffn]
+            + self.bias_ffn[: self.n_expert_routed_ffn],
             self.k_ffn,
             dim=-1,
             sorted=False,
@@ -341,8 +342,8 @@ class SigmaMoE(DynaModule):
                 selection_index.flatten(), minlength=self.n_experts_ffn
             )
             c_i_avg = torch.mean(c_i, dtype=torch.float32)
-            self.bias_ffn[: self.n_expert_routed] += self.bias_update_lr * torch.sign(
-                -c_i[: self.n_expert_routed] + c_i_avg
+            self.bias_ffn[: self.n_expert_routed_ffn] += self.bias_update_lr * torch.sign(
+                -c_i[: self.n_expert_routed_ffn] + c_i_avg
             )
 
     def forward(
@@ -366,12 +367,12 @@ class SigmaMoE(DynaModule):
         scores = self.activation(scores)
 
         # Down-projection: scores * expert_values
-        sel_indices = sel_indices.clone()
-        sel_indices.reduction_weight = affinity
-        sel_indices.sel_index = sel_indices.out_index
-        sel_indices.out_index = None
+        selection_indices = selection_indices.clone()
+        selection_indices.reduction_weight = affinity
+        selection_indices.sel_index = selection_indices.out_index
+        selection_indices.out_index = None
 
-        out = cvmm(scores, sel_indices, self.values)
+        out = cvmm(scores, selection_indices, self.values)
 
         return out.view(*token_stream.shape[:-1], self.d_model), selection_index
 
@@ -511,7 +512,7 @@ class SwitchHeadCore(AttentionModule):
         self.dropout_expert = dropout_expert
         self.k_attn = k_attn
         self.n_expert_shared_attn = min(n_expert_shared_attn, n_experts_attn)
-        self.n_expert_routed = n_experts_attn - self.n_expert_shared_attn
+        self.n_expert_routed_attn = n_experts_attn - self.n_expert_shared_attn
 
         # Bias tracking
         self.bias_update_lr = 0.001
@@ -604,12 +605,15 @@ class SwitchHeadCore(AttentionModule):
         src_len: int,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         skip_mask: Bool[Tensor, "batch seq"],
-    ) -> Optional[Bool[Tensor, "batch n_heads max_len src_len"]]:
+    ) -> tuple[
+        Bool[Tensor, "batch n_heads max_len src_len"],
+        Int[Tensor, "batch max_len"],
+    ]:
 
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
-        
-        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"] = torch.zeros(
+
+        attention_mask: Bool[Tensor, "batch max_len src_len"] = torch.zeros(
             skip_mask.shape[0],
             self.n_heads,
             max_len,
@@ -617,15 +621,22 @@ class SwitchHeadCore(AttentionModule):
             dtype=torch.bool,
             device=self.v.device,
         )
-        
+        position_ids: Int[Tensor, "batch max_len"] = torch.zeros(
+            skip_mask.shape[0],
+            max_len,
+            dtype=torch.int,
+            device=self.v.device,
+        )
 
         for i in range(skip_mask.shape[0]):
             idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
             n = idx.numel()
             if n > 0:
-                attention_mask[i, :, :n] = mask[0][idx]
+                attention_mask[i,:, :n] = mask[0][i, idx]
+                position_ids[i, :n] = mask[1][i, idx]
+                print(mask[1][i, idx])
 
-        return attention_mask
+        return (attention_mask, position_ids)
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss from selection history."""
@@ -669,13 +680,13 @@ class SwitchHeadCore(AttentionModule):
 
             # Select routed experts
             routed_k = max(1, self.k_attn - self.n_expert_shared_attn)
-            bias_term = bias[: self.n_expert_routed] if bias is not None else None
+            bias_term = bias[: self.n_expert_routed_attn] if bias is not None else None
 
             _, sel_index = torch.topk(
                 (
-                    (sel2[:, :, :, : self.n_expert_routed] + bias_term)
+                    (sel2[:, :, :, : self.n_expert_routed_attn] + bias_term)
                     if bias_term is not None
-                    else sel2[:, :, :, : self.n_expert_routed]
+                    else sel2[:, :, :, : self.n_expert_routed_attn]
                 ),
                 routed_k,
                 dim=-1,
@@ -694,8 +705,8 @@ class SwitchHeadCore(AttentionModule):
             if self.training and bias is not None:
                 c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts_attn)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
-                bias[: self.n_expert_routed] += self.bias_update_lr * torch.sign(
-                    -c_i[: self.n_expert_routed] + c_i_avg
+                bias[: self.n_expert_routed_attn] += self.bias_update_lr * torch.sign(
+                    -c_i[: self.n_expert_routed_attn] + c_i_avg
                 )
 
         # Get selection values and create CVMM selection object
@@ -721,7 +732,6 @@ class SwitchHeadCore(AttentionModule):
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        positions: Int[Tensor, "batch seq"],
         skip_mask: Bool[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
@@ -765,7 +775,7 @@ class SwitchHeadCore(AttentionModule):
         q = self.dropout(q)
         attention_mask = self._trim_attention_mask(v.shape[-2], mask, skip_mask)
         res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-            positions, v, k, q, attention_mask
+            v, k, q, attention_mask[0],attention_mask[1], mask[1]
         )
         res = res.transpose(-2, -3)
 
@@ -809,13 +819,12 @@ class RotaryPosEncoding(Module):
     def apply_rot(
         self,
         x: Float[Tensor, "batch n_heads seq d_head"],
-        positions: Optional[Int[Tensor, "batch seq"]] = None,
+        positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Apply rotary position encoding to input tensor."""
-        if positions is None:
-            sin, cos = self.get_sincos_cached(x)
-        else:
-            sin, cos = self.get_sincos_positions(positions, x)
+
+
+        sin, cos = self.get_sincos_positions(positions, x)
 
         sin = sin.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
         cos = cos.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
@@ -868,13 +877,16 @@ class RotaryPosEncoding(Module):
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
-        positions: Optional[Int[Tensor, "batch seq"]] = None,
+        position_mask_trimed: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch max_len"],
+        
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
     ]:
+
         """Apply RoPE to query and key tensors."""
-        return (self.apply_rot(q, positions), self.apply_rot(k, 0, None))
+        return (self.apply_rot(q, position_mask_trimed), self.apply_rot(k, position_mask_full))
 
 
 @beartype
@@ -914,7 +926,8 @@ class SwitchHeadRope(SwitchHeadCore):
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
-        positions: Int[Tensor, "batch seq"],
+        position_mask_trimed: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
@@ -926,29 +939,32 @@ class SwitchHeadRope(SwitchHeadCore):
             r_q, nr_q = q[..., : self.n_rotate], q[..., self.n_rotate :]
 
             # Apply RoPE to rotated parts
-            r_q, r_k = self.pe(r_q, r_k, positions)
+            r_q, r_k = self.pe(r_q, r_k, position_mask_trimed, position_mask_full)
 
             # Concatenate back
             return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
         else:
             # Apply RoPE to entire tensors
-            return self.pe(q, k, positions)
+            return self.pe(q, k, position_mask_trimed, position_mask_full)
 
     def attend(
         self,
-        positions: Int[Tensor, "batch seq"],
         v: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
-        mask: Optional[Bool[Tensor, "batch n_heads max_len src_len"]],
+        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"],
+        position_mask_trimed: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE."""
         # Apply rotary position encoding
         if self.n_rotate > 0:
-            q, k = self._apply_rope(q, k, positions)
-
-        # Compute scaled dot-product attention
-        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=mask)
+            q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
+        print(q.shape)
+        print(k.shape)
+        print(attention_mask.shape)
+        
+        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=attention_mask)
 
 
 @beartype
@@ -957,7 +973,6 @@ class MoEUTLayer(Module):
 
     def __init__(self, config: MoEUTConfig):
         super().__init__()
-        print(config.n_experts_attn)
         self.attention = SwitchHeadRope(
             d_model=config.d_model,
             n_heads=config.n_heads,
@@ -1029,9 +1044,7 @@ class MoEUTLayer(Module):
         self,
         x: Float[Tensor, "batch seq d_model"],
         skip_mask: Bool[Tensor, "batch seq"],
-    ) -> tuple[
-        Float[Tensor, "batch max_len d_model"], Int[Tensor, "batch max_len"], int
-    ]:
+    ) -> tuple[Float[Tensor, "batch max_len d_model"], int]:
         """Pack sequences for efficient processing."""
 
         lengths = skip_mask.sum(dim=1)
@@ -1040,9 +1053,6 @@ class MoEUTLayer(Module):
         # Initialize output tensors
         packed_x: Float[Tensor, "batch max_len d_model"] = torch.zeros(
             x.shape[0], max_len, x.shape[-1], device=x.device
-        )
-        positions: Int[Tensor, "batch max_len"] = torch.zeros(
-            x.shape[0], max_len, dtype=torch.long, device=x.device
         )
 
         # Get valid positions
@@ -1067,11 +1077,8 @@ class MoEUTLayer(Module):
                 packed_x[batch_idx[valid_mask], local_indices[valid_mask]] = x[
                     batch_idx[valid_mask], seq_idx[valid_mask]
                 ]
-                positions[batch_idx[valid_mask], local_indices[valid_mask]] = seq_idx[
-                    valid_mask
-                ]
 
-        return packed_x, positions, max_len
+        return packed_x, max_len
 
     def _apply_residual_update(
         self,
@@ -1147,7 +1154,7 @@ class MoEUTLayer(Module):
         # Pre-normalization and packing
         xnorm = self.attn_pre(x)
 
-        packed_x, positions, max_len = self._pack_sequence(xnorm, skip_mask)
+        packed_x, max_len = self._pack_sequence(xnorm, skip_mask)
 
         # Attention computation
         # att, kv_cache, expert_sel_attn = self.attention(
@@ -1156,7 +1163,6 @@ class MoEUTLayer(Module):
             xnorm,
             xnorm,
             mask,
-            positions=positions,
             skip_mask=skip_mask,
         )
 
@@ -1174,23 +1180,16 @@ class MoEUTLayer(Module):
 
         # === FFN BLOCK ===
         # Pre-normalization and packing
-        if self.use_simple_residual:
-            # Old model style: use x directly for FFN, apply layer norm inside FFN
-            ffn_input = x
-            ffn_norm_input = self.ffn_pre(x)
-        else:
+        # if self.use_simple_residual:
+        #     # Old model style: use x directly for FFN, apply layer norm inside FFN
+        #     ffn_input = x
+        #     ffn_norm_input = self.ffn_pre(x)
+        # else:
             # New model style: pre-normalize then pack
-            xnorm = self.ffn_pre(x)
-            if self.enable_sequence_packing and self.enable_early_exit:
-                packed_x, positions, _ = self._pack_sequence(xnorm, skip_mask)
-                ffn_input = packed_x
-                ffn_norm_input = packed_x
-            else:
-                ffn_input = xnorm
-                ffn_norm_input = xnorm
-
+        xnorm = self.ffn_pre(x)
+            
         # FFN computation
-        ffn_out, expert_sel_ffn = self.ffn(ffn_input, ffn_norm_input)
+        ffn_out, expert_sel_ffn = self.ffn(xnorm, xnorm)
 
         # Apply residual connection
         if self.use_simple_residual:
@@ -1250,7 +1249,6 @@ class MoEUT(MoEUTPretrainedModel):
 
         self.layers = ModuleList([MoEUTLayer(config) for _ in range(config.n_group)])
 
-
         self.router = torch.nn.Parameter(torch.empty(self.d_model))
         self.tau = torch.nn.Parameter(torch.ones(1))
 
@@ -1309,9 +1307,7 @@ class MoEUT(MoEUTPretrainedModel):
         self._exit_logits.append([])
         self._latent_vectors.append([])
         self._seq_len.append([])
-        cum_sum = torch.zeros(
-                x.shape[0], x.shape[1], device=x.device, dtype=x.dtype
-            )
+        cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
         if self.enable_early_exit:
             # New model: early exit with groups
             layer_index_abs = 0
@@ -1320,8 +1316,7 @@ class MoEUT(MoEUTPretrainedModel):
             while continue_processing:
                 for layer in self.layers:
                     # Forward through layer
-                    print(self.router)
-                    x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                    x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                         x, layer_index_abs, e, self.router, cum_sum, self.tau, mask
                     )
                     # make continue_processing just be conditioned on the last token
@@ -1339,7 +1334,7 @@ class MoEUT(MoEUTPretrainedModel):
             for li in range(self.n_repeats):
                 for layer in self.layers:
                     # cache = kv_cache.get(li, {}) if kv_cache is not None else None
-                    x, _, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                    x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                         x, li, e, self.router, cum_sum, self.tau, mask
                     )
                     # Track sequence lengths and entropy for analysis
@@ -1399,13 +1394,11 @@ class MoEUTLM(MoEUTPretrainedModel):
     ) -> Bool[Tensor, "batch seq seq"]:
         """Create a causal attention mask for packed sequences."""
 
-        print("inp shape", input_ids.shape)
         batch_size, seq_len, _ = input_ids.shape
         device = input_ids.device
         # Create causal mask for each sample in the batch
         attention_masks = []
 
-        print("eos token id:", self.eos_token_id)
 
         for batch_idx in range(batch_size):
             x = input_ids[batch_idx]
@@ -1428,8 +1421,6 @@ class MoEUTLM(MoEUTPretrainedModel):
                 sequence_ends = torch.cat(
                     [eos_positions, torch.tensor([T - 1]).to(device)]
                 )
-
-                print(sequence_starts, sequence_ends)
 
                 # Mask out attention between different sequences
                 for i, (start, end) in enumerate(zip(sequence_starts, sequence_ends)):
@@ -1488,7 +1479,6 @@ class MoEUTLM(MoEUTPretrainedModel):
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
 
-        print("the type of x is", type(x))
 
         # Generate default attention mask if needed
         if attention_mask is None:
@@ -1499,9 +1489,7 @@ class MoEUTLM(MoEUTPretrainedModel):
         # Prepare protected embeddings if enabled
         e = x.clone() if self.prot_emb else None
 
-        # Forward through transformer with intermediate logit saving
-        print(attention_mask)
-        print(src_len_mask)
+
         outputs = self.transformer(x, e, (attention_mask, src_len_mask))
 
         # Apply output projection

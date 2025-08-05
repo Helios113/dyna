@@ -11,13 +11,13 @@ model_config:
   n_group: 2
   vocab_size: 49152
   max_seq_len: 1024
-  scale_add: False
+  scale_add: True
   prot_emb: True
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
-  enable_early_exit: False
-  use_simple_residual: True
+  enable_early_exit: True
+  use_simple_residual: False
 train:
   max_duration: "1495ba"
   warmup: "299ba"
