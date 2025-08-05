@@ -34,7 +34,7 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
 ]
 PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.cum_avg_prot_emb,
-    RescaleMethod.sqrt_prot_emb
+    RescaleMethod.sqrt_prot_emb,
 ]
 from dyna.utils.utils import visualize_attention_mask, visualize_position_mask
 
@@ -166,6 +166,7 @@ class MoEUTConfig(PretrainedConfig):
         self.norm_structure = norm_structure
         self.rescaling_method = rescaling_method
 
+
 @beartype
 class DynaModule(Module, ABC):
     @abstractmethod
@@ -272,6 +273,16 @@ class SigmaMoE(DynaModule):
         Float[Tensor, "batch seq k_experts"], Int[Tensor, "batch seq k_experts"]
     ]:
         """Compute expert selection scores and indices."""
+
+        if self.n_experts_ffn == 1:
+            return torch.ones(
+                (selection_input.shape[0], selection_input.shape[1], 1)
+            ).to(selection_input.device), torch.zeros(
+                (selection_input.shape[0], selection_input.shape[1], 1),
+                dtype=torch.int32,
+            ).to(
+                selection_input.device
+            )
         # Compute selection scores
         affinity: Float[Tensor, "batch seq n_experts"] = F.sigmoid(
             F.linear(
@@ -284,23 +295,23 @@ class SigmaMoE(DynaModule):
             mask = torch.rand_like(affinity) < self.dropout_expert
             affinity = affinity.masked_fill(mask, float("-inf"))
 
-        # Handle single expert case
-        if self.n_expert_routed_ffn == 0:
-            # No routed experts, only shared experts
-            selection_index = torch.empty(
-                affinity.shape[0], affinity.shape[1], 0, 
-                dtype=torch.long, device=affinity.device
-            )
-        else:
-            # Select top-k routed experts, but ensure k doesn't exceed available experts
-            k_actual = min(self.k_ffn, self.n_expert_routed_ffn)
-            _, selection_index = torch.topk(
-                affinity[:, :, : self.n_expert_routed_ffn]
-                + self.bias_ffn[: self.n_expert_routed_ffn],
-                k_actual,
-                dim=-1,
-                sorted=False,
-            )
+        bias_term = (
+            self.bias_ffn[: self.n_expert_routed_ffn]
+            if self.bias_ffn is not None
+            else None
+        )
+        # Select top-k routed experts, but ensure k doesn't exceed available experts
+        assert self.k_ffn >= self.n_expert_routed_ffn
+        _, selection_index = torch.topk(
+            (
+                (affinity[:, :, : self.n_expert_routed_ffn] + bias_term)
+                if bias_term is not None
+                else affinity[:, :, : self.n_expert_routed_ffn]
+            ),
+            self.k_ffn,
+            dim=-1,
+            sorted=False,
+        )
 
         # Add shared experts
         if self.n_expert_shared_ffn > 0:
@@ -319,15 +330,6 @@ class SigmaMoE(DynaModule):
 
         # Update bias for load balancing during training
         if self.training and self.n_expert_routed_ffn > 0:
-            self._update_load_balancing_bias(selection_index)
-
-        return affinity, selection_index
-
-    def _update_load_balancing_bias(
-        self, selection_index: Int[Tensor, "batch seq k_experts"]
-    ) -> None:
-        """Update bias for load balancing."""
-        with torch.no_grad():
             c_i = torch.bincount(
                 selection_index.flatten(), minlength=self.n_experts_ffn
             )
@@ -337,6 +339,8 @@ class SigmaMoE(DynaModule):
             ] += self.bias_update_lr * torch.sign(
                 -c_i[: self.n_expert_routed_ffn] + c_i_avg
             )
+
+        return affinity, selection_index
 
     def forward(
         self,
@@ -353,6 +357,9 @@ class SigmaMoE(DynaModule):
         selection_indices = cvmm_prepare_sel2(selection_index.int())
 
         # Up-projection: input * expert_keys
+        print(selection_indices.sel.shape)
+        print(self.keys.shape)
+
         scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(
             token_stream, selection_indices, self.keys
         )
@@ -474,6 +481,7 @@ class SigmaMoE(DynaModule):
 #         # projection
 
 #         # return
+
 
 @beartype
 class SwitchHeadCore(AttentionModule):
@@ -601,7 +609,6 @@ class SwitchHeadCore(AttentionModule):
         Bool[Tensor, "batch n_heads max_len seq"],
         Int[Tensor, "batch max_len"],
     ]:
-        # print("seq_len",seq_len)
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max().item())
 
@@ -620,16 +627,11 @@ class SwitchHeadCore(AttentionModule):
             device=self.v.device,
         )
 
-        # print("attn mask trim shape",attention_mask.shape)
-        # print("attn mask shape",mask[0].shape)
-        
         for i in range(skip_mask.shape[0]):
             idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
             n = idx.numel()
             if n > 0:
-                # print("attn mask trim slice",attention_mask[i, :, :n].shape)
-                # print("attn mask slice",mask[0][i, idx].shape)
-                
+
                 attention_mask[i, :, :n] = mask[0][i, idx]
                 position_ids[i, :n] = mask[1][i, idx]
 
@@ -659,21 +661,21 @@ class SwitchHeadCore(AttentionModule):
     ]:
         """Get expert selection indices and weights."""
         # Compute selection scores
-        sel: Float[Tensor, "batch seq n_heads_x_experts"] = F.linear(
+        affinity: Float[Tensor, "batch seq n_heads_x_experts"] = F.linear(
             input_tensor, weight
         ).float()
-        sel_raw: Float[Tensor, "batch seq n_heads n_experts"] = sel.view(
-            *sel.shape[:-1], self.n_heads, -1
+        affinity_raw: Float[Tensor, "batch seq n_heads n_experts"] = affinity.view(
+            *affinity.shape[:-1], self.n_heads, -1
         )
-        sel = sel_raw.sigmoid()
+        affinity = affinity_raw.sigmoid()
 
         with torch.no_grad():
             # Apply expert dropout
             if self.dropout_expert > 0 and self.training:
-                mask = torch.rand_like(sel) < self.dropout_expert
-                sel2 = sel.masked_fill(mask, float("-inf"))
+                mask = torch.rand_like(affinity) < self.dropout_expert
+                affinity_2 = affinity.masked_fill(mask, float("-inf"))
             else:
-                sel2 = sel
+                affinity_2 = affinity
 
             # Select routed experts
             routed_k = max(1, self.k_attn - self.n_expert_shared_attn)
@@ -681,9 +683,9 @@ class SwitchHeadCore(AttentionModule):
 
             _, sel_index = torch.topk(
                 (
-                    (sel2[:, :, :, : self.n_expert_routed_attn] + bias_term)
+                    (affinity_2[:, :, :, : self.n_expert_routed_attn] + bias_term)
                     if bias_term is not None
-                    else sel2[:, :, :, : self.n_expert_routed_attn]
+                    else affinity_2[:, :, :, : self.n_expert_routed_attn]
                 ),
                 routed_k,
                 dim=-1,
@@ -708,7 +710,9 @@ class SwitchHeadCore(AttentionModule):
 
         # Get selection values and create CVMM selection object
         sel_val: Float[Tensor, "batch seq n_heads k_experts"] = torch.gather(
-            sel.view(*sel.shape[:-2], -1), -1, sel_index.view(*sel_index.shape[:-2], -1)
+            affinity.view(*affinity.shape[:-2], -1),
+            -1,
+            sel_index.view(*sel_index.shape[:-2], -1),
         ).view(*sel_index.shape)
 
         # Create shifted indices for expert matrix operations
@@ -719,7 +723,7 @@ class SwitchHeadCore(AttentionModule):
 
         return (
             cvmm_prepare_sel2(sel_index_shifted.flatten(-2, -1), sel_val),
-            sel_raw,
+            affinity_raw,
             sel_index,
         )
 
@@ -763,12 +767,9 @@ class SwitchHeadCore(AttentionModule):
                 F.linear(q_src, self.sel_o)
             )
 
-            
-            v = torch.einsum('bsd,ndh->bsnh', v_src, self.v)
-            v = self.project_to_torch_order( v.reshape(v.shape[0], v.shape[1], -1) )
-            print("v_shape",v.shape)
-            print("seq_len",v.shape[-2])
-            
+            v = torch.einsum("bsd,ndh->bsnh", v_src, self.v)
+            v = self.project_to_torch_order(v.reshape(v.shape[0], v.shape[1], -1))
+
         # Project to attention format
         q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(q)
         k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(k)
@@ -781,7 +782,7 @@ class SwitchHeadCore(AttentionModule):
             v, k, q, attention_mask[0], attention_mask[1], mask[1]
         )
         res = res.transpose(-2, -3)
-        
+
         # Apply output projection
         if self.n_experts_attn > 1:
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
@@ -789,21 +790,21 @@ class SwitchHeadCore(AttentionModule):
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
         else:
             res = res * o_gate[..., None]
-            
-            print(res.flatten(-2).shape)
-            print(self.o.shape)
-            res = res.view(res.shape[0], res.shape[1], self.n_heads * self.n_experts_attn, self.d_head)
-            # out = F.linear(res.view(res.shape[0], res.shape[1], self.n_heads * self.n_experts_attn, self.d_head), self.o)
-            out = torch.einsum('bsnh,nhd->bsd', res, self.o)
+
+            res = res.view(
+                res.shape[0],
+                res.shape[1],
+                self.n_heads * self.n_experts_attn,
+                self.d_head,
+            )
+            out = torch.einsum("bsnh,nhd->bsd", res, self.o)
             v_sel_index = torch.zeros_like(res, dtype=torch.int32)
             o_sel_inedx = torch.zeros_like(res, dtype=torch.int32)
 
         assert isinstance(out, torch.Tensor)
         assert isinstance(v_sel_index, torch.Tensor)
         assert isinstance(o_sel_inedx, torch.Tensor)
-        
-        print("o_sel_inedx:",o_sel_inedx)
-        
+
         return out, (v_sel_index, o_sel_inedx)
 
 
@@ -902,11 +903,6 @@ class RotaryPosEncoding(Module):
         )
 
 
-
-
-
-
-# HERE
 @beartype
 class SwitchHeadRope(SwitchHeadCore):
     """Attention head with Rotary Position Encoding."""
@@ -979,12 +975,6 @@ class SwitchHeadRope(SwitchHeadCore):
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
 
-        print(q.shape)
-        print(k.shape)
-        print(v.shape)
-        print(attention_mask.shape)
-        
-        
         return F.scaled_dot_product_attention(
             q, k, v, scale=1.0, attn_mask=attention_mask
         )
@@ -1148,7 +1138,7 @@ class MoEUTLayer(Module):
             raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
 
         return q_val, k_val, v_val, max_len
- 
+
     def _apply_update_to_residual(
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
@@ -1164,7 +1154,7 @@ class MoEUTLayer(Module):
         if self.norm_structure == NormStructure.Peri:
             update = norm_to_use(update_on_stream)
         update = self.drop(update_on_stream)
-        
+
         match self.rescaling_method:
             case RescaleMethod.none:
                 if self.enable_early_exit:
@@ -1178,10 +1168,8 @@ class MoEUTLayer(Module):
                 if e is not None:
                     residual_stream = residual_stream - e
                 if self.enable_early_exit:
-                    scale_factor = (layer_index-1) / layer_index 
-                    update_factor = (
-                        cum_sum[skip_mask].unsqueeze(1) * tau / layer_index
-                    )
+                    scale_factor = (layer_index - 1) / layer_index
+                    update_factor = cum_sum[skip_mask].unsqueeze(1) * tau / layer_index
 
                     residual_stream[skip_mask] = (
                         scale_factor * residual_stream[skip_mask]
@@ -1191,14 +1179,16 @@ class MoEUTLayer(Module):
                 else:
                     # Apply to all tokens when early exit is disabled
                     scale_factor = (layer_index - 1) / layer_index
-                    residual_stream = scale_factor * residual_stream + update / layer_index
+                    residual_stream = (
+                        scale_factor * residual_stream + update / layer_index
+                    )
                 if e is not None:
                     residual_stream = residual_stream + e
             case RescaleMethod.sqrt_prot_emb | RescaleMethod.sqrt_no_prot_emb:
                 if e is not None:
                     residual_stream = residual_stream - e
                 if self.enable_early_exit:
-                    scale_factor = torch.sqrt(layer_index)- 1 / torch.sqrt(layer_index)
+                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
                     update_factor = (
                         cum_sum[skip_mask].unsqueeze(1) * tau / torch.sqrt(layer_index)
                     )
@@ -1278,7 +1268,7 @@ class MoEUTLayer(Module):
         )
 
         x = self._apply_update_to_residual(
-            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post,e
+            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
         )
 
         # === FFN BLOCK ===
@@ -1289,7 +1279,7 @@ class MoEUTLayer(Module):
         ffn_out, expert_sel_ffn = self.ffn(ffn_val_1, ffn_val_2)
 
         x = self._apply_update_to_residual(
-            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post,e
+            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
         )
 
         return (
@@ -1396,7 +1386,7 @@ class MoEUT(MoEUTPretrainedModel):
             for idx, layer in enumerate(self.layers):
                 # Forward through layer
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
-                    x, li + idx+2, e, self.router, cum_sum, self.tau, mask
+                    x, li + idx + 2, e, self.router, cum_sum, self.tau, mask
                 )
                 # make continue_processing just be conditioned on the last token
                 if not continue_processing:
