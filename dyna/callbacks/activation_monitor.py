@@ -216,6 +216,7 @@ class ActivationMonitor(Callback):
         if value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
+            # Keep operations on GPU and only extract scalar values at the end
             metrics[f'activations/l2_norm/{name}{suffix}'] = torch.linalg.vector_norm(value, dim=-1).mean().item()
             metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
             metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()

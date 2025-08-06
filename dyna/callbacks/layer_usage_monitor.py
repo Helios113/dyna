@@ -60,34 +60,49 @@ class LayerUsageMonitor(Callback):
             return
 
         transformer = state.model.model.transformer
-
-
         seq_len = transformer._seq_len
         _tau = 0
         # _tau = transformer.tau.item()
-            # Store layer usage for epoch statistics
+        
+        # Store layer usage for epoch statistics - keep everything on GPU
         avg_layers = 0
         seq_lens = []
-        ns = []
+        
+        # Keep everything on GPU and avoid unnecessary copying
         for elem in seq_len:
-            avg_layers+=len(elem)
+            avg_layers += len(elem)
             for i, sample in enumerate(elem):
+                # Ensure sample stays on GPU as tensor
+                if not isinstance(sample, torch.Tensor):
+                    sample = torch.tensor(sample, device=state.model.device)
+                elif sample.device != state.model.device:
+                    sample = sample.to(state.model.device)
+                
                 if i == len(seq_lens):
-                    seq_lens.append(np.array(sample))
+                    seq_lens.append(sample.clone())
                 else:
-                    seq_lens[i] = np.append(seq_lens[i],sample)
-        avg_layers/=len(seq_len)
+                    # Use torch.cat instead of numpy append to stay on GPU
+                    seq_lens[i] = torch.cat([seq_lens[i], sample.flatten()])
+        
+        avg_layers /= len(seq_len) if len(seq_len) > 0 else 1
+        
         metrics_dict = {
             "metrics/tau": _tau,
             "metrics/avg_layers": avg_layers,
         }
-        metrics_dict["seq_length/seq_length"] = self._fig_to_wandb_image(self._create_entropy_plot(seq_lens))
+        
+        # Only convert to CPU when absolutely necessary for plotting
+        if seq_lens:
+            metrics_dict["seq_length/seq_length"] = self._fig_to_wandb_image(
+                self._create_entropy_plot(seq_lens)
+            )
+        
         logger.log_metrics(metrics_dict)
-      
         self.last_batch_logged = state.timestamp.batch
 
         # Always clear after use to avoid memory leak
         transformer._seq_len = []
+
     def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
@@ -102,11 +117,24 @@ class LayerUsageMonitor(Callback):
         return img
     def _create_entropy_plot(self, data: list[torch.Tensor]) -> plt.Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
-
-        # Compute mean and std per step
-        means = np.array([d.mean() for d in data])
-        stds =  np.array([d.std() for d in data])
+        
+        # Only move to CPU when necessary for plotting, keep computation on GPU
+        if not data:
+            # Create empty plot if no data
+            fig, ax = plt.subplots(figsize=self.figsize)
+            ax.set_title("sequence lengths (no data)", fontsize=14)
+            return fig
+            
+        means_gpu = torch.stack([d.mean() for d in data])
+        stds_gpu = torch.stack([d.std() for d in data])
+        
+        # Convert to CPU numpy only for matplotlib
+        means = means_gpu.cpu().numpy()
+        stds = stds_gpu.cpu().numpy()
         x = np.arange(len(means))
+
+        # Clean up GPU tensors immediately
+        del means_gpu, stds_gpu
 
         fig, ax = plt.subplots(figsize=self.figsize)
 
@@ -122,7 +150,7 @@ class LayerUsageMonitor(Callback):
         ax.ticklabel_format(style='plain', axis='y')  # avoid 1.0e+03 notation
 
         # Axis and formatting
-        ax.set_title("sequance lengths", fontsize=14)
+        ax.set_title("sequence lengths", fontsize=14)
         ax.set_xlabel("local step", fontsize=12)
         ax.set_ylabel("seq_len", fontsize=12)
         ax.grid(True, linestyle='--', alpha=0.5)

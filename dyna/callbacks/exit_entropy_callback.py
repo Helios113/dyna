@@ -86,10 +86,6 @@ class ExitEntropyCallback(Callback):
     def batch_end(self, state: State, logger: Logger) -> None:
         """
         Called at the end of each batch to compute and log entropy.
-
-        Args:
-            state: Composer training state
-            logger: Composer logger instance
         """
         if not state.model.training or not self._should_log(state):
             # Always clear to avoid memory leak, even if not logging
@@ -101,24 +97,37 @@ class ExitEntropyCallback(Callback):
         batch_latentes = state.model.model.transformer._exit_logits
         batch_entropy = []
         batch_last_token_entrp = []
-        entropy = None
-        last_token_entrp = None
+        
+        # Keep everything on GPU
         data_proc = []
         for elem in batch_latentes:
             for i, sample in enumerate(elem):
+                # Ensure tensors stay on GPU
+                if not isinstance(sample, torch.Tensor):
+                    sample = torch.tensor(sample, device=state.model.device)
+                elif sample.device != state.model.device:
+                    sample = sample.to(state.model.device)
+                    
                 if i == len(data_proc):
                     data_proc.append(sample)
                 else:
-                    data_proc[i] = torch.cat((data_proc[i],sample))
+                    data_proc[i] = torch.cat([data_proc[i], sample])
+                    
         for elem in data_proc:
             entropy, last_token_entrp = self._compute_binary_entropy(elem)
             batch_entropy.append(entropy)
             batch_last_token_entrp.append(last_token_entrp)
-        metrics_dict["metrics/exit_entropy"] = torch.mean(entropy)
-        metrics_dict["metrics/last_token_exit_entropy"] = torch.mean(last_token_entrp)
-        
-        metrics_dict["entropy/exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
-        metrics_dict["entropy/last_token_exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_last_token_entrp))
+            
+        if batch_entropy:
+            # Keep on GPU until final aggregation
+            entropy_tensor = torch.stack(batch_entropy) if len(batch_entropy) > 1 else batch_entropy[0]
+            last_token_tensor = torch.stack(batch_last_token_entrp) if len(batch_last_token_entrp) > 1 else batch_last_token_entrp[0]
+            
+            metrics_dict["metrics/exit_entropy"] = entropy_tensor.mean().item()
+            metrics_dict["metrics/last_token_exit_entropy"] = last_token_tensor.mean().item()
+            
+            metrics_dict["entropy/exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
+            metrics_dict["entropy/last_token_exit_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_last_token_entrp))
         
         logger.log_metrics(metrics_dict)
 
@@ -160,10 +169,23 @@ class ExitEntropyCallback(Callback):
     def _create_entropy_plot(self, data: list[torch.Tensor]) -> plt.Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
 
-        # Compute mean and std per step
-        means = torch.stack([d.mean() for d in data]).to(torch.float32).cpu()
-        stds = torch.stack([d.std() for d in data]).to(torch.float32).cpu()
+        if not data:
+            # Create empty plot if no data
+            fig, ax = plt.subplots(figsize=self.figsize)
+            ax.set_title("Entropy Trend (no data)", fontsize=14)
+            return fig
+
+        # Only move to CPU when necessary for plotting, keep computation on GPU
+        means_gpu = torch.stack([d.mean() for d in data]).to(torch.float32)
+        stds_gpu = torch.stack([d.std() for d in data]).to(torch.float32)
+        
+        # Convert to CPU numpy only for matplotlib
+        means = means_gpu.cpu().numpy()
+        stds = stds_gpu.cpu().numpy()
         x = np.arange(len(means))
+
+        # Clean up GPU tensors immediately
+        del means_gpu, stds_gpu
 
         fig, ax = plt.subplots(figsize=self.figsize)
 

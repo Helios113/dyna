@@ -351,7 +351,7 @@ class SigmaMoE(DynaModule):
 
         # Get expert selection
         affinity, selection_index = self._compute_expert_selection(selection_input)
-        self.selection_history_s_moe.append(affinity.clone().detach())  # Detach to avoid storing gradients
+        # self.selection_history_s_moe.append(affinity.clone().detach())  # Detach to avoid storing gradients
 
         # Prepare selection indices for CVMM operations
         selection_indices = cvmm_prepare_sel2(selection_index.int())
@@ -369,6 +369,9 @@ class SigmaMoE(DynaModule):
 
         out = cvmm(scores, selection_indices, self.values)
 
+        # Clean up intermediate tensors to prevent memory leak
+        del scores, selection_indices
+        
         return out.view_as(token_stream), selection_index
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
@@ -628,7 +631,6 @@ class SwitchHeadCore(AttentionModule):
             idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
             n = idx.numel()
             if n > 0:
-
                 attention_mask[i, :, :n] = mask[0][i, idx]
                 position_ids[i, :n] = mask[1][i, idx]
 
@@ -755,11 +757,15 @@ class SwitchHeadCore(AttentionModule):
             o_sel, o_sel_r, o_sel_inedx = self._get_expert_selection(
                 q_src, self.sel_o, self.bias_o
             )
-            if self.training:
-                self.sel_hist.append((o_sel_r, v_sel_r))
+            # Commented for mem reduction
+            # if self.training:
+            #     self.sel_hist.append((o_sel_r, v_sel_r))
             v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
                 v_src, v_sel, self.v
             ).transpose(-2, -3)
+            
+            # Clean up intermediate tensors
+            del v_sel_r, v_sel
         else:
             o_gate: Float[Tensor, "batch seq d_model"] = F.sigmoid(
                 F.linear(q_src, self.sel_o)
@@ -786,6 +792,12 @@ class SwitchHeadCore(AttentionModule):
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
+            
+            # Clean up intermediate tensors
+            del o_sel, res
+            
+            # Return None instead of storing tensors
+            
         else:
             res = res * o_gate[..., None]
 
@@ -803,7 +815,7 @@ class SwitchHeadCore(AttentionModule):
         assert isinstance(v_sel_index, torch.Tensor)
         assert isinstance(o_sel_inedx, torch.Tensor)
 
-        return out, (v_sel_index, o_sel_inedx)
+        return out, (v_sel_index.detach().cpu(), o_sel_inedx.detach().cpu())
 
 
 #@beartype
@@ -1245,18 +1257,18 @@ class MoEUTLayer(Module):
     ) -> tuple[
         Float[Tensor, "batch seq d_model"], bool, int, Float[Tensor, "batch seq"], tuple
     ]:
-        
         """Forward pass through the layer with configurable behavior."""
         skip_mask, continue_processing, s_exit = self._check_early_exit(
             x, router, cum_sum, tau, layer_index
         )
-
+        # print(f"Step 1: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         if not continue_processing:
             return x, False, 0, s_exit, ((None, None), None)
 
         # === ATTENTION BLOCK ===
-
         q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
+        # print(f"Step 2: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         att_out, expert_sel_attn = self.attention(
             q_val,
@@ -1265,22 +1277,34 @@ class MoEUTLayer(Module):
             mask,
             skip_mask=skip_mask,
         )
-
+        
+        # Clean up attention intermediate tensors immediately
+        del q_val, k_val, v_val
+        
+        # print(f"Step 3: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         x = self._apply_update_to_residual(
             x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
         )
+        
+        # Clean up attention output
+        del att_out
 
         # === FFN BLOCK ===
-
-        ffn_val_1, ffn_val_2 = self._apply_pre_norm_ffn(x)
+        # print(f"Step 4: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         # FFN computation
-        ffn_out, expert_sel_ffn = self.ffn(ffn_val_1, ffn_val_2)
+        ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
+        # print(f"Step 5: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         x = self._apply_update_to_residual(
             x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
         )
+        
+        # Clean up FFN output and other intermediate tensors
+        del ffn_out, skip_mask
+        
+        # print(f"Step 6: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
         
         return (
             x,
@@ -1387,8 +1411,9 @@ class MoEUT(MoEUTPretrainedModel):
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x, li + idx + 2, e, self.router, cum_sum, self.tau, mask
                 )
-
-
+                
+                # Clean up intermediate variables immediately
+                # del seq_lengths, s_exit, expert_sel
                 
                 # make continue_processing just be conditioned on the last token
                 if not continue_processing:
@@ -1401,7 +1426,11 @@ class MoEUT(MoEUTPretrainedModel):
 
             if not continue_processing:
                 break
-
+                
+        # Force garbage collection
+        torch.cuda.empty_cache()
+        print(f"Step out: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         # Collect regularization loss if enabled
         reg_loss = None
         if self.collect_reg_loss:
@@ -1586,7 +1615,13 @@ class ComposerMoEUT(HuggingFaceModel):
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         
+        # self.model.transformer._expert_sel.clear()
+        # self.model.transformer._exit_logits.clear()
+        # self.model.transformer._latent_vectors.clear()
+        # self.model.transformer._seq_len.clear()
         """Forward pass through the model."""
+        # Force cleanup before forward pass
+        torch.cuda.empty_cache()
         
         return self.model(
                     input_ids=batch.get("input_ids", None),

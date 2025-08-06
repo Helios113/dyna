@@ -67,25 +67,40 @@ class ExpertSelectionCallback(Callback):
         ffn_counts = []
         
         data = model.transformer._expert_sel
+        device = next(model.parameters()).device
+        
         for _, batch in enumerate(data):
             for idx, elem in enumerate(batch):
                 (attn_v, attn_o), ffn = elem
                 if attn_v is None:
                     continue
-                # check that o and v are correct order
-                # Ensure tensors are integers for bincount, then convert to float
+                    
+                # Keep everything on GPU - move tensors to device if needed
+                if attn_o.device != device:
+                    attn_o = attn_o.to(device)
+                if attn_v.device != device:
+                    attn_v = attn_v.to(device)
+                if ffn.device != device:
+                    ffn = ffn.to(device)
+                
+                # Ensure tensors are integers for bincount, keep on GPU
                 attn_o_int = attn_o.flatten().int()
                 attn_v_int = attn_v.flatten().int()
                 ffn_int = ffn.flatten().int()
                 
+                # Use GPU operations throughout
+                attn_o_count = torch.bincount(attn_o_int, minlength=self.attn_experts).to(torch.float32)
+                attn_v_count = torch.bincount(attn_v_int, minlength=self.attn_experts).to(torch.float32)
+                ffn_count = torch.bincount(ffn_int, minlength=self.ffn_experts).to(torch.float32)
+                
                 if idx == len(attn_o_counts):
-                    attn_o_counts.append(torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
-                    attn_v_counts.append(torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
-                    ffn_counts.append(torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
+                    attn_o_counts.append(attn_o_count)
+                    attn_v_counts.append(attn_v_count)
+                    ffn_counts.append(ffn_count)
                 else:
-                    attn_o_counts[idx] = torch.add(attn_o_counts[idx],torch.bincount(attn_o_int, minlength=self.attn_experts).cpu().to(torch.float32))
-                    attn_v_counts[idx] = torch.add(attn_v_counts[idx],torch.bincount(attn_v_int, minlength=self.attn_experts).cpu().to(torch.float32))
-                    ffn_counts[idx] = torch.add(ffn_counts[idx],torch.bincount(ffn_int, minlength=self.ffn_experts).cpu().to(torch.float32))
+                    attn_o_counts[idx] = attn_o_counts[idx] + attn_o_count
+                    attn_v_counts[idx] = attn_v_counts[idx] + attn_v_count
+                    ffn_counts[idx] = ffn_counts[idx] + ffn_count
                                                       
         expert_data = {
             "attn_o": torch.stack(attn_o_counts, dim=0),  # [num_layers, num_attn_experts]
@@ -94,28 +109,40 @@ class ExpertSelectionCallback(Callback):
         }
         
         return expert_data
-            
-            
+
     def _create_expert_heatmap(
         self, 
         selection_data: torch.Tensor, 
     ) -> plt.Figure:
         """Create a heatmap showing expert selection patterns and a heatmap for mean expert selection."""
-        # Ensure tensor is on CPU
-        # Compute mean expert probabilities across layers
-        heatmap_data = selection_data.clone()
-        sum_probs = selection_data.sum(dim=0, keepdim=True)
         
-        # Convert tensors to numpy arrays
-        heatmap_data = heatmap_data.detach().cpu()
-        # For the line plot, compute mean along layers (squeeze to shape (num_experts,))
-        mean_probs = selection_data.mean(dim=0).detach().cpu()
+        # Keep computation on GPU until final conversion
+        heatmap_data_gpu = selection_data.clone()
+        mean_probs_gpu = selection_data.mean(dim=0)
         
-        # Compute common vmin and vmax for the heatmap (if needed)
+        # Compute load balance on GPU
+        sum_probs = torch.sum(mean_probs_gpu)
+        normalized_probs = mean_probs_gpu / sum_probs
+        uniform_dist = torch.ones_like(mean_probs_gpu) / mean_probs_gpu.shape[0]
+        
+        load_balance = torch.nn.functional.kl_div(
+            torch.nn.functional.log_softmax(normalized_probs, dim=0),
+            uniform_dist,
+            reduction="sum"
+        )
+        
+        # Only convert to CPU for plotting
+        heatmap_data = heatmap_data_gpu.detach().cpu()
+        mean_probs = mean_probs_gpu.detach().cpu()
+        
+        # Clean up GPU tensors
+        del heatmap_data_gpu, mean_probs_gpu, normalized_probs, uniform_dist
+        
+        # Compute common vmin and vmax for the heatmap
         common_vmin = heatmap_data.min()
         common_vmax = heatmap_data.max()
         
-        # Create figure with subplots - top: heatmap, bottom: line plot, sharing common width
+        # Create figure with subplots
         fig = plt.figure(figsize=self.figsize)
         gs = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.3)
         
@@ -133,7 +160,7 @@ class ExpertSelectionCallback(Callback):
             fmt='.3f'
         )
         ax1.set_title("Expert Selection by Layer")
-        ax1.set_xlabel('')  # Remove x-label from top plot
+        ax1.set_xlabel('')
         ax1.set_ylabel('Layer')
         
         # Line plot for mean expert selection
@@ -146,12 +173,6 @@ class ExpertSelectionCallback(Callback):
         ax2.set_xticks(x)
         ax2.set_xticklabels([f'E{i}' for i in x])
         
-        # Updated log_softmax call with explicit dim
-        load_balance = torch.nn.functional.kl_div(
-            torch.nn.functional.log_softmax(mean_probs/torch.sum(mean_probs), dim=0),
-            torch.ones(mean_probs.shape)/mean_probs.shape[0],
-            reduction="sum"
-        )
         return fig, load_balance
 
     # Plot the expert selections
@@ -181,6 +202,8 @@ class ExpertSelectionCallback(Callback):
 
         # Collect expert selection data
         selections = self._collect_expert_selections(state.model.model)
+        device = next(state.model.parameters()).device
+        
         if self.run_data is None:
             self.run_data = {}
             for key in selections.keys():
@@ -188,44 +211,46 @@ class ExpertSelectionCallback(Callback):
         else:
             for key in self.run_data:
                 if key in selections:
-                    self.run_data[key] = torch.add(self.run_data[key], torch.sum(selections[key], dim=0))
+                    self.run_data[key] = self.run_data[key] + torch.sum(selections[key], dim=0)
 
-        # batched
+        # Create visualizations
         heat_map_attn_o, load_balance_attn_o = self._create_expert_heatmap(selections["attn_o"])
         heat_map_attn_v, load_balance_attn_v = self._create_expert_heatmap(selections["attn_v"])
         heat_map_ffn, load_balance_ffn = self._create_expert_heatmap(selections["ffn"])
     
+        # Compute total load balances on GPU
+        sum_attn_o = torch.sum(self.run_data["attn_o"])
+        sum_attn_v = torch.sum(self.run_data["attn_v"])
+        sum_ffn = torch.sum(self.run_data["ffn"])
         
         load_balance_attn_o_tot = torch.nn.functional.kl_div(
-            torch.nn.functional.log_softmax(self.run_data["attn_o"]/torch.sum(self.run_data["attn_o"]), dim=0),
-            torch.ones(self.run_data["attn_o"].shape)/self.run_data["attn_o"].shape[0],
+            torch.nn.functional.log_softmax(self.run_data["attn_o"]/sum_attn_o, dim=0),
+            torch.ones_like(self.run_data["attn_o"])/self.run_data["attn_o"].shape[0],
             reduction="sum"
         )
         load_balance_attn_v_tot = torch.nn.functional.kl_div(
-            torch.nn.functional.log_softmax(self.run_data["attn_v"]/torch.sum(self.run_data["attn_v"]), dim=0),
-            torch.ones(self.run_data["attn_v"].shape)/self.run_data["attn_v"].shape[0],
+            torch.nn.functional.log_softmax(self.run_data["attn_v"]/sum_attn_v, dim=0),
+            torch.ones_like(self.run_data["attn_v"])/self.run_data["attn_v"].shape[0],
             reduction="sum"
         )
         load_balance_ffn_tot = torch.nn.functional.kl_div(
-            torch.nn.functional.log_softmax(self.run_data["ffn"]/torch.sum(self.run_data["ffn"]), dim=0),
-            torch.ones(self.run_data["ffn"].shape)/self.run_data["ffn"].shape[0],
+            torch.nn.functional.log_softmax(self.run_data["ffn"]/sum_ffn, dim=0),
+            torch.ones_like(self.run_data["ffn"])/self.run_data["ffn"].shape[0],
             reduction="sum"
         )
-        
-
         
         metrics_dict = {}
         metrics_dict[f"{self.log_key_prefix}/ffn_layer"] = self._fig_to_wandb_image(heat_map_ffn)
         metrics_dict[f"{self.log_key_prefix}/attn_o_layer"] = self._fig_to_wandb_image(heat_map_attn_o)
         metrics_dict[f"{self.log_key_prefix}/attn_v_layer"] = self._fig_to_wandb_image(heat_map_attn_v)
         
-        metrics_dict[f"metrics/load_balance_attn_o"] = load_balance_attn_o
-        metrics_dict[f"metrics/load_balance_attn_v"] = load_balance_attn_v
-        metrics_dict[f"metrics/load_balance_ffn"] = load_balance_ffn
+        metrics_dict[f"metrics/load_balance_attn_o"] = load_balance_attn_o.item()
+        metrics_dict[f"metrics/load_balance_attn_v"] = load_balance_attn_v.item()
+        metrics_dict[f"metrics/load_balance_ffn"] = load_balance_ffn.item()
         
-        metrics_dict[f"metrics/load_balance_attn_total_o"] = load_balance_attn_o_tot
-        metrics_dict[f"metrics/load_balance_attn_total_v"] = load_balance_attn_v_tot
-        metrics_dict[f"metrics/load_balance_total_ffn"] = load_balance_ffn_tot
+        metrics_dict[f"metrics/load_balance_attn_total_o"] = load_balance_attn_o_tot.item()
+        metrics_dict[f"metrics/load_balance_attn_total_v"] = load_balance_attn_v_tot.item()
+        metrics_dict[f"metrics/load_balance_total_ffn"] = load_balance_ffn_tot.item()
         
         logger.log_metrics(metrics_dict)
 

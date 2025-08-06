@@ -34,7 +34,7 @@ def main(cfg: DictConfig):
     model = ComposerMoEUT(hf_cfg, tokenizer).to(device)
     
     # Get batch size and sequence length from config
-    batch_size = getattr(model_cfg, "batch_size", 1)
+    batch_size = getattr(model_cfg, "batch_size", 32)
     seq_length = getattr(model_cfg, "max_seq_len", 1024)
 
     # Create input shape for torchinfo
@@ -46,8 +46,15 @@ def main(cfg: DictConfig):
     
     print(f"Total DataSize: {data.numel()*8/1000000}MB")
 
+   
+    print("eval1")
+    
+    output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
+    with torch.no_grad():
+        print("eval")
+        output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
     model.train()
-
+    print("train2")
     output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
     loss = model.loss(output,{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
     loss.backward()
