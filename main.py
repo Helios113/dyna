@@ -7,6 +7,8 @@ import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from composer.optim import DecoupledAdamW
+from torch.profiler import profile, ProfilerActivity, record_function
+
 from dyna.utils.utils import (
     make_wandb_run_name,
     get_callbacks,
@@ -17,7 +19,7 @@ from dyna.utils.utils import (
 from beartype import beartype
 
 
-@hydra.main(version_base=None, config_path="configuration", config_name="MoA")
+@hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
 @beartype
 def main(cfg: DictConfig):
     cfg = build_full_concrete_config(cfg)
@@ -63,8 +65,10 @@ def main(cfg: DictConfig):
         loggers=loggers,
         **cfg.trainer_config,
     )
+    
 
     trainer.fit()
+
 
 
 if __name__ == "__main__":

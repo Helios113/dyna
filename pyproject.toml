@@ -20,6 +20,7 @@ dependencies = [
     "ipykernel>=6.30.0",
     "jaxtyping>=0.3.2",
     "triton>=3.3.0",
+    "torchinfo>=1.8.0",
 ]
 
 [build-system]

@@ -69,7 +69,7 @@ class ShannonEntropyCallback(Callback):
         """
         # Convert logits to probabilities
         with torch.no_grad():
-            probs = F.softmax(lm_head(logits), dim=-1).detach().cpu()
+            probs = F.softmax(lm_head(logits), dim=-1).clone().detach().cpu()
 
             # Add epsilon for numerical stability
             probs = probs + self.epsilon

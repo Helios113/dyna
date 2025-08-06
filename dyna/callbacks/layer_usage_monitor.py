@@ -63,7 +63,8 @@ class LayerUsageMonitor(Callback):
 
 
         seq_len = transformer._seq_len
-        _tau = transformer.tau.item()
+        _tau = 0
+        # _tau = transformer.tau.item()
             # Store layer usage for epoch statistics
         avg_layers = 0
         seq_lens = []

@@ -103,7 +103,7 @@ class ExpertSelectionCallback(Callback):
         """Create a heatmap showing expert selection patterns and a heatmap for mean expert selection."""
         # Ensure tensor is on CPU
         # Compute mean expert probabilities across layers
-        heatmap_data = selection_data
+        heatmap_data = selection_data.clone()
         sum_probs = selection_data.sum(dim=0, keepdim=True)
         
         # Convert tensors to numpy arrays
