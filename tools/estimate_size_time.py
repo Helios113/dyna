@@ -6,7 +6,6 @@ import yaml
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from dyna.model.model_config import ModelConfig
 from model.model import MoEUTConfig, MoEUTLM
 from dyna.utils.utils import build_full_concrete_config
 import hydra
@@ -110,11 +109,14 @@ def main(cfg: DictConfig):
     full_cfg = build_full_concrete_config(cfg)
     # Use model_config from DictConfig (OmegaConf object)
     model_cfg = full_cfg.model_config
+    
+    # Convert OmegaConf to raw dict to avoid enum type conflicts
+    model_cfg_dict = OmegaConf.to_container(model_cfg, resolve=True)
+    
     # Convert to MoEUTConfig (inherits from PretrainedConfig)
-    # OmegaConf objects can be passed as dicts using **
-    hf_cfg = MoEUTConfig(**model_cfg)
+    hf_cfg = MoEUTConfig(**model_cfg_dict)
     # Instantiate model
-    model = MoEUTLM(hf_cfg)
+    model = MoEUTLM(hf_cfg, 0)
     # Count parameters (real)
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -124,16 +126,16 @@ def main(cfg: DictConfig):
 
 
     # Analytical count
-    param_counts = count_parameters(model_cfg)
+    # param_counts = count_parameters(model_cfg)
 
     print("Parameter count comparison:")
-    print(f"{'Component':<15} {'Real':>15} {'Analytical':>15}")
+    print(f"{'Component':<15} {'Real':>15}")
     print(f"{'-'*45}")
-    print(f"{'Embedding':<15} {embedding_params:>15,} {param_counts['embedding']:>15,}")
-    print(f"{'LM Head':<15} {lm_head_params:>15,} {param_counts['lm_head']:>15,}")
-    print(f"{'Transformer':<15} {transformer_params:>15,} {param_counts['transformer']:>15,}")
+    print(f"{'Embedding':<15} {embedding_params:>15,}")
+    print(f"{'LM Head':<15} {lm_head_params:>15,} ")
+    print(f"{'Transformer':<15} {transformer_params:>15,}")
     print(f"{'-'*45}")
-    print(f"{'Total':<15} {total_params:>15,} {param_counts['total']:>15,}")
+    print(f"{'Total':<15} {total_params:>15,}")
     print(f"{'Trainable':<15} {trainable_params:>15,}")
 
     print_param_breakdown(model)

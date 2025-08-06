@@ -1,27 +1,40 @@
 model_config:
   d_model: 412
-  n_layers: 16
+  n_layers: 18
   n_heads: 4
   n_experts_ffn: 155
   n_experts_attn: 8
-  d_head: 84
+  d_head: 82
   k_ffn: 12
   k_attn: 2
   d_expert_ffn: 128
   n_group: 2
   vocab_size: 49152
   max_seq_len: 1024
-  scale_add: False
-  prot_emb: True
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  use_simple_residual: True
+  norm_structure: "MoUET"
+  rescaling_method: "none"
+
+
+# class NormStructure(Enum):
+#     Peri = 0
+#     Pre = 1
+#     Post = 2
+#     MoUET = 3
+# class RescaleMethod(Enum):
+#     none = 0
+#     cum_avg_prot_emb = 1
+#     cum_avg_no_prot_emb = 2
+#     sqrt_prot_emb = 3
+#     sqrt_no_prot_emb = 4
+    
 train:
-  max_duration: "1495ba"
-  warmup: "299ba"
-  cooldown: "299ba"
+  max_duration: "1492ba"
+  warmup: "300ba"
+  cooldown: "300ba"
   device_train_batch_size: 1024
 
 callbacks:
@@ -38,11 +51,8 @@ callbacks:
   entropy_callback: {}
   # activation_monitor_c: {}
 
-
-  
-
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_fast"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 

@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH -J run
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=20
+# 20 cpus per gpu
+#SBATCH --gres=gpu:1
+# 3GPUs for 1B+, 2GPUs for 760M
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=11:58:00
+#! specify node
+#SBATCH -w mauao
+#SBATCH --output=tests_new/%x.%j.ans
+
+
+
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc

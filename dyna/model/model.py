@@ -43,7 +43,7 @@ KVCache = dict[str, torch.Tensor]
 MultilayerKVCache = dict[int, KVCache]
 
 
-@beartype
+#@beartype
 def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
     """Shift labels for causal language modeling."""
     targets = torch.roll(labels, shifts=-1)
@@ -51,7 +51,7 @@ def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
     return targets
 
 
-@beartype
+#@beartype
 def compute_loss_from_logits(
     outputs: CausalLMOutputWithPast,
     shift_labels: bool,
@@ -74,7 +74,7 @@ def compute_loss_from_logits(
     return loss
 
 
-@beartype
+#@beartype
 def round_up_to_multiple_of_256(n: int) -> int:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
@@ -82,19 +82,19 @@ def round_up_to_multiple_of_256(n: int) -> int:
     return ((n - 1) // 256 + 1) * 256
 
 
-@beartype
+#@beartype
 def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
     """Compute log of mean along specified dimension."""
     return x.logsumexp(dim) - math.log(x.shape[dim])
 
 
-@beartype
+#@beartype
 def entropy_l(l: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
     """Compute entropy from log probabilities."""
     return -(l * l.exp()).sum(-1)
 
 
-@beartype
+#@beartype
 def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tensor, ""]:
     """Compute entropy regularization term."""
     sel = F.log_softmax(sel, dim=-1)
@@ -102,7 +102,7 @@ def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tenso
     return -entropy_l(sel).mean()
 
 
-@beartype
+#@beartype
 class MoEUTConfig(PretrainedConfig):
     """Configuration class for MoEUT model."""
 
@@ -167,7 +167,7 @@ class MoEUTConfig(PretrainedConfig):
         self.rescaling_method = rescaling_method
 
 
-@beartype
+#@beartype
 class DynaModule(Module, ABC):
     @abstractmethod
     def get_reg_loss(self) -> torch.Tensor:
@@ -182,7 +182,7 @@ class DynaModule(Module, ABC):
         pass
 
 
-@beartype
+#@beartype
 class AttentionModule(DynaModule):
     @abstractmethod
     def attend(
@@ -198,7 +198,7 @@ class AttentionModule(DynaModule):
         pass
 
 
-@beartype
+#@beartype
 class SigmaMoE(DynaModule):
     """Sigma Mixture of Experts layer for feed-forward networks."""
 
@@ -301,7 +301,7 @@ class SigmaMoE(DynaModule):
             else None
         )
         # Select top-k routed experts, but ensure k doesn't exceed available experts
-        assert self.k_ffn >= self.n_expert_routed_ffn
+        assert self.k_ffn < self.n_expert_routed_ffn
         _, selection_index = torch.topk(
             (
                 (affinity[:, :, : self.n_expert_routed_ffn] + bias_term)
@@ -355,10 +355,6 @@ class SigmaMoE(DynaModule):
 
         # Prepare selection indices for CVMM operations
         selection_indices = cvmm_prepare_sel2(selection_index.int())
-
-        # Up-projection: input * expert_keys
-        print(selection_indices.sel.shape)
-        print(self.keys.shape)
 
         scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(
             token_stream, selection_indices, self.keys
@@ -483,7 +479,7 @@ class SigmaMoE(DynaModule):
 #         # return
 
 
-@beartype
+#@beartype
 class SwitchHeadCore(AttentionModule):
     """Core attention mechanism with expert routing."""
 
@@ -808,7 +804,7 @@ class SwitchHeadCore(AttentionModule):
         return out, (v_sel_index, o_sel_inedx)
 
 
-@beartype
+#@beartype
 class RotaryPosEncoding(Module):
     """Rotary Position Encoding (RoPE) implementation."""
 
@@ -836,7 +832,7 @@ class RotaryPosEncoding(Module):
         positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Apply rotary position encoding to input tensor."""
-
+        
         sin, cos = self.get_sincos_positions(positions, x)
 
         sin = sin.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
@@ -903,7 +899,7 @@ class RotaryPosEncoding(Module):
         )
 
 
-@beartype
+#@beartype
 class SwitchHeadRope(SwitchHeadCore):
     """Attention head with Rotary Position Encoding."""
 
@@ -916,7 +912,7 @@ class SwitchHeadRope(SwitchHeadCore):
         dropout: float = 0.0,
         dropout_expert: float = 0.0,
         k_attn: int = 2,
-        rotate_fraction: float = 0.5,
+        rotate_fraction: float = 1,
         rope_base: float = 10000,
         n_expert_shared_attn: int = 0,
     ):
@@ -959,6 +955,7 @@ class SwitchHeadRope(SwitchHeadCore):
             return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
         else:
             # Apply RoPE to entire tensors
+            
             return self.pe(q, k, position_mask_trimed, position_mask_full)
 
     def attend(
@@ -980,7 +977,7 @@ class SwitchHeadRope(SwitchHeadCore):
         )
 
 
-@beartype
+#@beartype
 class MoEUTLayer(Module):
     """Single layer of the MoEUT model with configurable behavior."""
 
@@ -1292,7 +1289,7 @@ class MoEUTLayer(Module):
 
 
 # Done
-@beartype
+#@beartype
 class MoEUTPretrainedModel(PreTrainedModel):
     """Base class for MoEUT pretrained models."""
 
@@ -1304,7 +1301,7 @@ class MoEUTPretrainedModel(PreTrainedModel):
 
 
 # Done
-@beartype
+#@beartype
 class MoEUT(MoEUTPretrainedModel):
     """MoEUT transformer model with configurable behavior."""
 
@@ -1411,7 +1408,7 @@ class MoEUT(MoEUTPretrainedModel):
 
 
 # Done except reset params
-@beartype
+#@beartype
 class MoEUTLM(MoEUTPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
@@ -1553,7 +1550,7 @@ class MoEUTLM(MoEUTPretrainedModel):
 
 
 # Done
-@beartype
+#@beartype
 class ComposerMoEUT(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
 

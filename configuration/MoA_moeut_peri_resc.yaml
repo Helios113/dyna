@@ -1,27 +1,41 @@
 model_config:
   d_model: 412
-  n_layers: 16
+  n_layers: 18
   n_heads: 4
-  n_experts_ffn: 1
-  n_experts_attn: 1
-  d_head: 84
+  n_experts_ffn: 155
+  n_experts_attn: 8
+  d_head: 82
   k_ffn: 12
   k_attn: 2
-  d_expert_ffn: 2048
+  d_expert_ffn: 128
   n_group: 2
   vocab_size: 49152
   max_seq_len: 2048
-  n_expert_shared_attn: 1
-  n_expert_shared_ffn: 1
+  n_expert_shared_attn: 0
+  n_expert_shared_ffn: 0
   collect_reg_loss: False
-  enable_early_exit: True
+  enable_early_exit: False
   norm_structure: "Peri"
   rescaling_method: "cum_avg_prot_emb"
+
+
+# class NormStructure(Enum):
+#     Peri = 0
+#     Pre = 1
+#     Post = 2
+#     MoUET = 3
+# class RescaleMethod(Enum):
+#     none = 0
+#     cum_avg_prot_emb = 1
+#     cum_avg_no_prot_emb = 2
+#     sqrt_prot_emb = 3
+#     sqrt_no_prot_emb = 4
+    
 train:
-  max_duration: "1495ba"
-  warmup: "299ba"
-  cooldown: "299ba"
-  device_train_batch_size: 32
+  max_duration: "746ba"
+  warmup: "150ba"
+  cooldown: "150ba"
+  device_train_batch_size: 1024
 
 callbacks:
   clean_metrics: {}
@@ -37,11 +51,8 @@ callbacks:
   entropy_callback: {}
   # activation_monitor_c: {}
 
-
-  
-
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
 

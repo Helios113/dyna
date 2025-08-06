@@ -8,9 +8,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=11:58:00
 #! specify node
-#SBATCH -w ruapehu
+#SBATCH -w mauao
 #SBATCH --output=tests_new/%x.%j.ans
 
 
 
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_sq
