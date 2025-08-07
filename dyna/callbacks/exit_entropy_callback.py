@@ -20,7 +20,7 @@ class ExitEntropyCallback(Callback):
 
     def __init__(
         self,
-        log_interval: str = "1ba",
+        log_interval: str = "100ba",
         epsilon: float = 1e-10,
         figsize: tuple[int, int] = (12, 8),
     ):
@@ -28,9 +28,10 @@ class ExitEntropyCallback(Callback):
         Initialize the Shannon entropy callback.
 
         Args:
-            log_interval: Logging frequency in batches or as a time string. Default: "1ba"
-            log_key: Key to use when logging to wandb. Default: "metrics/shannon_entropy"
+            log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
+                         "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
             epsilon: Small value to add for numerical stability. Default: 1e-10
+            figsize: Figure size for entropy plots. Default: (12, 8)
         """
         self.log_interval = (
             Time.from_timestring(log_interval)

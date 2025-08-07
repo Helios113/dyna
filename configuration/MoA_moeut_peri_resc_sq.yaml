@@ -1,6 +1,6 @@
 model_config:
   d_model: 412
-  n_layers: 18
+  n_repeats: 18
   n_heads: 4
   n_experts_ffn: 155
   n_experts_attn: 8
@@ -8,7 +8,7 @@ model_config:
   k_ffn: 12
   k_attn: 2
   d_expert_ffn: 128
-  n_group: 2
+  n_layers: 2
   vocab_size: 49152
   max_seq_len: 2048
   n_expert_shared_attn: 0

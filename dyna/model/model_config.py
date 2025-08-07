@@ -1,30 +1,40 @@
 from dataclasses import dataclass, field
 from enum import Enum
+
+
 class NormStructure(Enum):
     Peri = 0
     Pre = 1
     Post = 2
     MoUET = 3
-    
+
+
 class RescaleMethod(Enum):
     none = 0
     cum_avg_prot_emb = 1
     cum_avg_no_prot_emb = 2
     sqrt_prot_emb = 3
     sqrt_no_prot_emb = 4
-    
+
+class ExecutionMode(Enum):
+    MoE = 0
+    Transformer = 1
+
+
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
+    execution_mode: ExecutionMode = ExecutionMode.MoE
     vocab_size: int = 49152
     max_seq_len: int = 2048
     d_model: int = 1024
-    n_layers: int = 12
+    d_ffn: int = 4096
+    n_repeats: int = 12
     n_heads: int = 12
     n_experts_ffn: int = 10
     n_experts_attn: int = 2
     d_head: int | None = None
-    n_group: int = 2
+    n_layers: int = 2
     k_ffn: int = 8
     k_attn: int = 2
     dropout_expert_ffn: float = 0.0
@@ -33,14 +43,13 @@ class ModelConfig:
     dropout: float = 0.0
     reg_entropy: float = 0.01
     reg_entropy_attn: float = 0.001
-    attention: str = "SwitchHeadRope"
     shift_labels: bool = True
     n_expert_shared_attn: int = 1
     n_expert_shared_ffn: int = 2
     collect_reg_loss: bool = False
     enable_early_exit: bool = True
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
-    norm_structure:NormStructure = NormStructure.Peri
+    norm_structure: NormStructure = NormStructure.Peri
     run_id: str | None = None
 
 
@@ -117,7 +126,7 @@ class TrainerConfig:
     ddp_sync_strategy: str | None = None
 
     # Profiling
-    profiler: str | None = None  # Use str if not OmegaConf-compatible
+    # profiler: str | None = None  # Use str if not OmegaConf-compatible
 
     # Python logging
     python_log_level: str | None = None
@@ -158,7 +167,7 @@ class DatasetConfig:
     replication: int | None = None
     stream_name: str = "stream"
     stream_config: dict | None = None
-    max_seq_len: int | None = 2048
+    max_seq_len: int | None = 1024
 
 
 @dataclass
@@ -167,8 +176,9 @@ class DataConfig:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     name: str = "text"
     drop_last: bool = True
-    num_workers: int = 4
-    device_batch_size: int = 512
+    num_workers: int = 1
+    pin_memory: bool = True
+    device_batch_size: int = 1024
 
 
 @dataclass

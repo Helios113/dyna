@@ -1,5 +1,5 @@
-cosmo_client_0:
-  remote: s3://smollm-corpus/shared/cosmo/client_0
-  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/cosmo/client_0
+fineweb_edu_dedup_client_0:
+  remote: s3://smollm-corpus/shared/fineweb_edu_dedup/client_0
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/fineweb_edu_dedup/client_0
   split: train
-  proportion: 1
+  proportion: 0.7

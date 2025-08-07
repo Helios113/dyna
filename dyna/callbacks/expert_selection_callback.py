@@ -20,7 +20,7 @@ class ExpertSelectionCallback(Callback):
         self,
         ffn_experts,
         attn_experts,
-        log_interval: str = "1ba",
+        log_interval: str = "100ba",
         log_key_prefix: str = "expert_selection",
         max_samples_per_batch: int = 32,
         figsize: Tuple[int, int] = (12, 8),
@@ -29,7 +29,10 @@ class ExpertSelectionCallback(Callback):
         Initialize the expert selection visualization callback.
 
         Args:
-            log_interval: Logging frequency in batches or as a time string. Default: "10ba"
+            ffn_experts: Number of FFN experts
+            attn_experts: Number of attention experts
+            log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
+                         "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
             log_key_prefix: Prefix for logging keys. Default: "expert_selection"
             max_samples_per_batch: Maximum number of samples to visualize per batch
             figsize: Figure size for matplotlib plots

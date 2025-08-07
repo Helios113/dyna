@@ -31,7 +31,6 @@ class CleanMetrics(Callback):
             state: Composer training state
             logger: Composer logger instance
         """
-        print("cleaned stats vectors")
         transformer = state.model.model.transformer
         transformer._latent_vectors = []
         transformer._exit_logits = []

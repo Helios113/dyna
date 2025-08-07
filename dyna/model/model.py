@@ -1,29 +1,25 @@
 from abc import ABC, abstractmethod
-import copy
 import math
-from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Optional
 import torch
 import torch.nn.functional as F
 from composer.models import HuggingFaceModel
-from flash_attn.ops.triton.layer_norm import RMSNorm
+from torch.nn.modules.normalization import RMSNorm
 from llmfoundry.utils.builders import build_metric
-from omegaconf import DictConfig
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig
 from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
     CausalLMOutputWithPast,
 )
 from torch.nn import Module, ModuleList
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
-from .model_config import NormStructure, RescaleMethod
+from .model_config import NormStructure, RescaleMethod, ExecutionMode
 
 # Add jaxtyping imports
 from jaxtyping import Float, Int, Bool
 from torch import Tensor
+
 # Constants
 CROSS_ENTROPY_IGNORE_INDEX = -100
 DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
@@ -35,14 +31,8 @@ PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.cum_avg_prot_emb,
     RescaleMethod.sqrt_prot_emb,
 ]
-from dyna.utils.utils import visualize_attention_mask, visualize_position_mask
 
-# Type aliases for better readability
-KVCache = dict[str, torch.Tensor]
-MultilayerKVCache = dict[int, KVCache]
-
-
-#@beartype
+@beartype
 def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
     """Shift labels for causal language modeling."""
     targets = torch.roll(labels, shifts=-1)
@@ -50,7 +40,7 @@ def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
     return targets
 
 
-#@beartype
+@beartype
 def compute_loss_from_logits(
     outputs: CausalLMOutputWithPast,
     shift_labels: bool,
@@ -73,27 +63,27 @@ def compute_loss_from_logits(
     return loss
 
 
-#@beartype
-def round_up_to_multiple_of_256(n: int) -> int:
+@beartype
+def round_up_to_multiple_of_256(n: torch.Tensor) -> torch.Tensor:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
-        return 256
+        return torch.Tensor(256)
     return ((n - 1) // 256 + 1) * 256
 
 
-#@beartype
+@beartype
 def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
     """Compute log of mean along specified dimension."""
     return x.logsumexp(dim) - math.log(x.shape[dim])
 
 
-#@beartype
+@beartype
 def entropy_l(l: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
     """Compute entropy from log probabilities."""
     return -(l * l.exp()).sum(-1)
 
 
-#@beartype
+@beartype
 def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tensor, ""]:
     """Compute entropy regularization term."""
     sel = F.log_softmax(sel, dim=-1)
@@ -101,24 +91,25 @@ def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tenso
     return -entropy_l(sel).mean()
 
 
-#@beartype
-class MoEUTConfig(PretrainedConfig):
-    """Configuration class for MoEUT model."""
+@beartype
+class DynaConfig(PretrainedConfig):
+    """Configuration class for Dyna model."""
 
-    model_type = "moeut"
+    model_type = "dyna"
 
     def __init__(
         self,
         vocab_size: int,
         d_model: int,
-        n_layers: int,
+        n_repeats: int,
         n_heads: int,
         n_experts_ffn: int,
         n_experts_attn: int,
         d_head: int,
+        d_ffn: int,
         norm_structure: NormStructure,
         rescaling_method: RescaleMethod,
-        n_group: int = 2,
+        n_layers: int = 2,
         k_ffn: int = 8,
         k_attn: int = 2,
         dropout_expert_ffn: float = 0.0,
@@ -133,14 +124,16 @@ class MoEUTConfig(PretrainedConfig):
         enable_early_exit: bool = True,
         use_rms_norm: bool = True,
         collect_reg_loss: bool = False,
+        execution_mode: ExecutionMode = ExecutionMode.MoE,
         **kwargs,
     ):
         super().__init__(**{"model_type": self.model_type})
         self.vocab_size = vocab_size
         self.d_model = d_model
-        self.n_layers = n_layers
+        self.n_repeats = n_repeats
         self.n_heads = n_heads
         self.d_head = d_head
+        self.d_ffn = d_ffn
 
         self.n_experts_ffn = n_experts_ffn
         self.n_experts_attn = n_experts_attn
@@ -148,7 +141,7 @@ class MoEUTConfig(PretrainedConfig):
         self.n_expert_shared_ffn = n_expert_shared_ffn
         self.n_expert_shared_attn = n_expert_shared_attn
 
-        self.n_group = n_group
+        self.n_layers = n_layers
         self.k_ffn = k_ffn
         self.k_attn = k_attn
 
@@ -164,9 +157,10 @@ class MoEUTConfig(PretrainedConfig):
         self.collect_reg_loss = collect_reg_loss
         self.norm_structure = norm_structure
         self.rescaling_method = rescaling_method
+        self.execution_mode = execution_mode
 
 
-#@beartype
+@beartype
 class DynaModule(Module, ABC):
     @abstractmethod
     def get_reg_loss(self) -> torch.Tensor:
@@ -181,23 +175,369 @@ class DynaModule(Module, ABC):
         pass
 
 
-#@beartype
+@beartype
 class AttentionModule(DynaModule):
-    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     def attend(
         self,
         v: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
-        mask: tuple[
-            Bool[Tensor, "batch n_heads max_len src_len"],
-            Int[Tensor, "batch n_heads max_len"],
-        ],
+        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"],
+        position_mask_trimed: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
+        """Compute attention with RoPE."""
+        # Apply rotary position encoding
+        if self.n_rotate > 0:
+            q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
+
+        return F.scaled_dot_product_attention(
+            q, k, v, scale=1.0, attn_mask=attention_mask
+        )
+
+    def _trim_attention_mask(
+        self,
+        seq_len: int,
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Bool[Tensor, "batch n_heads max_len seq"],
+        Int[Tensor, "batch max_len"],
+    ]:
+        if skip_mask is None:
+            return mask[0].unsqueeze(1).expand(-1, 4, -1, -1), mask[1]
+        lengths = skip_mask.sum(dim=1)
+        max_len = round_up_to_multiple_of_256(lengths.max())
+
+        attention_mask: Bool[Tensor, "batch n_heads max_len seq"] = torch.zeros(
+            skip_mask.shape[0],
+            self.n_heads,
+            max_len,
+            seq_len,
+            dtype=torch.bool,
+            device=skip_mask.device,
+        )
+        position_ids: Int[Tensor, "batch max_len"] = torch.zeros(
+            skip_mask.shape[0],
+            max_len,
+            dtype=torch.int,
+            device=skip_mask.device,
+        )
+
+        for i in range(skip_mask.shape[0]):
+            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
+            n = idx.numel()
+            if n > 0:
+                attention_mask[i, :, :n] = mask[0][i, idx]
+                position_ids[i, :n] = mask[1][i, idx]
+
+        return (attention_mask, position_ids)
+
+    def project_to_torch_order(self, x: torch.Tensor) -> torch.Tensor:
+        """Reshape tensor to PyTorch attention format."""
+        return x.view(*x.shape[:-1], self.n_heads, self.d_head).transpose(-2, -3)
+
+    def _apply_rope(
+        self,
+        q: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        position_mask_trimed: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch n_heads seq d_head"],
+        Float[Tensor, "batch n_heads seq d_head"],
+    ]:
+        """Apply rotary position encoding to queries and keys."""
+        if self.n_rotate < self.d_head:
+            # Split rotated and non-rotated parts
+            r_k, nr_k = k[..., : self.n_rotate], k[..., self.n_rotate :]
+            r_q, nr_q = q[..., : self.n_rotate], q[..., self.n_rotate :]
+
+            # Apply RoPE to rotated parts
+            r_q, r_k = self.pe(r_q, r_k, position_mask_trimed, position_mask_full)
+
+            # Concatenate back
+            return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
+        else:
+            # Apply RoPE to entire tensors
+            return self.pe(q, k, position_mask_trimed, position_mask_full)
+
+
+@beartype
+class LayerModule(Module, ABC):
+    def __init__(
+        self,
+        config: DynaConfig,
+        attention_module: AttentionModule,
+        ffn_module: DynaModule,
+    ):
+        super().__init__()
+        self.attention = attention_module
+        self.ffn = ffn_module
+        # Layer normalization - configurable type
+        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
+        self.attn_pre = norm_class(config.d_model)
+        self.attn_post = norm_class(config.d_model)
+        self.ffn_pre = norm_class(config.d_model)
+        self.ffn_post = norm_class(config.d_model)
+
+        # Configuration
+        self.drop = torch.nn.Dropout(config.dropout)
+        self.n_layers = config.n_layers
+        self.enable_early_exit = config.enable_early_exit
+        self.rescaling_method = config.rescaling_method
+        self.norm_structure = config.norm_structure
+
+    # Done
+    def _check_early_exit(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        router: torch.nn.Parameter,
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
+    ) -> tuple[
+        None | Bool[Tensor, "batch seq"], bool, None | Float[Tensor, "batch seq"]
+    ]:
+        """Check if tokens should exit early and create skip mask."""
+        if not self.enable_early_exit:
+            # Return mask that keeps all tokens
+            # skip_mask = torch.ones_like(cum_sum, dtype=torch.bool)
+            return None, True, None
+
+        # Compute exit scores
+        s_exit: Float[Tensor, "batch seq"] = F.sigmoid(F.linear(x, router))
+        cum_sum += s_exit
+
+        # Create skip mask (True = continue processing)
+        skip_mask: Bool[Tensor, "batch seq"] = cum_sum < tau
+
+        # Handle sequence-level early exit
+        last_token_idx = x.shape[1] - 1
+        last_tokens_exit = ~skip_mask[:, last_token_idx]
+
+        # Mark entire sequences as done if last token exits
+        for batch_idx in last_tokens_exit.nonzero(as_tuple=True)[0]:
+            skip_mask[batch_idx, :] = False
+
+        # Check if all sequences are done
+        continue_processing = not torch.all(skip_mask == False)
+
+        return skip_mask, continue_processing, s_exit
+
+    # Done
+    def _trim_sequence(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+    ) -> tuple[Float[Tensor, "batch max_len d_model"], int]:
+        """Pack sequences for efficient processing."""
+
+        if skip_mask is None:
+            return x, x.shape[-2]
+
+        lengths = skip_mask.sum(dim=1)
+        max_len = round_up_to_multiple_of_256(lengths.max())
+
+        # Initialize output tensors
+        x_trimed: Float[Tensor, "batch max_len d_model"] = torch.zeros(
+            x.shape[0], max_len, x.shape[-1], device=x.device
+        )
+
+        # Get valid positions
+        batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
+
+        if batch_idx.numel() > 0:
+            # Compute packing indices efficiently
+            batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
+            cumsum_counts = torch.cumsum(
+                torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]),
+                dim=0,
+            )
+
+            local_indices = (
+                torch.arange(batch_idx.numel(), device=x.device)
+                - cumsum_counts[batch_idx]
+            )
+            valid_mask = local_indices < max_len
+
+            if valid_mask.any():
+                # Pack data efficiently
+                x_trimed[batch_idx[valid_mask], local_indices[valid_mask]] = x[
+                    batch_idx[valid_mask], seq_idx[valid_mask]
+                ]
+
+        return x_trimed, max_len
+
+    # Done
+    def _apply_pre_norm_attn(
+        self,
+        residual_stream: Float[Tensor, "batch seq d_model"],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch max_len d_model"],
+        Float[Tensor, "batch seq d_model"],
+        Float[Tensor, "batch seq d_model"],
+        int,
+    ]:
+        if (
+            self.norm_structure.value == NormStructure.Peri.value
+            or self.norm_structure == NormStructure.Pre.value
+        ):
+            # Peri, Pre
+            residual_stream_normed = self.attn_pre(residual_stream)
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream_normed, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream_normed
+            v_val = residual_stream_normed
+
+        elif self.norm_structure.value == NormStructure.Post.value:
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream
+            v_val = residual_stream
+
+        elif self.norm_structure.value == NormStructure.MoUET.value:
+            residual_stream_normed = self.attn_pre(residual_stream)
+            residual_stream_trimmed, max_len = self._trim_sequence(
+                residual_stream_normed, skip_mask
+            )
+            q_val = residual_stream_trimmed
+            k_val = residual_stream_normed
+            v_val = residual_stream
+        else:
+            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
+
+        return q_val, k_val, v_val, max_len
+
+    def _apply_update_to_residual(
+        self,
+        residual_stream: Float[Tensor, "batch seq d_model"],
+        update_on_stream: Float[Tensor, "batch seq d_model"],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
+        layer_index: int,
+        norm_to_use: Module,
+        e: Optional[Float[Tensor, "batch seq d_model"]] = None,
+    ) -> Float[Tensor, "batch seq d_model"]:
+        update = update_on_stream
+        if self.norm_structure.value == NormStructure.Peri.value:
+            update = norm_to_use(update_on_stream)
+        update = self.drop(update_on_stream)
+
+        match self.rescaling_method.value:
+            case RescaleMethod.none.value:
+                if self.enable_early_exit:
+                    residual_stream[skip_mask] = (
+                        residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                    )
+                else:
+                    residual_stream = residual_stream + update
+            case (
+                RescaleMethod.cum_avg_prot_emb.value
+                | RescaleMethod.cum_avg_no_prot_emb.value
+            ):
+                if e is not None:
+                    residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    scale_factor = (layer_index - 1) / layer_index
+                    update_factor = cum_sum[skip_mask].unsqueeze(1) * tau / layer_index
+
+                    residual_stream[skip_mask] = (
+                        scale_factor * residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                    )
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    scale_factor = (layer_index - 1) / layer_index
+                    residual_stream = (
+                        scale_factor * residual_stream + update / layer_index
+                    )
+                if e is not None:
+                    residual_stream = residual_stream + e
+            case (
+                RescaleMethod.sqrt_prot_emb.value | RescaleMethod.sqrt_no_prot_emb.value
+            ):
+                if e is not None:
+                    residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
+                    update_factor = (
+                        cum_sum[skip_mask].unsqueeze(1) * tau / torch.sqrt(layer_index)
+                    )
+
+                    residual_stream[skip_mask] = (
+                        scale_factor * residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                    )
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
+                    residual_stream = scale_factor * residual_stream + update / (
+                        torch.sqrt(layer_index)
+                    )
+                if e is not None:
+                    residual_stream = residual_stream + e
+
+        if self.norm_structure.value == NormStructure.Post.value:
+            residual_stream = norm_to_use(residual_stream)
+
+        return residual_stream
+
+    def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
+
+        if (
+            self.norm_structure.value == NormStructure.Peri.value
+            or self.norm_structure.value == NormStructure.Pre.value
+        ):
+            # Peri, Pre
+            residual_stream_normed = self.ffn_pre(residual_stream)
+            ffn_val_1 = residual_stream_normed
+            ffn_val_2 = residual_stream_normed
+        elif self.norm_structure.value == NormStructure.Post.value:
+            ffn_val_1 = residual_stream
+            ffn_val_2 = residual_stream
+        elif self.norm_structure.value == NormStructure.MoUET.value:
+            residual_stream_normed = self.ffn_pre(residual_stream)
+            ffn_val_1 = residual_stream_normed
+            ffn_val_2 = residual_stream
+        else:
+            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
+
+        return ffn_val_1, ffn_val_2
+
+    @abstractmethod
+    def forward(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        layer_index: int,
+        e: Float[Tensor, "batch seq d_model"],
+        router: torch.nn.Parameter,
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"],
+        bool,
+        int,
+        None | Float[Tensor, "batch seq"],
+        tuple,
+    ]:
+        """Forward pass through the layer with configurable behavior."""
         pass
 
 
-#@beartype
+@beartype
 class SigmaMoE(DynaModule):
     """Sigma Mixture of Experts layer for feed-forward networks."""
 
@@ -371,7 +711,7 @@ class SigmaMoE(DynaModule):
 
         # Clean up intermediate tensors to prevent memory leak
         del scores, selection_indices
-        
+
         return out.view_as(token_stream), selection_index
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
@@ -388,103 +728,139 @@ class SigmaMoE(DynaModule):
         return loss
 
 
-# class BasicFFN(DynaModule):
-#     def __init__(
-#         self,
-#         d_model: int,
-#         n_experts_ffn: int,
-#         d_expert_ffn: int,
-#         activation: Callable[[torch.Tensor], torch.Tensor] = F.silu,
-#     ):
+class BasicFFN(DynaModule):
+    def __init__(
+        self,
+        d_model: int,
+        d_expert_ffn: int,
+        activation: Callable[[torch.Tensor], torch.Tensor] = F.silu,
+    ):
+        super().__init__()  # Need to call the parent class constructor
+        self.d_model = d_model
+        self.d_expert_ffn = d_expert_ffn
+        self.activation = activation
+        self.projection_up = torch.nn.Linear(self.d_model, self.d_expert_ffn)
+        self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
 
-#         assert n_experts_ffn == 1
-#         self.d_model = d_model
-#         self.d_expert_ffn = d_expert_ffn
-#         self.activation = activation
-#         self.projection_up = torch.nn.Linear(self.d_model, self.d_expert_ffn)
-#         self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
+    def forward(
+        self, token_stream: torch.Tensor, selection_input: torch.Tensor
+    ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
+        output = self.projection_down(self.activation(self.projection_up(token_stream)))
+        return output, None  # Return None for the selection index to match SigmaMoE
 
-#     def forward(
-#         self, token_stream: torch.Tensor, selection_input: torch.Tensor
-#     ) -> torch.Tensor:
-#         return self.projection_down(self.activation(self.projection_up(token_stream)))
+    def reset_parameters(self, std_scale: float) -> None:
+        """Initialize parameters with proper scaling."""
+        torch.nn.init.normal_(
+            self.projection_up.weight, 0, std_scale / math.sqrt(self.d_model)
+        )
+        torch.nn.init.normal_(
+            self.projection_down.weight, 0, std_scale / math.sqrt(self.d_expert_ffn)
+        )
+        if self.projection_up.bias is not None:
+            torch.nn.init.zeros_(self.projection_up.bias)
+        if self.projection_down.bias is not None:
+            torch.nn.init.zeros_(self.projection_down.bias)
 
-#     def get_reg_loss(self) -> torch.Tensor:
-#         return torch.tensor(0.0, device=self.keys.device)
-
-
-# class BasicAttn(AttentionModule):
-#     def __init__(
-#         self,
-#         d_model: int,
-#         n_heads: int,
-#         n_experts: int,
-#         d_head: int,
-#         dropout: float = 0.0,
-#     ):
-#         super().__init__()
-#         assert (n_experts == 1)
-#         # Model configuration
-#         self.d_model = d_model
-#         self.n_heads = n_heads
-#         self.d_head = d_head
-#         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
-
-#         # Query and Key projections (shared)
-#         self.q = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-#         self.k = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-#         self.v = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-#         self.o = torch.nn.Linear(self.d_model, self.d_model, bias=False)
-
-#         # build_norms
-#         # We don't want nones do we?
-#         # We do not pass None variables
-#         # None's can only be non passed variables
-#         # Some flag for which norms to use
-#         self.pre_norm =
-#         self.post_norm =
-
-#         # Expert-specific parameters
-#         self._init_expert_parameters()
-
-#         # Attention scale
-#         self.register_buffer(
-#             "scale",
-#             torch.full([1], 1.0 / math.sqrt(self.d_head)),
-#             persistent=False,
-#         )
-
-#     def reset_parameters(self, std_scale: float) -> None:
-
-#         # Initialize projection parameters
-#         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
-#         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
-#         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
-#         torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+    def get_reg_loss(self) -> torch.Tensor:
+        """Return zero for regularization loss since BasicFFN doesn't use expert routing."""
+        return torch.tensor(0.0, device=self.projection_up.weight.device)
 
 
-#     def attend():
+class BasicAttn(AttentionModule):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        d_head: int,
+        dropout: float = 0.0,
+        rotate_fraction: float = 1.0,
+        rope_base: float = 10000,
+    ):
+        super().__init__()
+        # Model configuration
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_head
+        self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
+
+        # Query and Key projections (shared)
+        self.q = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.k = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.v = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.o = torch.nn.Linear(self.n_heads * self.d_head, self.d_model, bias=False)
+
+        # RoPE configuration
+        self.n_rotate = int(rotate_fraction * self.d_head)
+        if self.n_rotate > 0:
+            self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
+
+        # Attention scale
+        self.register_buffer(
+            "scale",
+            torch.full([1], 1.0 / math.sqrt(self.d_head)),
+            persistent=False,
+        )
+
+    def reset_parameters(self, std_scale: float) -> None:
+        # Initialize projection parameters
+        torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+
+    def get_reg_loss(self) -> torch.Tensor:
+        """Return zero for regularization loss since BasicAttn doesn't use expert routing."""
+        return torch.tensor(0.0, device=self.q.weight.device)
+
+    def forward(
+        self,
+        q_src: Float[Tensor, "batch seq d_model"],
+        k_src: Float[Tensor, "batch seq d_model"],
+        v_src: Float[Tensor, "batch seq d_model"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"],
+        tuple[None, None],
+    ]:
+        """Forward pass through the attention layer."""
+        # Apply scaling to queries and keys
+        scale = self.scale.sqrt()
+        q: Float[Tensor, "batch seq n_heads*d_head"] = self.q(q_src) * scale.type_as(
+            q_src
+        )
+        k: Float[Tensor, "batch seq n_heads*d_head"] = self.k(k_src) * scale.type_as(
+            k_src
+        )
+        v: Float[Tensor, "batch seq n_heads*d_head"] = self.v(v_src)
+
+        # Project to attention format
+        q = self.project_to_torch_order(q)
+        k = self.project_to_torch_order(k)
+        v = self.project_to_torch_order(v)
+
+        # Apply dropout
+        q = self.dropout(q)
+
+        # Prepare attention mask
+        attention_mask, position_ids = self._trim_attention_mask(
+            v.shape[-2], mask, skip_mask
+        )
+
+        # Apply attention
+        res = self.attend(v, k, q, attention_mask, position_ids, mask[1])
+
+        # Reshape result for output projection
+        res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)
+
+        # Apply output projection
+        out = self.o(res)
+
+        return out, (None, None)
 
 
-#     def forward(self, token_stream):
-#         # norming based on the recieved config
-
-#         if self.pre_norm:
-
-
-#         # projecting
-
-
-#         # attending
-
-
-#         # projection
-
-#         # return
-
-
-#@beartype
-class SwitchHeadCore(AttentionModule):
+@beartype
+class SwitchHead(AttentionModule):
     """Core attention mechanism with expert routing."""
 
     def __init__(
@@ -497,6 +873,8 @@ class SwitchHeadCore(AttentionModule):
         dropout_expert: float = 0.0,
         k_attn: int = 2,
         n_expert_shared_attn: int = 0,
+        rotate_fraction: float = 1,
+        rope_base: float = 10000,
     ):
         super().__init__()
         # Model configuration
@@ -544,6 +922,10 @@ class SwitchHeadCore(AttentionModule):
         self.sel_hist = []
 
         self.call_h = 0
+        # RoPE configuration
+        self.n_rotate = int(rotate_fraction * self.d_head)
+        if self.n_rotate > 0:
+            self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
     def _init_expert_parameters(self) -> None:
         """Initialize expert-specific parameters."""
@@ -595,46 +977,6 @@ class SwitchHeadCore(AttentionModule):
             std_t = x.std(dim=-1, keepdim=True)
             x.div_(x.norm(dim=-1, keepdim=True))
             x.mul_(std_t / x.std())
-
-    def project_to_torch_order(self, x: torch.Tensor) -> torch.Tensor:
-        """Reshape tensor to PyTorch attention format."""
-        return x.view(*x.shape[:-1], self.n_heads, -1).transpose(-2, -3)
-
-    def _trim_attention_mask(
-        self,
-        seq_len: int,
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        skip_mask: Bool[Tensor, "batch seq"],
-    ) -> tuple[
-        Bool[Tensor, "batch n_heads max_len seq"],
-        Int[Tensor, "batch max_len"],
-    ]:
-        lengths = skip_mask.sum(dim=1)
-        max_len = round_up_to_multiple_of_256(lengths.max().item())
-
-        attention_mask: Bool[Tensor, "batch n_heads max_len seq"] = torch.zeros(
-            skip_mask.shape[0],
-            self.n_heads,
-            max_len,
-            seq_len,
-            dtype=torch.bool,
-            device=self.v.device,
-        )
-        position_ids: Int[Tensor, "batch max_len"] = torch.zeros(
-            skip_mask.shape[0],
-            max_len,
-            dtype=torch.int,
-            device=self.v.device,
-        )
-
-        for i in range(skip_mask.shape[0]):
-            idx = skip_mask[i].nonzero(as_tuple=False).squeeze(-1)
-            n = idx.numel()
-            if n > 0:
-                attention_mask[i, :, :n] = mask[0][i, idx]
-                position_ids[i, :n] = mask[1][i, idx]
-
-        return (attention_mask, position_ids)
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss from selection history."""
@@ -763,7 +1105,7 @@ class SwitchHeadCore(AttentionModule):
             v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
                 v_src, v_sel, self.v
             ).transpose(-2, -3)
-            
+
             # Clean up intermediate tensors
             del v_sel_r, v_sel
         else:
@@ -792,12 +1134,12 @@ class SwitchHeadCore(AttentionModule):
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
-            
+
             # Clean up intermediate tensors
             del o_sel, res
-            
+
             # Return None instead of storing tensors
-            
+
         else:
             res = res * o_gate[..., None]
 
@@ -818,7 +1160,7 @@ class SwitchHeadCore(AttentionModule):
         return out, (v_sel_index.detach().cpu(), o_sel_inedx.detach().cpu())
 
 
-#@beartype
+@beartype
 class RotaryPosEncoding(Module):
     """Rotary Position Encoding (RoPE) implementation."""
 
@@ -846,7 +1188,7 @@ class RotaryPosEncoding(Module):
         positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Apply rotary position encoding to input tensor."""
-        
+
         sin, cos = self.get_sincos_positions(positions, x)
 
         sin = sin.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
@@ -913,337 +1255,32 @@ class RotaryPosEncoding(Module):
         )
 
 
-#@beartype
-class SwitchHeadRope(SwitchHeadCore):
-    """Attention head with Rotary Position Encoding."""
-
-    def __init__(
-        self,
-        d_model: int,
-        n_heads: int,
-        d_head: int,
-        n_experts_attn: int,
-        dropout: float = 0.0,
-        dropout_expert: float = 0.0,
-        k_attn: int = 2,
-        rotate_fraction: float = 1,
-        rope_base: float = 10000,
-        n_expert_shared_attn: int = 0,
-    ):
-        super().__init__(
-            d_model,
-            n_heads,
-            n_experts_attn,
-            d_head,
-            dropout=dropout,
-            dropout_expert=dropout_expert,
-            k_attn=k_attn,
-            n_expert_shared_attn=n_expert_shared_attn,
-        )
-
-        # RoPE configuration
-        self.n_rotate = int(rotate_fraction * self.d_head)
-        if self.n_rotate > 0:
-            self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
-
-    def _apply_rope(
-        self,
-        q: Float[Tensor, "batch n_heads seq d_head"],
-        k: Float[Tensor, "batch n_heads seq d_head"],
-        position_mask_trimed: Int[Tensor, "batch max_len"],
-        position_mask_full: Int[Tensor, "batch seq"],
-    ) -> tuple[
-        Float[Tensor, "batch n_heads seq d_head"],
-        Float[Tensor, "batch n_heads seq d_head"],
-    ]:
-        """Apply rotary position encoding to queries and keys."""
-        if self.n_rotate < self.d_head:
-            # Split rotated and non-rotated parts
-            r_k, nr_k = k[..., : self.n_rotate], k[..., self.n_rotate :]
-            r_q, nr_q = q[..., : self.n_rotate], q[..., self.n_rotate :]
-
-            # Apply RoPE to rotated parts
-            r_q, r_k = self.pe(r_q, r_k, position_mask_trimed, position_mask_full)
-
-            # Concatenate back
-            return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
-        else:
-            # Apply RoPE to entire tensors
-            
-            return self.pe(q, k, position_mask_trimed, position_mask_full)
-
-    def attend(
-        self,
-        v: Float[Tensor, "batch n_heads seq d_head"],
-        k: Float[Tensor, "batch n_heads seq d_head"],
-        q: Float[Tensor, "batch n_heads seq d_head"],
-        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"],
-        position_mask_trimed: Int[Tensor, "batch max_len"],
-        position_mask_full: Int[Tensor, "batch seq"],
-    ) -> Float[Tensor, "batch n_heads seq d_head"]:
-        """Compute attention with RoPE."""
-        # Apply rotary position encoding
-        if self.n_rotate > 0:
-            q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
-
-        return F.scaled_dot_product_attention(
-            q, k, v, scale=1.0, attn_mask=attention_mask
-        )
-
-
-#@beartype
-class MoEUTLayer(Module):
+@beartype
+class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
 
-    def __init__(self, config: MoEUTConfig):
-        super().__init__()
-        self.attention = SwitchHeadRope(
-            d_model=config.d_model,
-            n_heads=config.n_heads,
-            d_head=config.d_head,
-            n_experts_attn=config.n_experts_attn,
-            dropout=config.dropout_expert_attn,
-            dropout_expert=config.dropout_expert_attn,
-            k_attn=config.k_attn,
-            n_expert_shared_attn=config.n_expert_shared_attn,
+    def __init__(self, config: DynaConfig):
+        super().__init__(
+            config=config,
+            attention_module=SwitchHead(
+                d_model=config.d_model,
+                n_heads=config.n_heads,
+                d_head=config.d_head,
+                n_experts_attn=config.n_experts_attn,
+                dropout=config.dropout_expert_attn,
+                dropout_expert=config.dropout_expert_attn,
+                k_attn=config.k_attn,
+                n_expert_shared_attn=config.n_expert_shared_attn,
+            ),
+            ffn_module=SigmaMoE(
+                config.d_model,
+                config.n_experts_ffn,
+                config.d_expert_ffn,
+                k_ffn=config.k_ffn,
+                dropout_expert=config.dropout_expert_ffn,
+                n_expert_shared_ffn=config.n_expert_shared_ffn,
+            ),
         )
-        self.ffn = SigmaMoE(
-            config.d_model,
-            config.n_experts_ffn,
-            config.d_expert_ffn,
-            k_ffn=config.k_ffn,
-            dropout_expert=config.dropout_expert_ffn,
-            n_expert_shared_ffn=config.n_expert_shared_ffn,
-        )
-        # Layer normalization - configurable type
-        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
-        self.attn_pre = norm_class(config.d_model)
-        self.attn_post = norm_class(config.d_model)
-        self.ffn_pre = norm_class(config.d_model)
-        self.ffn_post = norm_class(config.d_model)
-
-        # Configuration
-        self.drop = torch.nn.Dropout(config.dropout)
-        self.n_group = config.n_group
-        self.enable_early_exit = config.enable_early_exit
-        self.rescaling_method = config.rescaling_method
-        self.norm_structure = config.norm_structure
-
-    # Done
-    def _check_early_exit(
-        self,
-        x: Float[Tensor, "batch seq d_model"],
-        router: torch.nn.Parameter,
-        cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
-        layer_index: int,
-    ) -> tuple[Bool[Tensor, "batch seq"], bool, Float[Tensor, "batch seq"]]:
-        """Check if tokens should exit early and create skip mask."""
-        if not self.enable_early_exit:
-            # Return mask that keeps all tokens
-            skip_mask = torch.ones_like(cum_sum, dtype=torch.bool)
-            return skip_mask, True, torch.zeros_like(skip_mask, dtype=torch.float)
-
-        # Compute exit scores
-        s_exit: Float[Tensor, "batch seq"] = F.sigmoid(F.linear(x, router))
-        cum_sum += s_exit
-
-        # Create skip mask (True = continue processing)
-        skip_mask: Bool[Tensor, "batch seq"] = cum_sum < tau
-
-        # Handle sequence-level early exit
-        last_token_idx = x.shape[1] - 1
-        last_tokens_exit = ~skip_mask[:, last_token_idx]
-
-        # Mark entire sequences as done if last token exits
-        for batch_idx in last_tokens_exit.nonzero(as_tuple=True)[0]:
-            skip_mask[batch_idx, :] = False
-
-        # Check if all sequences are done
-        continue_processing = not torch.all(skip_mask == False)
-
-        return skip_mask, continue_processing, s_exit
-
-    # Done
-    def _trim_sequence(
-        self,
-        x: Float[Tensor, "batch seq d_model"],
-        skip_mask: Bool[Tensor, "batch seq"],
-    ) -> tuple[Float[Tensor, "batch max_len d_model"], int]:
-        """Pack sequences for efficient processing."""
-
-        lengths = skip_mask.sum(dim=1)
-        max_len = round_up_to_multiple_of_256(lengths.max().item())
-
-        # Initialize output tensors
-        x_trimed: Float[Tensor, "batch max_len d_model"] = torch.zeros(
-            x.shape[0], max_len, x.shape[-1], device=x.device
-        )
-
-        # Get valid positions
-        batch_idx, seq_idx = skip_mask.nonzero(as_tuple=True)
-
-        if batch_idx.numel() > 0:
-            # Compute packing indices efficiently
-            batch_counts = torch.bincount(batch_idx, minlength=x.shape[0])
-            cumsum_counts = torch.cumsum(
-                torch.cat([torch.tensor([0], device=x.device), batch_counts[:-1]]),
-                dim=0,
-            )
-
-            local_indices = (
-                torch.arange(batch_idx.numel(), device=x.device)
-                - cumsum_counts[batch_idx]
-            )
-            valid_mask = local_indices < max_len
-
-            if valid_mask.any():
-                # Pack data efficiently
-                x_trimed[batch_idx[valid_mask], local_indices[valid_mask]] = x[
-                    batch_idx[valid_mask], seq_idx[valid_mask]
-                ]
-
-        return x_trimed, max_len
-
-    # Done
-    def _apply_pre_norm_attn(
-        self,
-        residual_stream: Float[Tensor, "batch seq d_model"],
-        skip_mask: Bool[Tensor, "batch seq"],
-    ) -> tuple[
-        Float[Tensor, "batch max_len d_model"],
-        Float[Tensor, "batch seq d_model"],
-        Float[Tensor, "batch seq d_model"],
-        int,
-    ]:
-        if (
-            self.norm_structure.value == NormStructure.Peri.value
-            or self.norm_structure == NormStructure.Pre.value
-        ):
-            # Peri, Pre
-            residual_stream_normed = self.attn_pre(residual_stream)
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream_normed, skip_mask
-            )
-            q_val = residual_stream_trimmed
-            k_val = residual_stream_normed
-            v_val = residual_stream_normed
-
-        elif self.norm_structure.value == NormStructure.Post.value:
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream, skip_mask
-            )
-            q_val = residual_stream_trimmed
-            k_val = residual_stream
-            v_val = residual_stream
-
-        elif self.norm_structure.value == NormStructure.MoUET.value:
-            residual_stream_normed = self.attn_pre(residual_stream)
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream_normed, skip_mask
-            )
-            q_val = residual_stream_trimmed
-            k_val = residual_stream_normed
-            v_val = residual_stream
-        else:
-            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
-
-        return q_val, k_val, v_val, max_len
-
-    def _apply_update_to_residual(
-        self,
-        residual_stream: Float[Tensor, "batch seq d_model"],
-        update_on_stream: Float[Tensor, "batch seq d_model"],
-        skip_mask: Bool[Tensor, "batch seq"],
-        cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
-        layer_index: int,
-        norm_to_use: Module,
-        e: Optional[Float[Tensor, "batch seq d_model"]] = None,
-    ) -> Float[Tensor, "batch seq d_model"]:
-        update = update_on_stream
-        if self.norm_structure.value == NormStructure.Peri.value:
-            update = norm_to_use(update_on_stream)
-        update = self.drop(update_on_stream)
-
-        match self.rescaling_method.value:
-            case RescaleMethod.none.value:
-                if self.enable_early_exit:
-                    residual_stream[skip_mask] = (
-                        residual_stream[skip_mask]
-                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
-                    )
-                else:
-                    residual_stream = residual_stream + update
-            case RescaleMethod.cum_avg_prot_emb.value | RescaleMethod.cum_avg_no_prot_emb.value:
-                if e is not None:
-                    residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    scale_factor = (layer_index - 1) / layer_index
-                    update_factor = cum_sum[skip_mask].unsqueeze(1) * tau / layer_index
-
-                    residual_stream[skip_mask] = (
-                        scale_factor * residual_stream[skip_mask]
-                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
-                        * update_factor
-                    )
-                else:
-                    # Apply to all tokens when early exit is disabled
-                    scale_factor = (layer_index - 1) / layer_index
-                    residual_stream = (
-                        scale_factor * residual_stream + update / layer_index
-                    )
-                if e is not None:
-                    residual_stream = residual_stream + e
-            case RescaleMethod.sqrt_prot_emb.value | RescaleMethod.sqrt_no_prot_emb.value:
-                if e is not None:
-                    residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
-                    update_factor = (
-                        cum_sum[skip_mask].unsqueeze(1) * tau / torch.sqrt(layer_index)
-                    )
-
-                    residual_stream[skip_mask] = (
-                        scale_factor * residual_stream[skip_mask]
-                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
-                        * update_factor
-                    )
-                else:
-                    # Apply to all tokens when early exit is disabled
-                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
-                    residual_stream = scale_factor * residual_stream + update / (
-                        torch.sqrt(layer_index)
-                    )
-                if e is not None:
-                    residual_stream = residual_stream + e
-
-        if self.norm_structure.value == NormStructure.Post.value:
-            residual_stream = norm_to_use(residual_stream)
-
-        return residual_stream
-
-    def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
-
-        if (
-            self.norm_structure.value == NormStructure.Peri.value
-            or self.norm_structure.value == NormStructure.Pre.value
-        ):
-            # Peri, Pre
-            residual_stream_normed = self.ffn_pre(residual_stream)
-            ffn_val_1 = residual_stream_normed
-            ffn_val_2 = residual_stream_normed
-        elif self.norm_structure.value == NormStructure.Post.value:
-            ffn_val_1 = residual_stream
-            ffn_val_2 = residual_stream
-        elif self.norm_structure.value == NormStructure.MoUET.value:
-            residual_stream_normed = self.ffn_pre(residual_stream)
-            ffn_val_1 = residual_stream_normed
-            ffn_val_2 = residual_stream
-        else:
-            raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
-
-        return ffn_val_1, ffn_val_2
 
     def forward(
         self,
@@ -1261,14 +1298,12 @@ class MoEUTLayer(Module):
         skip_mask, continue_processing, s_exit = self._check_early_exit(
             x, router, cum_sum, tau, layer_index
         )
-        # print(f"Step 1: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        
+
         if not continue_processing:
             return x, False, 0, s_exit, ((None, None), None)
 
         # === ATTENTION BLOCK ===
         q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
-        # print(f"Step 2: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         att_out, expert_sel_attn = self.attention(
             q_val,
@@ -1277,35 +1312,29 @@ class MoEUTLayer(Module):
             mask,
             skip_mask=skip_mask,
         )
-        
+
         # Clean up attention intermediate tensors immediately
         del q_val, k_val, v_val
-        
-        # print(f"Step 3: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         x = self._apply_update_to_residual(
             x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
         )
-        
+
         # Clean up attention output
         del att_out
 
         # === FFN BLOCK ===
-        # print(f"Step 4: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         # FFN computation
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
-        # print(f"Step 5: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
         x = self._apply_update_to_residual(
             x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
         )
-        
+
         # Clean up FFN output and other intermediate tensors
         del ffn_out, skip_mask
-        
-        # print(f"Step 6: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        
+
         return (
             x,
             continue_processing,
@@ -1315,34 +1344,124 @@ class MoEUTLayer(Module):
         )
 
 
-# Done
-#@beartype
-class MoEUTPretrainedModel(PreTrainedModel):
-    """Base class for MoEUT pretrained models."""
+@beartype
+class SimpleLayer(LayerModule):
+    def __init__(self, config: DynaConfig):
 
-    config_class = MoEUTConfig
-    base_model_prefix: str = "moeut"
+        super().__init__(
+            config,
+            BasicAttn(
+                d_model=config.d_model,
+                n_heads=config.n_heads,
+                d_head=config.d_head,
+                dropout=config.dropout,
+            ),
+            BasicFFN(
+                config.d_model,
+                config.d_ffn,
+            ),
+        )
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        layer_index: int,
+        e: None | Float[Tensor, "batch seq d_model"],
+        router: torch.nn.Parameter,
+        cum_sum: Float[Tensor, "batch seq"],
+        tau: Float[Tensor, "1"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"],
+        bool,
+        int,
+        None | Float[Tensor, "batch seq"],
+        tuple,
+    ]:
+        """Forward pass through the layer with configurable behavior."""
+        skip_mask, continue_processing, s_exit = self._check_early_exit(
+            x, router, cum_sum, tau
+        )
+        if not continue_processing:
+            return x, False, 0, s_exit, ((None, None), None)
+
+        # === ATTENTION BLOCK ===
+        q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
+        att_out, expert_sel_attn = self.attention(
+            q_val,
+            k_val,
+            v_val,
+            mask,
+            skip_mask=skip_mask,
+        )
+
+        # Clean up attention intermediate tensors immediately
+        del q_val, k_val, v_val
+
+        x = self._apply_update_to_residual(
+            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
+        )
+
+        # Clean up attention output
+        del att_out
+
+        # === FFN BLOCK ===
+
+        # FFN computation
+        ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
+
+        x = self._apply_update_to_residual(
+            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
+        )
+
+        # Clean up FFN output and other intermediate tensors
+        del ffn_out, skip_mask
+
+        return (
+            x,
+            continue_processing,
+            max_len,
+            s_exit,
+            (expert_sel_attn, expert_sel_ffn),
+        )
+
+@beartype
+class DynaPretrainedModel(PreTrainedModel):
+    """Base class for Dyna pretrained models."""
+
+    config_class = DynaConfig
+    base_model_prefix: str = "Dyna"
     is_parallelizable: bool = False
     main_input_name: str = "input_ids"
     load_tf_weights = None
 
-
-# Done
-#@beartype
-class MoEUT(MoEUTPretrainedModel):
+@beartype
+class DynaFormer(DynaPretrainedModel):
     """MoEUT transformer model with configurable behavior."""
 
-    def __init__(self, config: MoEUTConfig):
+    def __init__(self, config: DynaConfig):
         super().__init__(config)
         self.reg_entropy = config.reg_entropy
         self.reg_entropy_attn = config.reg_entropy_attn
-        self.n_group = config.n_group
-        self.n_repeats = config.n_layers // config.n_group
+        self.n_layers = config.n_layers
+        self.n_repeats = config.n_repeats
         self.d_model = config.d_model
         self.enable_early_exit = config.enable_early_exit
         self.collect_reg_loss = config.collect_reg_loss
 
-        self.layers = ModuleList([MoEUTLayer(config) for _ in range(config.n_group)])
+        match config.execution_mode.value:
+            case ExecutionMode.MoE.value:
+                self.layers = ModuleList(
+                    [MoEUTLayer(config) for _ in range(config.n_layers)]
+                )
+            case ExecutionMode.Transformer.value:
+                self.layers = ModuleList(
+                    [SimpleLayer(config) for _ in range(config.n_layers)]
+                )
+            case _:
+                raise ValueError(
+                    f"{config.execution_mode} needs to be one of {ExecutionMode}"
+                )
 
         self.router = torch.nn.Parameter(torch.empty(self.d_model))
         self.tau = torch.nn.Parameter(torch.ones(1))
@@ -1366,7 +1485,7 @@ class MoEUT(MoEUTPretrainedModel):
 
         # Initialize layer parameters
         for layer in self.modules():
-            if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
+            if isinstance(layer, DynaModule):
                 layer.reset_parameters(scale)
             elif isinstance(layer, (RMSNorm, torch.nn.LayerNorm)):
                 if hasattr(layer, "reset_parameters"):
@@ -1383,10 +1502,10 @@ class MoEUT(MoEUTPretrainedModel):
             1, device=next(self.parameters()).device, dtype=torch.float32
         )
         for layer in self.modules():
-            if isinstance(layer, SigmaMoE) and hasattr(layer, "get_reg_loss"):
-                reg_loss = reg_loss + self.reg_entropy * layer.get_reg_loss()
-            elif isinstance(layer, SwitchHeadCore) and hasattr(layer, "get_reg_loss"):
+            if isinstance(layer, AttentionModule) and hasattr(layer, "get_reg_loss"):
                 reg_loss = reg_loss + self.reg_entropy_attn * layer.get_reg_loss()
+            elif isinstance(layer, DynaModule) and hasattr(layer, "get_reg_loss"):
+                reg_loss = reg_loss + self.reg_entropy * layer.get_reg_loss()
         return reg_loss
 
     def forward(
@@ -1411,49 +1530,43 @@ class MoEUT(MoEUTPretrainedModel):
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x, li + idx + 2, e, self.router, cum_sum, self.tau, mask
                 )
-                
+
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
-                
+
                 # make continue_processing just be conditioned on the last token
                 if not continue_processing:
                     break
                 # Track sequence lengths and entropy for analysis
-                self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                self._latent_vectors[-1].append(x.clone().detach())
-                self._exit_logits[-1].append(s_exit.clone().detach())
-                self._expert_sel[-1].append(expert_sel)
+                # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                # self._latent_vectors[-1].append(x.clone().detach())
+                # self._exit_logits[-1].append(s_exit.clone().detach())
+                # self._expert_sel[-1].append(expert_sel)
 
             if not continue_processing:
                 break
-                
-        # Force garbage collection
-        torch.cuda.empty_cache()
-        print(f"Step out: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        
+
         # Collect regularization loss if enabled
         reg_loss = None
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return CausalLMOutputWithPast(
-            loss=None, logits=x, past_key_values=None
-        )
+        return CausalLMOutputWithPast(loss=None, logits=x, past_key_values=None)
 
 
 # Done except reset params
-#@beartype
-class MoEUTLM(MoEUTPretrainedModel):
+@beartype
+class DynaLM(DynaPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
-    def __init__(self, config: MoEUTConfig, eos_token_id: int):
+    def __init__(self, config: DynaConfig, eos_token_id: int):
         super().__init__(config)
 
         # Core transformer
-        self.transformer = MoEUT(config)
+        self.transformer = DynaFormer(config)
 
         # Model configuration
-        self.n_layers = config.n_layers
+        self.n_repeats = config.n_repeats
         self.use_rms_norm = config.use_rms_norm
 
         # Input/output layers
@@ -1518,7 +1631,7 @@ class MoEUTLM(MoEUTPretrainedModel):
 
             attention_masks.append(mask)
 
-        return torch.stack(attention_masks).to(input_ids.device)
+        return torch.stack(attention_masks).to(input_ids.device, non_blocking=True)
 
     def _generate_source_len_mask(
         self, attention_mask: Bool[Tensor, "batch seq seq"]
@@ -1538,7 +1651,7 @@ class MoEUTLM(MoEUTPretrainedModel):
             # For each position, count how many previous positions it can attend to
             for pos in range(seq_len):
                 # Count valid positions this token can attend to (including itself)
-                valid_positions = mask[pos, : pos + 1].sum().item()
+                valid_positions = mask[pos, : pos + 1].sum()
                 position_mask[batch_idx, pos] = (
                     valid_positions - 1
                 )  # 0-indexed positions
@@ -1582,17 +1695,17 @@ class MoEUTLM(MoEUTPretrainedModel):
 
 
 # Done
-#@beartype
-class ComposerMoEUT(HuggingFaceModel):
+@beartype
+class ComposerDynaModel(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
 
     def __init__(
         self,
-        config: MoEUTConfig,
+        config: DynaConfig,
         tokenizer: PreTrainedTokenizerBase,
     ):
 
-        model = MoEUTLM(config, tokenizer.eos_token_id)
+        model = DynaLM(config, tokenizer.eos_token_id)
 
         # Configuration
         self.vocab_size = config.vocab_size
@@ -1614,20 +1727,19 @@ class ComposerMoEUT(HuggingFaceModel):
         )
 
     def forward(self, batch) -> CausalLMOutputWithPast:
-        
-        # self.model.transformer._expert_sel.clear()
-        # self.model.transformer._exit_logits.clear()
-        # self.model.transformer._latent_vectors.clear()
-        # self.model.transformer._seq_len.clear()
+
+        self.model.transformer._expert_sel.clear()
+        self.model.transformer._exit_logits.clear()
+        self.model.transformer._latent_vectors.clear()
+        self.model.transformer._seq_len.clear()
         """Forward pass through the model."""
         # Force cleanup before forward pass
-        torch.cuda.empty_cache()
-        
+
         return self.model(
-                    input_ids=batch.get("input_ids", None),
-                    inputs_embeds=batch.get("inputs_embeds", None),
-                    attention_mask=batch.get("attention_mask", None),
-                )  
+            input_ids=batch.get("input_ids", None),
+            inputs_embeds=batch.get("inputs_embeds", None),
+            attention_mask=batch.get("attention_mask", None),
+        )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> Float[Tensor, ""]:
         """Compute training loss."""
@@ -1641,3 +1753,7 @@ class ComposerMoEUT(HuggingFaceModel):
         )
 
         return compute_loss_from_logits(outputs, self.shift_labels, labels, loss_fn)
+
+
+# @beartype
+# def verify_config(config: DynaConfig):

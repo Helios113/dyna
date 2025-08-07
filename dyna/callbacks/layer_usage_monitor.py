@@ -23,7 +23,7 @@ class LayerUsageMonitor(Callback):
 
     def __init__(
         self,
-        log_interval: str = "1ba",
+        log_interval: str = "100ba",
         figsize: tuple[int, int] = (12, 8)
     ):
         super().__init__()
