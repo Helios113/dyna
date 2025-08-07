@@ -16,3 +16,4 @@ data_cache/
 wandb/
 logs/
 *.mds
+*.json
