@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Optional
 import torch
 import torch.nn.functional as F
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from composer.models import HuggingFaceModel
 from torch.nn.modules.normalization import RMSNorm
 from llmfoundry.utils.builders import build_metric
@@ -16,6 +17,7 @@ from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
 from .model_config import NormStructure, RescaleMethod, ExecutionMode
 
+# from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Float, Int, Bool
 from torch import Tensor
@@ -31,6 +33,7 @@ PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.cum_avg_prot_emb,
     RescaleMethod.sqrt_prot_emb,
 ]
+
 
 @beartype
 def get_targets(labels: Int[Tensor, "batch seq"]) -> Int[Tensor, "batch seq"]:
@@ -91,73 +94,63 @@ def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tenso
     return -entropy_l(sel).mean()
 
 
-@beartype
 class DynaConfig(PretrainedConfig):
     """Configuration class for Dyna model."""
 
     model_type = "dyna"
 
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int,
-        n_repeats: int,
-        n_heads: int,
-        n_experts_ffn: int,
-        n_experts_attn: int,
-        d_head: int,
-        d_ffn: int,
-        norm_structure: NormStructure,
-        rescaling_method: RescaleMethod,
-        n_layers: int = 2,
-        k_ffn: int = 8,
-        k_attn: int = 2,
-        dropout_expert_ffn: float = 0.0,
-        dropout_expert_attn: float = 0.0,
-        d_expert_ffn: int = 128,
-        dropout: float = 0.0,
-        reg_entropy: float = 0.01,
-        reg_entropy_attn: float = 0.001,
-        shift_labels: bool = True,
-        n_expert_shared_ffn: int = 1,
-        n_expert_shared_attn: int = 1,
-        enable_early_exit: bool = True,
-        use_rms_norm: bool = True,
-        collect_reg_loss: bool = False,
-        execution_mode: ExecutionMode = ExecutionMode.MoE,
-        **kwargs,
-    ):
+    def __init__(self, **kwargs):
         super().__init__(**{"model_type": self.model_type})
-        self.vocab_size = vocab_size
-        self.d_model = d_model
-        self.n_repeats = n_repeats
-        self.n_heads = n_heads
-        self.d_head = d_head
-        self.d_ffn = d_ffn
-
-        self.n_experts_ffn = n_experts_ffn
-        self.n_experts_attn = n_experts_attn
-        self.d_expert_ffn = d_expert_ffn
-        self.n_expert_shared_ffn = n_expert_shared_ffn
-        self.n_expert_shared_attn = n_expert_shared_attn
-
-        self.n_layers = n_layers
-        self.k_ffn = k_ffn
-        self.k_attn = k_attn
-
-        self.dropout_expert_ffn = dropout_expert_ffn
-        self.dropout_expert_attn = dropout_expert_attn
-        self.dropout = dropout
-        self.reg_entropy = reg_entropy
-        self.reg_entropy_attn = reg_entropy_attn
-
-        self.shift_labels = shift_labels
-        self.enable_early_exit = enable_early_exit
-        self.use_rms_norm = use_rms_norm
-        self.collect_reg_loss = collect_reg_loss
-        self.norm_structure = norm_structure
-        self.rescaling_method = rescaling_method
-        self.execution_mode = execution_mode
+        
+        # Import required for enum handling
+        from .model_config import ModelConfig, NormStructure, RescaleMethod, ExecutionMode
+        
+        # Required parameters with defaults from model_config
+        self.vocab_size = kwargs.pop("vocab_size", 49152)
+        self.d_model = kwargs.pop("d_model", 412)
+        self.n_repeats = kwargs.pop("n_repeats", 18)
+        self.n_heads = kwargs.pop("n_heads", 4)
+        self.n_experts_ffn = kwargs.pop("n_experts_ffn", 155)
+        self.n_experts_attn = kwargs.pop("n_experts_attn", 8)
+        self.d_head = kwargs.pop("d_head", 82)
+        self.d_ffn = kwargs.pop("d_ffn", 4096)  # Default based on typical transformer sizing
+        
+        # Handle enums properly
+        norm_structure_val = kwargs.pop("norm_structure", "MoUET")
+        if isinstance(norm_structure_val, str):
+            self.norm_structure = NormStructure[norm_structure_val]
+        else:
+            self.norm_structure = norm_structure_val
+            
+        rescaling_method_val = kwargs.pop("rescaling_method", "none")
+        if isinstance(rescaling_method_val, str):
+            self.rescaling_method = RescaleMethod[rescaling_method_val]
+        else:
+            self.rescaling_method = rescaling_method_val
+        
+        # Parameters with defaults
+        self.n_layers = kwargs.pop("n_layers", 2)
+        self.k_ffn = kwargs.pop("k_ffn", 12)
+        self.k_attn = kwargs.pop("k_attn", 2)
+        self.dropout_expert_ffn = kwargs.pop("dropout_expert_ffn", 0.0)
+        self.dropout_expert_attn = kwargs.pop("dropout_expert_attn", 0.0)
+        self.d_expert_ffn = kwargs.pop("d_expert_ffn", 128)
+        self.dropout = kwargs.pop("dropout", 0.0)
+        self.reg_entropy = kwargs.pop("reg_entropy", 0.01)
+        self.reg_entropy_attn = kwargs.pop("reg_entropy_attn", 0.001)
+        self.shift_labels = kwargs.pop("shift_labels", True)
+        self.n_expert_shared_ffn = kwargs.pop("n_expert_shared_ffn", 0)
+        self.n_expert_shared_attn = kwargs.pop("n_expert_shared_attn", 0)
+        self.enable_early_exit = kwargs.pop("enable_early_exit", False)
+        self.use_rms_norm = kwargs.pop("use_rms_norm", True)
+        self.collect_reg_loss = kwargs.pop("collect_reg_loss", False)
+        
+        # Handle execution_mode enum
+        execution_mode_val = kwargs.pop("execution_mode", "MoE")
+        if isinstance(execution_mode_val, str):
+            self.execution_mode = ExecutionMode[execution_mode_val]
+        else:
+            self.execution_mode = execution_mode_val
 
 
 @beartype
@@ -191,12 +184,11 @@ class AttentionModule(DynaModule):
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE."""
         # Apply rotary position encoding
+        # Remove debug print that could cause issues
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
-
-        return F.scaled_dot_product_attention(
-            q, k, v, scale=1.0, attn_mask=attention_mask
-        )
+            
+        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=attention_mask)
 
     def _trim_attention_mask(
         self,
@@ -208,7 +200,7 @@ class AttentionModule(DynaModule):
         Int[Tensor, "batch max_len"],
     ]:
         if skip_mask is None:
-            return mask[0].unsqueeze(1).expand(-1, 4, -1, -1), mask[1]
+            return mask[0].unsqueeze(1).expand(-1, self.n_heads, -1, -1), mask[1]
         lengths = skip_mask.sum(dim=1)
         max_len = round_up_to_multiple_of_256(lengths.max())
 
@@ -264,6 +256,67 @@ class AttentionModule(DynaModule):
         else:
             # Apply RoPE to entire tensors
             return self.pe(q, k, position_mask_trimed, position_mask_full)
+
+
+class DummyAttention(AttentionModule):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        d_head: int,
+        dropout: float = 0.0,
+        rotate_fraction: float = 1.0,
+        rope_base: float = 10000,
+    ):
+        super().__init__()
+        # Model configuration
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_head
+        self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else lambda x: x
+
+        # Query and Key projections (shared)
+        self.q = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.k = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.v = torch.nn.Linear(self.d_model, self.n_heads * self.d_head, bias=False)
+        self.o = torch.nn.Linear(self.n_heads * self.d_head, self.d_model, bias=False)
+
+        # RoPE configuration
+        self.n_rotate = int(rotate_fraction * self.d_head)
+        if self.n_rotate > 0:
+            self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
+
+        # Attention scale
+        self.register_buffer(
+            "scale",
+            torch.full([1], 1.0 / math.sqrt(self.d_head)),
+            persistent=False,
+        )
+
+    def reset_parameters(self, std_scale: float) -> None:
+        # Initialize projection parameters
+        torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+
+    def forward(
+        self,
+        q_src: Float[Tensor, "batch seq d_model"],
+        k_src: Float[Tensor, "batch seq d_model"],
+        v_src: Float[Tensor, "batch seq d_model"],
+        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        skip_mask: None | Bool[Tensor, "batch seq"],
+    ) -> tuple[
+        Float[Tensor, "batch seq d_model"],
+        tuple[None, None],
+    ]:
+
+        return q_src, (None, None)
+
+    def get_reg_loss(self) -> torch.Tensor:
+        """Return zero for regularization loss since DummyAttention doesn't use expert routing."""
+        return torch.tensor(0.0, device=self.q.weight.device, dtype=self.q.weight.dtype)
 
 
 @beartype
@@ -1002,10 +1055,10 @@ class SwitchHead(AttentionModule):
         Int[Tensor, "batch seq n_heads k_experts"],
     ]:
         """Get expert selection indices and weights."""
-        # Compute selection scores
+        # Compute selection scores - remove explicit float() cast
         affinity: Float[Tensor, "batch seq n_heads_x_experts"] = F.linear(
             input_tensor, weight
-        ).float()
+        )
         affinity_raw: Float[Tensor, "batch seq n_heads n_experts"] = affinity.view(
             *affinity.shape[:-1], self.n_heads, -1
         )
@@ -1075,7 +1128,7 @@ class SwitchHead(AttentionModule):
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        skip_mask: Bool[Tensor, "batch seq"],
+        skip_mask: None | Bool[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[
@@ -1243,7 +1296,7 @@ class RotaryPosEncoding(Module):
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         position_mask_trimed: Int[Tensor, "batch max_len"],
-        position_mask_full: Int[Tensor, "batch max_len"],
+        position_mask_full: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
@@ -1286,17 +1339,21 @@ class MoEUTLayer(LayerModule):
         self,
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
-        e: Float[Tensor, "batch seq d_model"],
+        e: None | Float[Tensor, "batch seq d_model"],
         router: torch.nn.Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
     ) -> tuple[
-        Float[Tensor, "batch seq d_model"], bool, int, Float[Tensor, "batch seq"], tuple
+        Float[Tensor, "batch seq d_model"],
+        bool,
+        int,
+        None | Float[Tensor, "batch seq"],
+        tuple,
     ]:
         """Forward pass through the layer with configurable behavior."""
         skip_mask, continue_processing, s_exit = self._check_early_exit(
-            x, router, cum_sum, tau, layer_index
+            x, router, cum_sum, tau
         )
 
         if not continue_processing:
@@ -1425,6 +1482,7 @@ class SimpleLayer(LayerModule):
             (expert_sel_attn, expert_sel_ffn),
         )
 
+
 @beartype
 class DynaPretrainedModel(PreTrainedModel):
     """Base class for Dyna pretrained models."""
@@ -1434,6 +1492,7 @@ class DynaPretrainedModel(PreTrainedModel):
     is_parallelizable: bool = False
     main_input_name: str = "input_ids"
     load_tf_weights = None
+
 
 @beartype
 class DynaFormer(DynaPretrainedModel):
@@ -1497,9 +1556,13 @@ class DynaFormer(DynaPretrainedModel):
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.collect_reg_loss:
-            return torch.tensor(0.0, device=next(self.parameters()).device)
+            device = next(self.parameters()).device
+            dtype = next(self.parameters()).dtype
+            return torch.tensor(0.0, device=device, dtype=dtype)
         reg_loss = torch.zeros(
-            1, device=next(self.parameters()).device, dtype=torch.float32
+            1,
+            device=next(self.parameters()).device,
+            dtype=next(self.parameters()).dtype,
         )
         for layer in self.modules():
             if isinstance(layer, AttentionModule) and hasattr(layer, "get_reg_loss"):
@@ -1755,5 +1818,3 @@ class ComposerDynaModel(HuggingFaceModel):
         return compute_loss_from_logits(outputs, self.shift_labels, labels, loss_fn)
 
 
-# @beartype
-# def verify_config(config: DynaConfig):

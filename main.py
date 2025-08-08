@@ -81,14 +81,6 @@ def main(cfg: DictConfig):
         **cfg.trainer_config,
     )
 
-    # with torch.profiler.profile(
-    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-    #     record_shapes=True,
-    #     with_stack=True
-    # ) as prof:
-    #     trainer.fit()
-    # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30), flush=True)
-
     trainer.fit()
 
 

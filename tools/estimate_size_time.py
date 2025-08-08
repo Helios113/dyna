@@ -9,12 +9,12 @@ from torchinfo import summary
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from model.model import MoEUTConfig, ComposerMoEUT
+from model.model import DynaConfig, ComposerDynaModel
 from dyna.utils.utils import build_full_concrete_config
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-@hydra.main(version_base=None, config_path="../configuration", config_name="MoA_moeut")
+@hydra.main(version_base=None, config_path="../configuration", config_name="Transformer")
 def main(cfg: DictConfig):
     # Build full concrete config (merges model, trainer, data, etc.)
     full_cfg = build_full_concrete_config(cfg)
@@ -25,16 +25,16 @@ def main(cfg: DictConfig):
     model_cfg_dict = OmegaConf.to_container(model_cfg, resolve=True)
     
     # Convert to MoEUTConfig (inherits from PretrainedConfig)
-    hf_cfg = MoEUTConfig(**model_cfg_dict)
+    hf_cfg = DynaConfig(**model_cfg_dict)
     # Instantiate model and move to CUDA
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
-    model = ComposerMoEUT(hf_cfg, tokenizer).to(device)
+    model = ComposerDynaModel(hf_cfg, tokenizer).to(device)
     
     # Get batch size and sequence length from config
-    batch_size = getattr(model_cfg, "batch_size", 32)
+    batch_size = getattr(model_cfg, "batch_size", 6)
     seq_length = getattr(model_cfg, "max_seq_len", 1024)
 
     # Create input shape for torchinfo
@@ -47,19 +47,19 @@ def main(cfg: DictConfig):
     print(f"Total DataSize: {data.numel()*8/1000000}MB")
 
    
-    print("eval1")
+    # print("eval1")
     
-    output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    with torch.no_grad():
-        print("eval")
-        output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    model.train()
-    print("train2")
-    output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    loss = model.loss(output,{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    loss.backward()
-    for name, param in model.named_parameters(recurse=True):
-        print(name, param.grad is not None)
+    # output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
+    # with torch.no_grad():
+    #     print("eval")
+    #     output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
+    # model.train()
+    # print("train2")
+    # output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
+    # loss = model.loss(output,{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
+    # loss.backward()
+    # for name, param in model.named_parameters(recurse=True):
+    #     print(name, param.grad is not None)
     # Use torchinfo summary for comprehensive model profiling
     model_summary = summary(
         model,
@@ -92,9 +92,6 @@ def main(cfg: DictConfig):
         print(f"Steps needed for batch_size={batch_size}, seq_length={seq_length}: {steps:,}")
     else:
         print("Batch size or sequence length is zero; cannot compute steps.")
-    
-    
-    
     
 if __name__ == "__main__":
     main()

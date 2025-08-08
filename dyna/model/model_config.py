@@ -111,7 +111,7 @@ class TrainerConfig:
     parallelism_config: dict | None = None
 
     # System/Numerics
-    device: str | None = "meta"
+    device: str | None = "gpu"
     precision: str | None = None
     precision_config: dict | None = None
     device_train_microbatch_size: str | int | None = "auto"
