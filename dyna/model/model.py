@@ -12,7 +12,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedCon
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from torch.nn import Module, ModuleList
+from torch.nn import Module, ModuleList, Parameter
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
 from .model_config import NormStructure, RescaleMethod, ExecutionMode
@@ -70,7 +70,7 @@ def compute_loss_from_logits(
 def round_up_to_multiple_of_256(n: torch.Tensor) -> torch.Tensor:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
-        return torch.Tensor(256)
+        return torch.tensor(256, device=n.device)  # Ensure tensor is on the same device as input
     return ((n - 1) // 256 + 1) * 256
 
 
@@ -116,7 +116,7 @@ class DynaConfig(PretrainedConfig):
         self.d_ffn = kwargs.pop("d_ffn", 4096)  # Default based on typical transformer sizing
         
         # Handle enums properly
-        norm_structure_val = kwargs.pop("norm_structure", "MoUET")
+        norm_structure_val = kwargs.pop("norm_structure", "moeut")
         if isinstance(norm_structure_val, str):
             self.norm_structure = NormStructure[norm_structure_val]
         else:
@@ -144,9 +144,9 @@ class DynaConfig(PretrainedConfig):
         self.enable_early_exit = kwargs.pop("enable_early_exit", False)
         self.use_rms_norm = kwargs.pop("use_rms_norm", True)
         self.collect_reg_loss = kwargs.pop("collect_reg_loss", False)
-        
+        self.device = kwargs.pop("device", "cuda")
         # Handle execution_mode enum
-        execution_mode_val = kwargs.pop("execution_mode", "MoE")
+        execution_mode_val = kwargs.pop("execution_mode", "moe")
         if isinstance(execution_mode_val, str):
             self.execution_mode = ExecutionMode[execution_mode_val]
         else:
@@ -334,8 +334,10 @@ class LayerModule(Module, ABC):
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.attn_pre = norm_class(config.d_model)
         self.attn_post = norm_class(config.d_model)
+        self.attn_post.requires_grad_(config.norm_structure in [NormStructure.peri,NormStructure.post])
         self.ffn_pre = norm_class(config.d_model)
         self.ffn_post = norm_class(config.d_model)
+        self.ffn_post.requires_grad_(config.norm_structure in [NormStructure.peri,NormStructure.post])
 
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
@@ -348,7 +350,7 @@ class LayerModule(Module, ABC):
     def _check_early_exit(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        router: torch.nn.Parameter,
+        router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
     ) -> tuple[
@@ -436,8 +438,8 @@ class LayerModule(Module, ABC):
         int,
     ]:
         if (
-            self.norm_structure.value == NormStructure.Peri.value
-            or self.norm_structure == NormStructure.Pre.value
+            self.norm_structure.value == NormStructure.peri.value
+            or self.norm_structure == NormStructure.pre.value
         ):
             # Peri, Pre
             residual_stream_normed = self.attn_pre(residual_stream)
@@ -448,7 +450,7 @@ class LayerModule(Module, ABC):
             k_val = residual_stream_normed
             v_val = residual_stream_normed
 
-        elif self.norm_structure.value == NormStructure.Post.value:
+        elif self.norm_structure.value == NormStructure.post.value:
             residual_stream_trimmed, max_len = self._trim_sequence(
                 residual_stream, skip_mask
             )
@@ -456,7 +458,7 @@ class LayerModule(Module, ABC):
             k_val = residual_stream
             v_val = residual_stream
 
-        elif self.norm_structure.value == NormStructure.MoUET.value:
+        elif self.norm_structure.value == NormStructure.moeut.value:
             residual_stream_normed = self.attn_pre(residual_stream)
             residual_stream_trimmed, max_len = self._trim_sequence(
                 residual_stream_normed, skip_mask
@@ -481,7 +483,7 @@ class LayerModule(Module, ABC):
         e: Optional[Float[Tensor, "batch seq d_model"]] = None,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
-        if self.norm_structure.value == NormStructure.Peri.value:
+        if self.norm_structure.value == NormStructure.peri.value:
             update = norm_to_use(update_on_stream)
         update = self.drop(update_on_stream)
 
@@ -542,7 +544,7 @@ class LayerModule(Module, ABC):
                 if e is not None:
                     residual_stream = residual_stream + e
 
-        if self.norm_structure.value == NormStructure.Post.value:
+        if self.norm_structure.value == NormStructure.post.value:
             residual_stream = norm_to_use(residual_stream)
 
         return residual_stream
@@ -550,17 +552,17 @@ class LayerModule(Module, ABC):
     def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
 
         if (
-            self.norm_structure.value == NormStructure.Peri.value
-            or self.norm_structure.value == NormStructure.Pre.value
+            self.norm_structure.value == NormStructure.peri.value
+            or self.norm_structure.value == NormStructure.pre.value
         ):
             # Peri, Pre
             residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
             ffn_val_2 = residual_stream_normed
-        elif self.norm_structure.value == NormStructure.Post.value:
+        elif self.norm_structure.value == NormStructure.post.value:
             ffn_val_1 = residual_stream
             ffn_val_2 = residual_stream
-        elif self.norm_structure.value == NormStructure.MoUET.value:
+        elif self.norm_structure.value == NormStructure.moeut.value:
             residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
             ffn_val_2 = residual_stream
@@ -575,7 +577,7 @@ class LayerModule(Module, ABC):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: Float[Tensor, "batch seq d_model"],
-        router: torch.nn.Parameter,
+        router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -619,13 +621,13 @@ class SigmaMoE(DynaModule):
         self.bias_update_lr = 0.001
 
         # Expert parameters
-        self.keys = torch.nn.Parameter(
+        self.keys = Parameter(
             torch.empty(self.n_experts_ffn, self.d_model, self.d_expert_ffn)
         )
-        self.values = torch.nn.Parameter(
+        self.values = Parameter(
             torch.empty(self.n_experts_ffn, self.d_expert_ffn, self.d_model)
         )
-        self.expert_sel = torch.nn.Parameter(
+        self.expert_sel = Parameter(
             torch.empty(self.n_experts_ffn, self.d_model)
         )
 
@@ -668,12 +670,12 @@ class SigmaMoE(DynaModule):
 
         if self.n_experts_ffn == 1:
             return torch.ones(
-                (selection_input.shape[0], selection_input.shape[1], 1)
-            ).to(selection_input.device), torch.zeros(
+                (selection_input.shape[0], selection_input.shape[1], 1),
+                device=selection_input.device,  # Ensure tensor is on the same device
+            ), torch.zeros(
                 (selection_input.shape[0], selection_input.shape[1], 1),
                 dtype=torch.int32,
-            ).to(
-                selection_input.device
+                device=selection_input.device,  # Ensure tensor is on the same device
             )
         # Compute selection scores
         affinity: Float[Tensor, "batch seq n_experts"] = F.sigmoid(
@@ -685,7 +687,7 @@ class SigmaMoE(DynaModule):
         # Apply dropout
         if self.training and self.dropout_expert > 0:
             mask = torch.rand_like(affinity) < self.dropout_expert
-            affinity = affinity.masked_fill(mask, float("-inf"))
+            affinity.masked_fill_(mask, float("-inf"))
 
         bias_term = (
             self.bias_ffn[: self.n_expert_routed_ffn]
@@ -755,7 +757,6 @@ class SigmaMoE(DynaModule):
         scores = self.activation(scores)
 
         # Down-projection: scores * expert_values
-        selection_indices = selection_indices.clone()
         selection_indices.reduction_weight = affinity
         selection_indices.sel_index = selection_indices.out_index
         selection_indices.out_index = None
@@ -770,7 +771,7 @@ class SigmaMoE(DynaModule):
     def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss and reset selection history."""
         if not self.selection_history_s_moe:
-            return torch.tensor(0.0, device=self.keys.device)
+            return torch.tensor(0.0, device=self.keys.device)  # Ensure tensor is on the correct device
 
         # Average over time and layers
         loss = entropy_reg(
@@ -983,26 +984,26 @@ class SwitchHead(AttentionModule):
     def _init_expert_parameters(self) -> None:
         """Initialize expert-specific parameters."""
         # Value and output projections for multiple experts
-        self.v = torch.nn.Parameter(
+        self.v = Parameter(
             torch.empty(self.n_heads * self.n_experts_attn, self.d_model, self.d_head)
         )
-        self.o = torch.nn.Parameter(
+        self.o = Parameter(
             torch.empty(self.n_heads * self.n_experts_attn, self.d_head, self.d_model)
         )
 
         # Expert selection parameters
-        self.sel_v = torch.nn.Parameter(
+        self.sel_v = Parameter(
             torch.empty(self.n_heads * self.n_experts_attn, self.d_model)
         )
-        self.sel_o = torch.nn.Parameter(
+        self.sel_o = Parameter(
             torch.empty(self.n_heads * self.n_experts_attn, self.d_model)
         )
 
         # Bias parameters for load balancing
-        self.bias_v = torch.nn.Parameter(
+        self.bias_v = Parameter(
             torch.zeros(self.n_experts_attn), requires_grad=False
         )
-        self.bias_o = torch.nn.Parameter(
+        self.bias_o = Parameter(
             torch.zeros(self.n_experts_attn), requires_grad=False
         )
 
@@ -1229,25 +1230,33 @@ class RotaryPosEncoding(Module):
         self.cos_cached = None
         self.sin_cached = None
         self.seq_dim = torch.tensor(seq_dim)
-
-    def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
-        """Rotate the second half of the last dimension."""
-        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+    
+    # In-place version for maximum memory efficiency
+    def rotate_half_optimized(self, x: torch.Tensor) -> torch.Tensor:
+        """Optimized rotation of the second half of the last dimension."""
+        # Avoid redundant shape calculation and use tensor.chunk for cleaner split
+        x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=x1.ndim - 1)
 
-    def apply_rot(
+    def apply_rot_optimized(
         self,
-        x: Float[Tensor, "batch n_heads seq d_head"],
-        positions: Int[Tensor, "batch seq"],
-    ) -> Float[Tensor, "batch n_heads seq d_head"]:
-        """Apply rotary position encoding to input tensor."""
-
+        x: torch.Tensor,  # [batch, n_heads, seq, d_head]
+        positions: torch.Tensor,  # [batch, seq]
+    ) -> torch.Tensor:
+        """Optimized rotary position encoding application."""
+        
         sin, cos = self.get_sincos_positions(positions, x)
+        
+        # Get sequence length once
+        seq_len = x.shape[self.seq_dim]
+        
+        # Use slice instead of narrow (more readable, same performance)
+        sin = sin[..., :seq_len, :]
+        cos = cos[..., :seq_len, :]
+        
+        # Apply rotation in one line using the optimized rotate_half
+        return x * cos + self.rotate_half_optimized(x) * sin
 
-        sin = sin.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
-        cos = cos.narrow(self.seq_dim, 0, x.shape[self.seq_dim])
-
-        return (x * cos) + (self.rotate_half(x) * sin)
 
     def get_sincos_cached(
         self, x: Float[Tensor, "batch n_heads seq d_head"]
@@ -1259,7 +1268,7 @@ class RotaryPosEncoding(Module):
             self.seq_len_cached = seq_len
             t = torch.arange(x.shape[self.seq_dim], device=x.device).type_as(
                 self.inv_freq
-            )
+            )  # Ensure tensor is on the same device
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
 
@@ -1290,7 +1299,6 @@ class RotaryPosEncoding(Module):
         tgt_shape[-1] = q.shape[-1]
 
         return emb.sin().view(*tgt_shape), emb.cos().view(*tgt_shape)
-
     def forward(
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
@@ -1303,8 +1311,8 @@ class RotaryPosEncoding(Module):
     ]:
         """Apply RoPE to query and key tensors."""
         return (
-            self.apply_rot(q, position_mask_trimed),
-            self.apply_rot(k, position_mask_full),
+            self.apply_rot_optimized(q, position_mask_trimed),
+            self.apply_rot_optimized(k, position_mask_full),
         )
 
 
@@ -1340,7 +1348,7 @@ class MoEUTLayer(LayerModule):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
-        router: torch.nn.Parameter,
+        router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -1424,7 +1432,7 @@ class SimpleLayer(LayerModule):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
-        router: torch.nn.Parameter,
+        router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -1507,13 +1515,14 @@ class DynaFormer(DynaPretrainedModel):
         self.d_model = config.d_model
         self.enable_early_exit = config.enable_early_exit
         self.collect_reg_loss = config.collect_reg_loss
-
+        self.router = Parameter(torch.zeros(self.d_model, device=config.device), requires_grad=False)
+        self.tau = Parameter(torch.ones(1, device=config.device), requires_grad=self.enable_early_exit)
         match config.execution_mode.value:
-            case ExecutionMode.MoE.value:
+            case ExecutionMode.moe.value:
                 self.layers = ModuleList(
                     [MoEUTLayer(config) for _ in range(config.n_layers)]
                 )
-            case ExecutionMode.Transformer.value:
+            case ExecutionMode.transformer.value:
                 self.layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
@@ -1522,8 +1531,7 @@ class DynaFormer(DynaPretrainedModel):
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
 
-        self.router = torch.nn.Parameter(torch.empty(self.d_model))
-        self.tau = torch.nn.Parameter(torch.ones(1))
+
 
         # Initialize parameters
         self.reset_parameters()
@@ -1653,72 +1661,74 @@ class DynaLM(DynaPretrainedModel):
             self.embedding.weight, mode="fan_in", nonlinearity="linear"
         )
         self.transformer.reset_parameters()
-
+    
     def _generate_causal_mask(
-        self, input_ids: Int[Tensor, "batch seq"]
-    ) -> Bool[Tensor, "batch seq seq"]:
-        """Create a causal attention mask for packed sequences."""
-
+        self, input_ids: Tensor  # [batch, seq]
+    ) -> Tensor:  # [batch, seq, seq]
+        """Ultra-optimized version using advanced vectorization."""
+        
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
-        # Create causal mask for each sample in the batch
-        attention_masks = []
+        
+        # Create base causal mask - use float16 to save memory if acceptable
+        base_causal = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device))
+        
+        # Find EOS positions
+        eos_mask = (input_ids == self.eos_token_id)  # [batch, seq]
+        
+        # Quick path: if no EOS tokens in entire batch
+        if not eos_mask.any():
+            return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        # Vectorized sequence ID computation for all batches at once
+        # Create cumulative EOS count to identify sequence boundaries
+        eos_positions = eos_mask.long()  # Convert to int: [batch, seq]
+        
+        
+        # Create sequence IDs by cumulative sum of EOS indicators
+        # Use a more efficient approach with broadcasting
+        sequence_ids = torch.cumsum(
+            torch.cat([
+                torch.zeros(batch_size, 1, dtype=torch.long, device=device),
+                eos_positions[:, :-1]
+            ], dim=1), 
+            dim=1
+        )  # [batch, seq]
+        
+        # Vectorized same-sequence mask computation
+        # Use broadcasting instead of unsqueeze for better memory efficiency
+        same_seq_mask = sequence_ids[:, :, None] == sequence_ids[:, None, :]  # [batch, seq, seq]
+        
+        # Apply masks efficiently
+        final_mask = base_causal[None, :, :] & same_seq_mask
+        
+        return final_mask
 
-        for batch_idx in range(batch_size):
-            x = input_ids[batch_idx]
-            # Find EOS token positions
-            eos_positions = (x == self.eos_token_id).nonzero(as_tuple=True)[0]
-
-            if len(eos_positions) == 0:
-                # No EOS tokens found, treat as single sequence
-                mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
-            else:
-                # Create base causal mask
-                mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
-
-                # Add sequence boundaries
-                sequence_starts = torch.cat(
-                    [torch.tensor([0]).to(device), eos_positions + 1]
-                )
-                sequence_ends = torch.cat(
-                    [eos_positions, torch.tensor([seq_len - 1]).to(device)]
-                )
-
-                # Mask out attention between different sequences
-                for i, (start, end) in enumerate(zip(sequence_starts, sequence_ends)):
-                    if i < len(sequence_starts) - 1:  # Not the last sequence
-                        # Tokens in current sequence shouldn't attend to future sequences
-                        mask[start : end + 1, end + 1 :] = False
-                        # Tokens in future sequences shouldn't attend to current sequence
-                        mask[end + 1 :, start : end + 1] = False
-
-            attention_masks.append(mask)
-
-        return torch.stack(attention_masks).to(input_ids.device, non_blocking=True)
 
     def _generate_source_len_mask(
         self, attention_mask: Bool[Tensor, "batch seq seq"]
     ) -> Int[Tensor, "batch seq"]:
         """Generate source length mask with position indices for each sequence."""
         batch_size, seq_len, _ = attention_mask.shape
-
-        # Initialize position mask
-        position_mask = torch.zeros(
-            batch_size, seq_len, dtype=torch.long, device=attention_mask.device
-        )
-
-        for batch_idx in range(batch_size):
-            mask = attention_mask[batch_idx]
-
-            # Find where attention is allowed (causal mask pattern)
-            # For each position, count how many previous positions it can attend to
-            for pos in range(seq_len):
-                # Count valid positions this token can attend to (including itself)
-                valid_positions = mask[pos, : pos + 1].sum()
-                position_mask[batch_idx, pos] = (
-                    valid_positions - 1
-                )  # 0-indexed positions
-
+        device = attention_mask.device
+        
+        # Create a range tensor for positions [0, 1, 2, ..., seq_len-1]
+        pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
+        
+        # Create upper triangular mask including diagonal: [[True], [True, True], [True, True, True], ...]
+        # This represents which positions each token can attend to
+        causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)  # [seq, seq]
+        
+        # Expand to batch dimension
+        causal_indices = causal_indices.unsqueeze(0).expand(batch_size, -1, -1)  # [batch, seq, seq]
+        
+        # Apply the attention mask to get valid positions
+        valid_positions = attention_mask & causal_indices  # [batch, seq, seq]
+        
+        # Sum along the last dimension to get count of valid positions each token can attend to
+        # Subtract 1 to make it 0-indexed
+        position_mask = valid_positions.sum(dim=-1) - 1  # [batch, seq]
+        
         return position_mask
 
     def forward(
@@ -1796,8 +1806,7 @@ class ComposerDynaModel(HuggingFaceModel):
         self.model.transformer._latent_vectors.clear()
         self.model.transformer._seq_len.clear()
         """Forward pass through the model."""
-        # Force cleanup before forward pass
-
+        
         return self.model(
             input_ids=batch.get("input_ids", None),
             inputs_embeds=batch.get("inputs_embeds", None),

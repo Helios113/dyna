@@ -2,29 +2,29 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-class NormStructure(Enum):
-    Peri = 0
-    Pre = 1
-    Post = 2
-    MoUET = 3
+class NormStructure(str, Enum):
+    peri = "peri"
+    pre = "pre"
+    post = "post"
+    moeut = "moeut"
 
 
-class RescaleMethod(Enum):
-    none = 0
-    cum_avg_prot_emb = 1
-    cum_avg_no_prot_emb = 2
-    sqrt_prot_emb = 3
-    sqrt_no_prot_emb = 4
+class RescaleMethod(str, Enum):
+    none = "none"
+    cum_avg_prot_emb = "cum_avg_prot_emb"
+    cum_avg_no_prot_emb = "cum_avg_no_prot_emb"
+    sqrt_prot_emb = "sqrt_prot_emb"
+    sqrt_no_prot_emb = "sqrt_no_prot_emb"
 
-class ExecutionMode(Enum):
-    MoE = 0
-    Transformer = 1
+class ExecutionMode(str, Enum):
+    moe = "moe"
+    transformer = "transformer"
 
 
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
-    execution_mode: ExecutionMode = ExecutionMode.MoE
+    execution_mode: ExecutionMode = ExecutionMode.moe
     vocab_size: int = 49152
     max_seq_len: int = 2048
     d_model: int = 1024
@@ -49,7 +49,7 @@ class ModelConfig:
     collect_reg_loss: bool = False
     enable_early_exit: bool = True
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
-    norm_structure: NormStructure = NormStructure.Peri
+    norm_structure: NormStructure = NormStructure.peri
     run_id: str | None = None
 
 
@@ -88,16 +88,16 @@ class TrainerConfig:
     load_path: str | None = None
     load_object_store: str | None = None  # Use str if not OmegaConf-compatible
     load_weights_only: bool = False
-    load_strict_model_weights: bool = True
+    load_strict_model_weights: bool = False
     load_progress_bar: bool = True
     load_ignore_keys: list | None = None  # Use list for OmegaConf compatibility
     load_exclude_algorithms: list | None = None
 
     # Save Checkpoint
     save_folder: str | None = None
-    save_filename: str = "ep{epoch}-ba{batch}-rank{rank}.pt"
+    save_filename: str = "new_ep{epoch}-ba{batch}-rank{rank}.pt"
     save_latest_filename: str | None = "latest-rank{rank}.pt"
-    save_overwrite: bool = False
+    save_overwrite: bool = True
     save_interval: str | None = "1ep"
     save_weights_only: bool = False
     save_ignore_keys: list | None = None

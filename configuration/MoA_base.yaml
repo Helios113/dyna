@@ -15,7 +15,7 @@ model_config:
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  norm_structure: "MoUET"
+  norm_structure: "moeut"
   rescaling_method: "none"
 
 
@@ -23,7 +23,7 @@ model_config:
 #     Peri = 0
 #     Pre = 1
 #     Post = 2
-#     MoUET = 3
+#     moeut = 3
 # class RescaleMethod(Enum):
 #     none = 0
 #     cum_avg_prot_emb = 1

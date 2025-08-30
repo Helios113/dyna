@@ -1,12 +1,12 @@
 model_config:
-  execution_mode: "Transformer"
-  d_model: 412
-  d_ffn: 40960
+  execution_mode: transformer
+  d_model: 1024
+  d_ffn: 1536
   n_repeats: 1
-  n_heads: 1
+  n_heads: 8
   n_experts_ffn: 155
   n_experts_attn: 8
-  d_head: 50
+  d_head: 128
   k_ffn: 12
   k_attn: 2
   d_expert_ffn: 128
@@ -17,15 +17,15 @@ model_config:
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  norm_structure: "Peri"
-  rescaling_method: "none"
+  norm_structure: peri
+  rescaling_method: none
 
 
 # class NormStructure(Enum):
 #     Peri = 0
 #     Pre = 1
 #     Post = 2
-#     MoUET = 3
+#     moeut = 3
 # class RescaleMethod(Enum):
 #     none = 0
 #     cum_avg_prot_emb = 1
