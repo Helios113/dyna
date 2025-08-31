@@ -20,7 +20,7 @@ from dyna.model.model_config import (
 import glob
 import yaml
 from omegaconf import OmegaConf, DictConfig
-
+import enum
 
 def generate_id(length: int = 8) -> str:
     """Generate a random base-36 string of `length` digits."""
@@ -30,36 +30,68 @@ def generate_id(length: int = 8) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def make_wandb_run_name(config: DictConfig) -> str:
+def make_wandb_run_name(model_config: DictConfig, trainer_config: DictConfig) -> str:
     """
     Generate a unique and informative wandb run name from config.
     Includes a consistent part (run_id), a unique part (timestamp), and key info.
     """
     # Consistent part: use config['run_id'] if present, else generate random string
-    run_id = config.get("run_id")
-    if not run_id:
-        run_id = generate_id(8)
+    run_name = trainer_config.get("run_name")
+    if not run_name:
+        run_name = generate_id(8)
     # Unique part: timestamp
     timestamp = time.strftime("%d%b%y").lower()
     unique = generate_id(8)
     # Important info: select a few key hyperparameters (customize as needed)
-    keys = [
-        "model",
-        "d_model",
-        "n_layers",
-        "n_heads",
-        "n_experts_ffn",
-        "n_experts_attn",
-        "ff_expert_size",
-        "dropout",
-    ]
+    abbrev_moa = {
+        "d_model": "dim",
+        "n_layers": "n_l",
+        "n_repeats": "n_r",
+        "n_heads": "n_h",
+        "d_head": "d_hd",
+        "n_experts_ffn": "n_e_ffn",
+        "n_experts_attn": "n_e_attn",
+        "ff_expert_size": "f_e_size",
+        "device_train_batch_size": "bs",
+        "enable_early_exit": "ee",
+        "execution_mode": "mode",
+        "norm_structure": "norm",
+        "rescaling_method": "rescale"
+    }
+    
+    abbrev_trans = {
+        "d_model": "dim",
+        "d_ffn": "d_ffn",
+        "n_layers": "n_l",
+        "n_heads": "n_h",
+        "d_head": "d_hd",
+        "device_train_batch_size": "bs",
+        "enable_early_exit": "ee",
+        "execution_mode": "mode",
+        "norm_structure": "norm",
+        "rescaling_method": "rescale"
+    }
+    
+    if model_config.get("execution_mode")=="moa":
+        keys = abbrev_moa
+    else:
+        keys = abbrev_trans
+
     info = []
-    for k in keys:
-        if k in config:
-            info.append(f"{k}={config[k]}")
+    for k, short in keys.items():
+        val = None
+        if k in model_config:
+            val = model_config[k]
+        elif k in trainer_config:
+            val = trainer_config[k]
+        if "." in str(val):
+            val = str(val).split(".")[-1]  # Simplify floats
+        if val is not None:
+            info.append(f"{short}~{val}")
+
     info_str = "_".join(info)
     # Compose name
-    name = f"{run_id}_{timestamp}_{unique}"
+    name = f"{run_name}_{timestamp}_{unique}"
     if info_str:
         name += f"_{info_str}"
     return name

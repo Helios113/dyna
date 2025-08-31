@@ -12,5 +12,25 @@
 #SBATCH --output=tests_new/%x.%j.ans
 
 
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
 
-HYDRA_FULL_ERROR=1 CUDA_LAUNCH_BLOCKING=1 uv run python main.py --config-name=MoA_moeut
+status=$?
+if [ $status -eq 0 ]; then
+   # Add notification after job completion
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment finished" \
+    --form-string "sound=experiment" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json
+
+else
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment failed" \
+    --form-string "sound=experiment_failed" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json
+fi

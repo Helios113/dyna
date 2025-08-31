@@ -80,7 +80,7 @@ class TrainerConfig:
     progress_bar: bool = False
     log_to_console: bool = True
     console_stream: str | None = "stderr"
-    console_log_interval: str | None = "10ba"
+    console_log_interval: str | None = "50ba"
     log_traces: bool = False
     auto_log_hparams: bool = False
 

@@ -24,3 +24,8 @@ MoEUT_727M = dict(
 MoEUT_1B = dict(
     d_model=1536, n_layers=36, n_heads=6, ff_n_experts=565, att_n_experts=12, d_head=128, 
     ff_k=24, group_size=4)
+
+
+MoEUT_Test = dict(d_model=768, n_layers=12, n_heads=3, ff_n_experts=192, att_n_experts=10, d_head=128, 
+    ff_k=12, group_size=2)
+    

@@ -88,7 +88,7 @@ class ExitEntropyCallback(Callback):
         """
         Called at the end of each batch to compute and log entropy.
         """
-        if not state.model.training or not self._should_log(state):
+        if not self._should_log(state):
             # Always clear to avoid memory leak, even if not logging
             state.model.model.transformer._exit_logits = []
             return
@@ -102,13 +102,7 @@ class ExitEntropyCallback(Callback):
         # Keep everything on GPU
         data_proc = []
         for elem in batch_latentes:
-            for i, sample in enumerate(elem):
-                # Ensure tensors stay on GPU
-                if not isinstance(sample, torch.Tensor):
-                    sample = torch.tensor(sample, device=state.model.device)
-                elif sample.device != state.model.device:
-                    sample = sample.to(state.model.device)
-                    
+            for i, sample in enumerate(elem):    
                 if i == len(data_proc):
                     data_proc.append(sample)
                 else:

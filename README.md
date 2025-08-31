@@ -151,11 +151,28 @@ Future work:
     Dynamic number of experts per iteration
 
 
-
-
-
-
 Where will I handle the rescaling
     In the main body I guess
     What about the norming, I think it should be hidden in the modules
     
+
+
+TODO:
+
+Take a break
+    Check the end of trainig time and make sure to start documenting before end of today
+    5. Document everything
+    1. Make better naming scheme
+        Make sure entropy works with Transformer model?
+    2. Look into the early exit
+    3. Implement Geiping
+    4. Fix the other balancing methods
+
+What can be the issue
+    Attention mask --good
+    Position mask -- good
+    RoPE
+    Norms and application of blocks --good
+    Metrics some how affect gradient -- mhmmm
+
+    Both transformer with simple and moeut with moeut layers gets messed up so likley it is the norming and block application

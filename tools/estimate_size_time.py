@@ -14,13 +14,13 @@ from dyna.utils.utils import build_full_concrete_config
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-@hydra.main(version_base=None, config_path="../configuration", config_name="Transformer")
+@hydra.main(version_base=None, config_path="../configuration", config_name="MoA_moeut")
 def main(cfg: DictConfig):
     # Build full concrete config (merges model, trainer, data, etc.)
     full_cfg = build_full_concrete_config(cfg)
     # Use model_config from DictConfig (OmegaConf object)
     model_cfg = full_cfg.model_config
-    
+    train_cfg = full_cfg.train
     # Convert OmegaConf to raw dict to avoid enum type conflicts
     model_cfg_dict = OmegaConf.to_container(model_cfg, resolve=True)
     
@@ -34,7 +34,7 @@ def main(cfg: DictConfig):
     model = ComposerDynaModel(hf_cfg, tokenizer).to(device)
     
     # Get batch size and sequence length from config
-    batch_size = getattr(model_cfg, "batch_size", 6)
+    batch_size = 1
     seq_length = getattr(model_cfg, "max_seq_len", 1024)
 
     # Create input shape for torchinfo
@@ -64,7 +64,7 @@ def main(cfg: DictConfig):
     model_summary = summary(
         model,
         input_data=[{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)}],
-        depth=3,  # Show 3 levels of nesting
+        depth=6,  # Show 3 levels of nesting
         col_names=["input_size", "output_size", "num_params", "params_percent", "kernel_size", "mult_adds", "trainable"],
         row_settings=["var_names"],
         verbose=1,

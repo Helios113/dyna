@@ -20,22 +20,29 @@ class CleanMetrics(Callback):
 
     def __init__(
         self,
+        interval: str = "1ba",
     ):
         super().__init__()
+        self.interval = (
+            Time.from_timestring(interval)
+            if isinstance(interval, str)
+            else Time(interval, TimeUnit.BATCH)
+        )
+        
 
     def batch_start(self, state: State, logger: Logger) -> None:
-        """
-        Called at the end of each batch to compute and log entropy.
-
-        Args:
-            state: Composer training state
-            logger: Composer logger instance
-        """
         transformer = state.model.model.transformer
-        transformer._latent_vectors = []
+        
+        if (state.timestamp.get(self.interval.unit) + Time.from_timestring("1ba"))  % self.interval.value == 0:
+            transformer.gather_stats = True
+        else:
+            transformer.gather_stats = False
+        
+        transformer._latent_vectors.clear()
         transformer._exit_logits = []
         transformer._seq_len = []
-        transformer._expert_sel = []
+        transformer._expert_sel.clear()
+        
         # Also clear sel_hist for all layers (attention and ffn)
         for layer in getattr(transformer, "layers", []):
             if hasattr(layer, "attention") and hasattr(layer.attention, "sel_hist"):

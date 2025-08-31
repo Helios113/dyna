@@ -23,6 +23,7 @@ class ShannonEntropyCallback(Callback):
         log_interval: str = "100ba",
         epsilon: float = 1e-10,
         figsize: tuple[int, int] = (12, 8),
+        log_key: str = "shannon_entropy"
     ):
         """
         Initialize the Shannon entropy callback.
@@ -32,6 +33,7 @@ class ShannonEntropyCallback(Callback):
                          "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
             epsilon: Small value to add for numerical stability. Default: 1e-10
             figsize: Figure size for entropy plots. Default: (12, 8)
+            log_key: Key for logging entropy metrics. Default: "shannon_entropy"
         """
         self.log_interval = (
             Time.from_timestring(log_interval)
@@ -41,6 +43,7 @@ class ShannonEntropyCallback(Callback):
         self.epsilon = epsilon
         self.last_batch_logged = -1
         self.figsize = figsize
+        self.log_key = log_key  # Initialize log_key
         # Storage for per-layer entropy data
         # self.entropy_data = []  # Add this back for the plot
         self.block_indices = []
@@ -70,7 +73,7 @@ class ShannonEntropyCallback(Callback):
         """
         # Convert logits to probabilities
         with torch.no_grad():
-            probs = F.softmax(lm_head(logits), dim=-1).clone().detach().cpu()
+            probs = F.softmax(lm_head(logits), dim=-1)
 
             # Add epsilon for numerical stability
             probs = probs + self.epsilon
@@ -79,19 +82,15 @@ class ShannonEntropyCallback(Callback):
             log_probs = torch.log(probs)
 
             # Compute Shannon entropy: H(p) = -sum(p * log(p))
-            entropy_per_position = -torch.sum(probs * log_probs, dim=-1)
+            entropy = -torch.sum(probs * log_probs, dim=-1)
 
-            # Average across batch and sequence dimensions
-            mean_entropy = torch.mean(entropy_per_position, dim=1)
-            final_token_entropy = entropy_per_position[-1]
-
-            return mean_entropy, final_token_entropy
+            return entropy
 
     def batch_end(self, state: State, logger: Logger) -> None:
         """
         Called at the end of each batch to compute and log entropy.
         """
-        if not state.model.training or not self._should_log(state):
+        if  not self._should_log(state):
             return
         
         metrics_dict = {}
@@ -106,25 +105,17 @@ class ShannonEntropyCallback(Callback):
             for i, sample in enumerate(elem):                
                 if i == len(data_proc):
                     data_proc.append(sample)
+                    
                 else:
-                    data_proc[i] = torch.cat([data_proc[i], sample])
-            break
-            
+                    data_proc[i] = torch.cat((data_proc[i],sample))
+        
         for elem in data_proc:
-            entropy, last_token_entrp = self._compute_shannon_entropy(elem, state.model.model.transformer._temp_lm_head)
+            entropy = self._compute_shannon_entropy(elem, state.model.model.transformer._temp_lm_head)
             batch_entropy.append(entropy)
-            batch_last_token_entrp.append(last_token_entrp)
             
         if batch_entropy:
-            # Keep on GPU until final aggregation
-            entropy_tensor = torch.stack(batch_entropy) if len(batch_entropy) > 1 else batch_entropy[0]
-            last_token_tensor = torch.stack(batch_last_token_entrp) if len(batch_last_token_entrp) > 1 else batch_last_token_entrp[0]
-            
-            metrics_dict["metrics/shanon_entropy"] = entropy_tensor.mean().item()
-            metrics_dict["metrics/last_token_entropy"] = last_token_tensor.mean().item()
-            
+            metrics_dict["metrics/shanon_entropy"] = batch_entropy[-1].mean().item()
             metrics_dict["entropy/shanon_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
-            metrics_dict["entropy/last_token_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_last_token_entrp))
 
         logger.log_metrics(metrics_dict)
 
@@ -169,26 +160,20 @@ class ShannonEntropyCallback(Callback):
             return fig
 
         # Only move to CPU when necessary for plotting, keep computation on GPU
-        means_gpu = torch.stack([d.mean() for d in data])
-        stds_gpu = torch.stack([d.std() for d in data])
-        
-        # Convert to CPU numpy only for matplotlib
-        means = means_gpu.cpu().numpy()
-        stds = stds_gpu.cpu().numpy()
-        x = np.arange(len(means))
-
-        # Clean up GPU tensors immediately
-        del means_gpu, stds_gpu
+        means = [d.mean().cpu().item() for d in data]
+        stds = [d.std().cpu().item() for d in data]
+        maxs = [mean+std for mean, std in zip(means, stds)]
+        mins = [mean-std for mean, std in zip(means, stds)]
+        # x = np.arange(len(means))
 
         fig, ax = plt.subplots(figsize=self.figsize)
-
+        print("means", means, flush=True)
         # Plot mean line
-        sns.lineplot(x=x, y=means, ax=ax, marker='o', color='royalblue', linewidth=2.0, label='Mean Entropy')
-
+        ax.plot(means, color='blue', label='Mean Entropy')
+        ax.ticklabel_format(style='plain', axis='both') 
         # Fill ±1 std area
-        ax.fill_between(x, means - stds, means + stds, color='blue', alpha=0.1, label='±1 Std Dev')
-        ax.set_yscale('linear')
-
+        ax.fill_between(range(len(mins)), mins, maxs, color='blue', alpha=0.1, label='±1 Std Dev')
+        plt.ylim(min(means)*0.9, max(means)*1.1)  # Adjust as neededs
         # Axis and formatting
         ax.set_title("Entropy Trend", fontsize=14)
         ax.set_xlabel("Index", fontsize=12)

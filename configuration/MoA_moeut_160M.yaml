@@ -1,36 +1,47 @@
 model_config:
   execution_mode: moe
-  d_model: 412
-  n_repeats: 9
-  n_heads: 4
-  n_experts_ffn: 155
-  n_experts_attn: 8
-  d_head: 82
+  d_model: 768
+  n_repeats: 6
+  n_heads: 3
+  n_experts_ffn: 192
+  n_experts_attn: 10
+  d_head: 128
   k_ffn: 12
   k_attn: 2
   d_expert_ffn: 128
   n_layers: 2
-  vocab_size: 49152
+  vocab_size: 50368
   max_seq_len: 1024
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  norm_structure: "peri"
-  rescaling_method: "cum_avg_prot_emb"
+  norm_structure: moeut
+  rescaling_method: none  
 
-  
+
+# class NormStructure(Enum):
+#     peri = 0
+#     pre = 1
+#     post = 2
+#     moeut = 3
+# class RescaleMethod(Enum):
+#     none = 0
+#     cum_avg_prot_emb = 1
+#     cum_avg_no_prot_emb = 2
+#     sqrt_prot_emb = 3
+#     sqrt_no_prot_emb = 4
+    
 train:
-  max_duration: "746ba"
-  warmup: "150ba"
-  cooldown: "150ba"
+  max_duration: "3171ba"
+  warmup: "634ba"
+  cooldown: "634ba"
   device_train_batch_size: 1024
 
 callbacks:
   lr_monitor: {}
-  clean_metrics: {
-    log_interval: "2"
-  }
+  clean_metrics:
+    interval: 100
   speed_monitor:
     window_size: 1
     gpu_flops_available:
@@ -50,15 +61,15 @@ callbacks:
   expert_selection_callback:
     attn_experts: ${model_config.n_experts_attn}
     ffn_experts: ${model_config.n_experts_ffn}
-    log_interval: 20
-  # entropy_callback:
-  #   log_interval: 20
+    log_interval: 100
+  entropy_callback:
+    log_interval: 100
   # layer_usage_monitor:
   #   log_interval: 20
   # # # activation_monitor_c: {}
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
   num_workers: 24
@@ -67,14 +78,13 @@ data_config:
   
 
 trainer_config:
-  run_name: "fp16"
+  run_name: "first"
   max_duration: ${train.max_duration}
   train_dataloader_label: "train"
   device_train_microbatch_size: 32
   precision: "amp_fp16"
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
-  # load_path: "s3://loop-llm/llm-models/latest/u7w1o3cr_30aug25_o3nonef4_d_model=768_n_layers=2_n_heads=3_n_experts_ffn=192_n_experts_attn=10_enable_early_exit=False_moe_moeut_none-ba9.pt"
   save_interval: "100ba"
   parallelism_config:
     pipeline_parallel_size: null

@@ -4,7 +4,7 @@ from typing import Tuple, Optional, Dict
 import math
 from dyna.model.cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from dataclasses import dataclass
-from flash_attn.ops.triton.layer_norm import RMSNorm
+from torch.nn.modules.normalization import RMSNorm
 
 @dataclass
 class AttentionMask:
@@ -62,10 +62,10 @@ class SigmaMoE(torch.nn.Module):
 
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
+        torch.manual_seed(42)
         torch.nn.init.normal_(self.expert_sel, 0, std_scale / math.sqrt(self.k_dim))
         torch.nn.init.normal_(self.keys, 0, std_scale / math.sqrt(self.k_dim))
         torch.nn.init.normal_(self.values, 0, std_scale / math.sqrt(self.n_experts * self.expert_size))
-
         self.renorm_keep_std(self.expert_sel, dim=1)
 
     def renorm_keep_std(self, weight: torch.Tensor, dim: int = 0):
@@ -155,6 +155,7 @@ class SwitchHeadCore(torch.nn.Module):
 
     @torch.no_grad
     def reset_parameters(self, std_scale: float):
+        torch.manual_seed(42)
         if self.n_experts > 1:
             torch.nn.init.normal_(self.sel_v, 0, std_scale / math.sqrt(self.input_size))
             self.renorm_rows(self.sel_v)
@@ -163,7 +164,9 @@ class SwitchHeadCore(torch.nn.Module):
         self.renorm_rows(self.sel_o)
 
         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.input_size))
-        torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.input_size))
+        # torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.input_size))
+        torch.nn.init.ones_(self.q.weight)
+        
         torch.nn.init.normal_(self.v, 0, std_scale / math.sqrt(self.input_size))
         torch.nn.init.normal_(self.o, 0, std_scale / math.sqrt(self.n_heads * self.projection_size))
 
@@ -269,7 +272,7 @@ class SwitchHeadCore(torch.nn.Module):
         k = self.k(k_src)
         # q : batch_size, seq_len, projection_size * n_heads
         # k : batch_size, seq_len, projection_size * n_heads
-        q = q * scale.type_as(q)
+        # q = q * scale.type_as(q)
         k = k * scale.type_as(k)
 
         # Wsv, Wso matrices?
@@ -299,7 +302,9 @@ class SwitchHeadCore(torch.nn.Module):
             }
 
         q = self.dropout(q)
+        print("q old", q.shape, flush=True)
         res = self.attend(pos_offset, v, k, q, self.get_mask_tensor(v.shape[-2], mask))
+        return res, None
         res = res.transpose(-2, -3)
 
         if self.n_experts > 1:
@@ -369,7 +374,7 @@ class RotaryPosEncoding(torch.nn.Module):
 class SwitchHeadRope(SwitchHeadCore):
     def __init__(self, d_model: int, n_heads: int, n_experts: int, dropout: float = 0.0,
                  projection_size: Optional[int] = None, expert_dropout: float = 0.0, moe_k: int = 2,
-                 rotate_fraction: float = 0.5, rope_base: float = 10000):
+                 rotate_fraction: float = 1.0, rope_base: float = 10000):
 
         super().__init__(
             d_model, n_heads, n_experts, dropout, projection_size, expert_dropout, moe_k)
@@ -386,8 +391,12 @@ class SwitchHeadRope(SwitchHeadCore):
             nr_q = q[..., self.n_rotate:]
 
             r_q, r_k = self.pe(r_q, r_k, offset)
+            print("Rotate part")
+
             return torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1)
         else:
+            print("Rotate full")
+            
             return self.pe(q, k, offset)
 
     def attend(self, pos_offset: int, v: torch.Tensor, k: torch.Tensor, q: torch.Tensor,
@@ -395,8 +404,11 @@ class SwitchHeadRope(SwitchHeadCore):
 
         if self.n_rotate > 0:
             q, k = self.rotate(q, k, pos_offset or 0)
-
-        return F.scaled_dot_product_attention(q, k, v, ~mask, scale=1.0)
+        print("q old rot", q.shape, flush=True)
+        import matplotlib.pyplot as plt
+        plt.imshow(~mask.cpu().detach().numpy())
+        plt.savefig("mask_old.png")
+        return F.scaled_dot_product_attention(q, k, v, ~mask)
 
 
 class MoEUTLayer(torch.nn.Module):
@@ -414,22 +426,26 @@ class MoEUTLayer(torch.nn.Module):
         # FFN MoE
         self.ffn = SigmaMoE(d_model, ff_n_experts, ff_expert_size, k=ff_k, expert_dropout=ff_expert_dropout)
         
-        
+        torch.random.manual_seed(42)
         self.ln1 = RMSNorm(d_model)
         self.ln2 = RMSNorm(d_model)
-        self.drop = torch.nn.Dropout(dropout)
+        self.drop = torch.nn.Dropout(0)
 
     def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None, kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:
         # x shape batch_size x seq_len x d_model
         # here we prenorm
         xnorm = self.ln1(x)
+        # print(self.ln1.eps)
+        # print(self.ln1.weight)
         
         #print("xnorm",xnorm.shape)
         # xnorm shape batch_size x seq_len x d_model
         
         att, kv_cache = self.attention(xnorm, xnorm, x, mask, kv_cache=kv_cache)
+        return att, None
         # att shape batch_size x seq_len x d_model
         x = x + self.drop(att)
+        
         
         # here we prenorm
         upd = self.ffn(x, self.ln2(x))
@@ -477,7 +493,7 @@ class MoEUT(torch.nn.Module):
                 # x shape batch_size x seq_len x d_model
                 x, new_cache[layer_index_abs] = layer(x, mask, kv_cache = cache)
                 # x shape batch_size x seq_len x d_model
-                
+                return MoEUTOutput(x, None, new_cache if kv_cache is not None else None)
                 
         # Collect regularizaiton losses. Must be at the end because it is across the layers.
         reg_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
@@ -496,6 +512,7 @@ class MoEUT(torch.nn.Module):
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
             elif isinstance(layer, RMSNorm):
+                torch.random.manual_seed(42)
                 layer.reset_parameters()
 
 
@@ -519,6 +536,7 @@ class MoEUTLM_old(torch.nn.Module):
 
     @torch.no_grad
     def reset_parameters(self):
+        torch.manual_seed(42)
         torch.nn.init.kaiming_normal_(self.embedding.weight, mode="fan_in", nonlinearity="linear")
         self.transformer.reset_parameters()
 
@@ -533,11 +551,13 @@ class MoEUTLM_old(torch.nn.Module):
             
             
         
-
         x = self.embedding(x)
+        
         # x shape batch_size x seq_len x d_model
         #print(x.shape)
         out = self.transformer(x, mask, kv_cache)
+        return out
+        
         #print(x.shape)
         # x shape batch_size x seq_len x d_model
         out.outputs = self.lm_head(self.out_norm(out.outputs))

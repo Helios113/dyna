@@ -70,7 +70,9 @@ def compute_loss_from_logits(
 def round_up_to_multiple_of_256(n: torch.Tensor) -> torch.Tensor:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
-        return torch.tensor(256, device=n.device)  # Ensure tensor is on the same device as input
+        return torch.tensor(
+            256, device=n.device
+        )  # Ensure tensor is on the same device as input
     return ((n - 1) // 256 + 1) * 256
 
 
@@ -101,10 +103,15 @@ class DynaConfig(PretrainedConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**{"model_type": self.model_type})
-        
+
         # Import required for enum handling
-        from .model_config import ModelConfig, NormStructure, RescaleMethod, ExecutionMode
-        
+        from .model_config import (
+            ModelConfig,
+            NormStructure,
+            RescaleMethod,
+            ExecutionMode,
+        )
+
         # Required parameters with defaults from model_config
         self.vocab_size = kwargs.pop("vocab_size", 49152)
         self.d_model = kwargs.pop("d_model", 412)
@@ -113,21 +120,23 @@ class DynaConfig(PretrainedConfig):
         self.n_experts_ffn = kwargs.pop("n_experts_ffn", 155)
         self.n_experts_attn = kwargs.pop("n_experts_attn", 8)
         self.d_head = kwargs.pop("d_head", 82)
-        self.d_ffn = kwargs.pop("d_ffn", 4096)  # Default based on typical transformer sizing
-        
+        self.d_ffn = kwargs.pop(
+            "d_ffn", 4096
+        )  # Default based on typical transformer sizing
+
         # Handle enums properly
         norm_structure_val = kwargs.pop("norm_structure", "moeut")
         if isinstance(norm_structure_val, str):
             self.norm_structure = NormStructure[norm_structure_val]
         else:
             self.norm_structure = norm_structure_val
-            
+
         rescaling_method_val = kwargs.pop("rescaling_method", "none")
         if isinstance(rescaling_method_val, str):
             self.rescaling_method = RescaleMethod[rescaling_method_val]
         else:
             self.rescaling_method = rescaling_method_val
-        
+
         # Parameters with defaults
         self.n_layers = kwargs.pop("n_layers", 2)
         self.k_ffn = kwargs.pop("k_ffn", 12)
@@ -187,8 +196,10 @@ class AttentionModule(DynaModule):
         # Remove debug print that could cause issues
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
-            
-        return F.scaled_dot_product_attention(q, k, v, scale=1.0, attn_mask=attention_mask)
+
+        return F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attention_mask
+        )
 
     def _trim_attention_mask(
         self,
@@ -286,19 +297,22 @@ class DummyAttention(AttentionModule):
         if self.n_rotate > 0:
             self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
-        # Attention scale
-        self.register_buffer(
-            "scale",
-            torch.full([1], 1.0 / math.sqrt(self.d_head)),
-            persistent=False,
-        )
-
+        # This might be it?
+        # The scaled dot prod has a scale of 1 because k and v were rescaled
+        # # Attention scale
+        # self.register_buffer(
+        #     "scale",
+        #     torch.full([1], 1.0 / math.sqrt(self.d_head)),
+        #     persistent=False,
+        # )
+    @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         # Initialize projection parameters
         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
-        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+        # FIX: Use proper scaling for output projection
+        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head))
 
     def forward(
         self,
@@ -334,10 +348,14 @@ class LayerModule(Module, ABC):
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.attn_pre = norm_class(config.d_model)
         self.attn_post = norm_class(config.d_model)
-        self.attn_post.requires_grad_(config.norm_structure in [NormStructure.peri,NormStructure.post])
+        self.attn_post.requires_grad_(
+            config.norm_structure in [NormStructure.peri, NormStructure.post]
+        )
         self.ffn_pre = norm_class(config.d_model)
         self.ffn_post = norm_class(config.d_model)
-        self.ffn_post.requires_grad_(config.norm_structure in [NormStructure.peri,NormStructure.post])
+        self.ffn_post.requires_grad_(
+            config.norm_structure in [NormStructure.peri, NormStructure.post]
+        )
 
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
@@ -485,7 +503,7 @@ class LayerModule(Module, ABC):
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
             update = norm_to_use(update_on_stream)
-        update = self.drop(update_on_stream)
+        update = self.drop(update)
 
         match self.rescaling_method.value:
             case RescaleMethod.none.value:
@@ -627,9 +645,7 @@ class SigmaMoE(DynaModule):
         self.values = Parameter(
             torch.empty(self.n_experts_ffn, self.d_expert_ffn, self.d_model)
         )
-        self.expert_sel = Parameter(
-            torch.empty(self.n_experts_ffn, self.d_model)
-        )
+        self.expert_sel = Parameter(torch.empty(self.n_experts_ffn, self.d_model))
 
         # Register shared expert indices
         self.register_buffer(
@@ -642,7 +658,7 @@ class SigmaMoE(DynaModule):
         )
 
         self.selection_history_s_moe = []
-
+    @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
         torch.nn.init.normal_(self.keys, 0, std_scale / math.sqrt(self.d_model))
@@ -771,7 +787,9 @@ class SigmaMoE(DynaModule):
     def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss and reset selection history."""
         if not self.selection_history_s_moe:
-            return torch.tensor(0.0, device=self.keys.device)  # Ensure tensor is on the correct device
+            return torch.tensor(
+                0.0, device=self.keys.device
+            )  # Ensure tensor is on the correct device
 
         # Average over time and layers
         loss = entropy_reg(
@@ -787,7 +805,7 @@ class BasicFFN(DynaModule):
         self,
         d_model: int,
         d_expert_ffn: int,
-        activation: Callable[[torch.Tensor], torch.Tensor] = F.silu,
+        activation: Callable[[torch.Tensor], torch.Tensor] = F.gelu,
     ):
         super().__init__()  # Need to call the parent class constructor
         self.d_model = d_model
@@ -801,7 +819,7 @@ class BasicFFN(DynaModule):
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
         output = self.projection_down(self.activation(self.projection_up(token_stream)))
         return output, None  # Return None for the selection index to match SigmaMoE
-
+    @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
         torch.nn.init.normal_(
@@ -848,19 +866,20 @@ class BasicAttn(AttentionModule):
         if self.n_rotate > 0:
             self.pe = RotaryPosEncoding(self.n_rotate, seq_dim=-2, base=rope_base)
 
-        # Attention scale
-        self.register_buffer(
-            "scale",
-            torch.full([1], 1.0 / math.sqrt(self.d_head)),
-            persistent=False,
-        )
-
+        # # Attention scale
+        # self.register_buffer(
+        #     "scale",
+        #     torch.full([1], 1.0 / math.sqrt(self.d_head)),
+        #     persistent=False,
+        # )
+    @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         # Initialize projection parameters
         torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
-        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.d_model))
+        # FIX: Use proper scaling for output projection
+        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head))
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss since BasicAttn doesn't use expert routing."""
@@ -878,17 +897,13 @@ class BasicAttn(AttentionModule):
         tuple[None, None],
     ]:
         """Forward pass through the attention layer."""
-        # Apply scaling to queries and keys
-        scale = self.scale.sqrt()
-        q: Float[Tensor, "batch seq n_heads*d_head"] = self.q(q_src) * scale.type_as(
-            q_src
-        )
-        k: Float[Tensor, "batch seq n_heads*d_head"] = self.k(k_src) * scale.type_as(
-            k_src
-        )
+
+        q: Float[Tensor, "batch seq n_heads*d_head"] = self.q(q_src)
+        k: Float[Tensor, "batch seq n_heads*d_head"] = self.k(k_src)
         v: Float[Tensor, "batch seq n_heads*d_head"] = self.v(v_src)
 
         # Project to attention format
+
         q = self.project_to_torch_order(q)
         k = self.project_to_torch_order(k)
         v = self.project_to_torch_order(v)
@@ -903,13 +918,11 @@ class BasicAttn(AttentionModule):
 
         # Apply attention
         res = self.attend(v, k, q, attention_mask, position_ids, mask[1])
-
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)
 
         # Apply output projection
         out = self.o(res)
-
         return out, (None, None)
 
 
@@ -1000,13 +1013,10 @@ class SwitchHead(AttentionModule):
         )
 
         # Bias parameters for load balancing
-        self.bias_v = Parameter(
-            torch.zeros(self.n_experts_attn), requires_grad=False
-        )
-        self.bias_o = Parameter(
-            torch.zeros(self.n_experts_attn), requires_grad=False
-        )
+        self.bias_v = Parameter(torch.zeros(self.n_experts_attn), requires_grad=False)
+        self.bias_o = Parameter(torch.zeros(self.n_experts_attn), requires_grad=False)
 
+    @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize all parameters with proper scaling."""
         # Initialize selection parameters
@@ -1139,9 +1149,8 @@ class SwitchHead(AttentionModule):
     ]:
         """Forward pass through the attention layer."""
         # Apply scaling to queries and keys
-        scale = self.scale.sqrt()
-        q: Float[Tensor, "batch seq d_model"] = self.q(q_src) * scale.type_as(q_src)
-        k: Float[Tensor, "batch seq d_model"] = self.k(k_src) * scale.type_as(k_src)
+        q: Float[Tensor, "batch seq d_model"] = self.q(q_src)
+        k: Float[Tensor, "batch seq d_model"] = self.k(k_src)
         v_sel_index = None
         o_sel_inedx = None
 
@@ -1230,7 +1239,7 @@ class RotaryPosEncoding(Module):
         self.cos_cached = None
         self.sin_cached = None
         self.seq_dim = torch.tensor(seq_dim)
-    
+
     # In-place version for maximum memory efficiency
     def rotate_half_optimized(self, x: torch.Tensor) -> torch.Tensor:
         """Optimized rotation of the second half of the last dimension."""
@@ -1244,42 +1253,18 @@ class RotaryPosEncoding(Module):
         positions: torch.Tensor,  # [batch, seq]
     ) -> torch.Tensor:
         """Optimized rotary position encoding application."""
-        
+
         sin, cos = self.get_sincos_positions(positions, x)
-        
+
         # Get sequence length once
         seq_len = x.shape[self.seq_dim]
-        
+
         # Use slice instead of narrow (more readable, same performance)
         sin = sin[..., :seq_len, :]
         cos = cos[..., :seq_len, :]
-        
+
         # Apply rotation in one line using the optimized rotate_half
         return x * cos + self.rotate_half_optimized(x) * sin
-
-
-    def get_sincos_cached(
-        self, x: Float[Tensor, "batch n_heads seq d_head"]
-    ) -> tuple[Float[Tensor, "1 1 seq d_head"], Float[Tensor, "1 1 seq d_head"]]:
-        """Get cached sin/cos values or compute new ones."""
-        seq_len = x.shape[self.seq_dim]
-
-        if seq_len > self.seq_len_cached:
-            self.seq_len_cached = seq_len
-            t = torch.arange(x.shape[self.seq_dim], device=x.device).type_as(
-                self.inv_freq
-            )  # Ensure tensor is on the same device
-            freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-
-            tgt_shape = [1] * x.ndim
-            tgt_shape[self.seq_dim] = seq_len
-            tgt_shape[-1] = x.shape[-1]
-
-            self.cos_cached = emb.cos().view(*tgt_shape)
-            self.sin_cached = emb.sin().view(*tgt_shape)
-
-        return self.sin_cached, self.cos_cached
 
     def get_sincos_positions(
         self,
@@ -1299,6 +1284,7 @@ class RotaryPosEncoding(Module):
         tgt_shape[-1] = q.shape[-1]
 
         return emb.sin().view(*tgt_shape), emb.cos().view(*tgt_shape)
+
     def forward(
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
@@ -1460,15 +1446,9 @@ class SimpleLayer(LayerModule):
             skip_mask=skip_mask,
         )
 
-        # Clean up attention intermediate tensors immediately
-        del q_val, k_val, v_val
-
         x = self._apply_update_to_residual(
             x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
         )
-
-        # Clean up attention output
-        del att_out
 
         # === FFN BLOCK ===
 
@@ -1478,9 +1458,6 @@ class SimpleLayer(LayerModule):
         x = self._apply_update_to_residual(
             x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
         )
-
-        # Clean up FFN output and other intermediate tensors
-        del ffn_out, skip_mask
 
         return (
             x,
@@ -1515,8 +1492,13 @@ class DynaFormer(DynaPretrainedModel):
         self.d_model = config.d_model
         self.enable_early_exit = config.enable_early_exit
         self.collect_reg_loss = config.collect_reg_loss
-        self.router = Parameter(torch.zeros(self.d_model, device=config.device), requires_grad=False)
-        self.tau = Parameter(torch.ones(1, device=config.device), requires_grad=self.enable_early_exit)
+        self.router = Parameter(
+            torch.zeros(self.d_model, device=config.device), requires_grad=False
+        )
+        self.tau = Parameter(
+            torch.ones(1, device=config.device), requires_grad=self.enable_early_exit
+        )
+        self.gather_stats = False
         match config.execution_mode.value:
             case ExecutionMode.moe.value:
                 self.layers = ModuleList(
@@ -1531,11 +1513,10 @@ class DynaFormer(DynaPretrainedModel):
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
 
-
-
         # Initialize parameters
         self.reset_parameters()
 
+    @torch.no_grad
     def reset_parameters(self) -> None:
         """Initialize all model parameters."""
         if self.enable_early_exit:
@@ -1584,10 +1565,8 @@ class DynaFormer(DynaPretrainedModel):
         x: Float[Tensor, "batch seq d_model"],
         e: Float[Tensor, "batch seq d_model"] | None,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-    ) -> CausalLMOutputWithPast:
+    ) -> Float[Tensor, "batch seq d_model"]:
         """Forward pass through the model."""
-        new_cache = {}
-
         self._expert_sel.append([])
         self._exit_logits.append([])
         self._latent_vectors.append([])
@@ -1601,18 +1580,18 @@ class DynaFormer(DynaPretrainedModel):
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x, li + idx + 2, e, self.router, cum_sum, self.tau, mask
                 )
-
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
 
                 # make continue_processing just be conditioned on the last token
                 if not continue_processing:
                     break
-                # Track sequence lengths and entropy for analysis
-                # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                # self._latent_vectors[-1].append(x.clone().detach())
-                # self._exit_logits[-1].append(s_exit.clone().detach())
-                # self._expert_sel[-1].append(expert_sel)
+                if self.gather_stats:
+                    # Track sequence lengths and entropy for analysis
+                    # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    self._latent_vectors[-1].append(x[:, -1, :])
+                    # self._exit_logits[-1].append(s_exit)
+                    self._expert_sel[-1].append(expert_sel)
 
             if not continue_processing:
                 break
@@ -1622,10 +1601,10 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return CausalLMOutputWithPast(loss=None, logits=x, past_key_values=None)
+        return x
 
 
-# Done except reset params
+# Done
 @beartype
 class DynaLM(DynaPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
@@ -1639,15 +1618,17 @@ class DynaLM(DynaPretrainedModel):
         # Model configuration
         self.n_repeats = config.n_repeats
         self.use_rms_norm = config.use_rms_norm
-
+        self.d_model = config.d_model
         # Input/output layers
+        
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
-        self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size)
+        self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
 
         # Output normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
         self.eos_token_id = eos_token_id
+
         self.rescaling_method = config.rescaling_method
         # Initialize parameters
         self.reset_parameters()
@@ -1655,55 +1636,53 @@ class DynaLM(DynaPretrainedModel):
         # Provide LM head to transformer for entropy computation
         self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
 
-    def reset_parameters(self) -> None:
-        """Initialize embedding and transformer parameters."""
-        torch.nn.init.kaiming_normal_(
-            self.embedding.weight, mode="fan_in", nonlinearity="linear"
-        )
+    @torch.no_grad
+    def reset_parameters(self):
+        torch.nn.init.kaiming_normal_(self.embedding.weight, mode="fan_in", nonlinearity="linear")
         self.transformer.reset_parameters()
-    
+
     def _generate_causal_mask(
         self, input_ids: Tensor  # [batch, seq]
     ) -> Tensor:  # [batch, seq, seq]
-        """Ultra-optimized version using advanced vectorization."""
-        
+
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
-        
+
         # Create base causal mask - use float16 to save memory if acceptable
-        base_causal = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device))
-        
+        base_causal = torch.tril(
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
+        )
+
         # Find EOS positions
-        eos_mask = (input_ids == self.eos_token_id)  # [batch, seq]
-        
+        eos_mask = input_ids == self.eos_token_id  # [batch, seq]
+
         # Quick path: if no EOS tokens in entire batch
         if not eos_mask.any():
             return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
-        
-        # Vectorized sequence ID computation for all batches at once
-        # Create cumulative EOS count to identify sequence boundaries
+
         eos_positions = eos_mask.long()  # Convert to int: [batch, seq]
-        
-        
-        # Create sequence IDs by cumulative sum of EOS indicators
-        # Use a more efficient approach with broadcasting
+
         sequence_ids = torch.cumsum(
-            torch.cat([
-                torch.zeros(batch_size, 1, dtype=torch.long, device=device),
-                eos_positions[:, :-1]
-            ], dim=1), 
-            dim=1
+            torch.cat(
+                [
+                    torch.zeros(batch_size, 1, dtype=torch.long, device=device),
+                    eos_positions[:, :-1],
+                ],
+                dim=1,
+            ),
+            dim=1,
         )  # [batch, seq]
-        
+
         # Vectorized same-sequence mask computation
         # Use broadcasting instead of unsqueeze for better memory efficiency
-        same_seq_mask = sequence_ids[:, :, None] == sequence_ids[:, None, :]  # [batch, seq, seq]
-        
+        same_seq_mask = (
+            sequence_ids[:, :, None] == sequence_ids[:, None, :]
+        )  # [batch, seq, seq]
+
         # Apply masks efficiently
         final_mask = base_causal[None, :, :] & same_seq_mask
-        
-        return final_mask
 
+        return final_mask
 
     def _generate_source_len_mask(
         self, attention_mask: Bool[Tensor, "batch seq seq"]
@@ -1711,29 +1690,32 @@ class DynaLM(DynaPretrainedModel):
         """Generate source length mask with position indices for each sequence."""
         batch_size, seq_len, _ = attention_mask.shape
         device = attention_mask.device
-        
+
         # Create a range tensor for positions [0, 1, 2, ..., seq_len-1]
         pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
-        
+
         # Create upper triangular mask including diagonal: [[True], [True, True], [True, True, True], ...]
         # This represents which positions each token can attend to
         causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)  # [seq, seq]
-        
+
         # Expand to batch dimension
-        causal_indices = causal_indices.unsqueeze(0).expand(batch_size, -1, -1)  # [batch, seq, seq]
-        
+        causal_indices = causal_indices.unsqueeze(0).expand(
+            batch_size, -1, -1
+        )  # [batch, seq, seq]
+
         # Apply the attention mask to get valid positions
         valid_positions = attention_mask & causal_indices  # [batch, seq, seq]
-        
+
         # Sum along the last dimension to get count of valid positions each token can attend to
         # Subtract 1 to make it 0-indexed
         position_mask = valid_positions.sum(dim=-1) - 1  # [batch, seq]
-        
+
         return position_mask
 
     def forward(
         self,
         input_ids: Optional[Int[Tensor, "batch seq"]] = None,
+        labels: Optional[Int[Tensor, "batch seq"]] = None,
         inputs_embeds: Optional[Float[Tensor, "batch seq d_model"]] = None,
         attention_mask: Optional[Bool[Tensor, "batch seq seq"]] = None,
         src_len_mask: Optional[Int[Tensor, "batch seq"]] = None,
@@ -1748,6 +1730,7 @@ class DynaLM(DynaPretrainedModel):
         # Get embeddings
         if input_ids is not None:
             x = self.embedding(input_ids)
+            # print("Expected: embedding, true:",x.grad_fn)
             if attention_mask is None:
                 attention_mask = self._generate_causal_mask(input_ids)
             if src_len_mask is None:
@@ -1760,11 +1743,29 @@ class DynaLM(DynaPretrainedModel):
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
-        outputs = self.transformer(x, e, (attention_mask, src_len_mask))
+        x = self.transformer(x, e, (attention_mask, src_len_mask))
+        # print("Expected: transformer, true:",x)
         # Apply output projection
-        outputs.logits = self.lm_head(self.out_norm(outputs.logits))
-
-        return outputs
+        logits = self.lm_head(self.out_norm(x))
+        # print("Expected: lm_head, true:",logits)
+        loss = None
+        if labels is not None:
+            _labels = torch.roll(labels, shifts=-1)
+            _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                _labels.to(logits.device).view(-1),
+            )
+            print("Loss here:", loss.item(), flush=True)
+            
+            
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=None,
+            hidden_states=None,
+            attentions=None,
+        )
 
 
 # Done
@@ -1779,7 +1780,6 @@ class ComposerDynaModel(HuggingFaceModel):
     ):
 
         model = DynaLM(config, tokenizer.eos_token_id)
-
         # Configuration
         self.vocab_size = config.vocab_size
         self.shift_labels = config.shift_labels
@@ -1798,32 +1798,32 @@ class ComposerDynaModel(HuggingFaceModel):
             shift_labels=config.shift_labels,
             allow_embedding_resizing=True,
         )
+        self.loss_fn = torch.nn.CrossEntropyLoss(
+            reduction="mean", ignore_index=CROSS_ENTROPY_IGNORE_INDEX
+        )
 
     def forward(self, batch) -> CausalLMOutputWithPast:
-
-        self.model.transformer._expert_sel.clear()
-        self.model.transformer._exit_logits.clear()
-        self.model.transformer._latent_vectors.clear()
-        self.model.transformer._seq_len.clear()
-        """Forward pass through the model."""
         
         return self.model(
             input_ids=batch.get("input_ids", None),
+            labels=batch.get("labels", None),
             inputs_embeds=batch.get("inputs_embeds", None),
             attention_mask=batch.get("attention_mask", None),
         )
-
-    def loss(self, outputs: CausalLMOutputWithPast, batch) -> Float[Tensor, ""]:
-        """Compute training loss."""
-        loss_fn = torch.nn.CrossEntropyLoss(
-            ignore_index=CROSS_ENTROPY_IGNORE_INDEX,
-            reduction="mean",
+    def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
+        labels = batch["labels"]
+        logits = outputs.logits
+        _labels = torch.roll(labels, shifts=-1)
+        _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+        loss = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            _labels.to(logits.device).view(-1),
         )
-
-        labels: Int[Tensor, "batch seq"] = (
-            batch["input_ids"] if "input_ids" in batch else batch["labels"]
-        )
-
-        return compute_loss_from_logits(outputs, self.shift_labels, labels, loss_fn)
-
-
+        # loss = compute_loss_from_logits(
+        #     outputs,
+        #     True,
+        #     batch["labels"],
+        #     self.loss_fn,
+        # )
+        print("Loss:", loss.item(), flush=True)
+        return loss
