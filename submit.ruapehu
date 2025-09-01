@@ -7,8 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
-#SBATCH --output=tests_new/%x.%j.out
-#SBATCH --error=tests_new/%x.%j.err
+#SBATCH --output=tests_new/%x.%j.ans
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
 HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M data_config.path="/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
