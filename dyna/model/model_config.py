@@ -19,8 +19,9 @@ class RescaleMethod(str, Enum):
 class ExecutionMode(str, Enum):
     moe = "moe"
     transformer = "transformer"
-
-
+    geiping_std = "geiping_std"
+    geiping_moe = "geiping_moe"
+    
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"

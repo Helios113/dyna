@@ -172,7 +172,7 @@ class ShannonEntropyCallback(Callback):
         ax.ticklabel_format(style='plain', axis='both') 
         # Fill ±1 std area
         ax.fill_between(range(len(mins)), mins, maxs, color='blue', alpha=0.1, label='±1 Std Dev')
-        plt.ylim(min(means)*0.9, max(means)*1.1)  # Adjust as neededs
+        # plt.ylim(min(means)*0.9, max(means)*1.1)  # Adjust as neededs
         # Axis and formatting
         ax.set_title("Entropy Trend", fontsize=14)
         ax.set_xlabel("Index", fontsize=12)
