@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J test
+#SBATCH -J dyna
 #SBATCH -w ruapehu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1

@@ -347,6 +347,7 @@ class LayerModule(Module, ABC):
         super().__init__()
         self.attention = attention_module
         self.ffn = ffn_module
+        self.input_projection = input_projection
         # Layer normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.attn_pre = norm_class(config.d_model)
@@ -1431,6 +1432,7 @@ class SimpleLayer(LayerModule):
             ),
             input_projection=torch.nn.Linear(2*config.d_model, config.d_model, bias=False) if input_reinjection else None,
         )
+        self.input_reinjection = input_reinjection
 
     def forward(
         self,
@@ -1617,9 +1619,9 @@ class DynaFormer(DynaPretrainedModel):
                 #   self,
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
-                    layer_index=li + idx + 2,
+                    layer_index=0,
                     e=e,
-                    input_reinjection=None,
+                    reinjection_embeddings=None,
                     router=self.router,
                     cum_sum=cum_sum,
                     tau=self.tau,
@@ -1634,7 +1636,7 @@ class DynaFormer(DynaPretrainedModel):
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
-            input_reinjection = x.clone()
+            reinjection_embeddings = x.clone()
             x = torch.rand_like(x)
         for li in range(self.n_repeats):
             for idx, layer in enumerate(self.layers):
@@ -1644,7 +1646,7 @@ class DynaFormer(DynaPretrainedModel):
                     x=x,
                     layer_index=li + idx + 2,
                     e=e,
-                    input_reinjection=input_reinjection,
+                    reinjection_embeddings=reinjection_embeddings,
                     router=self.router,
                     cum_sum=cum_sum,
                     tau=self.tau,
@@ -1676,9 +1678,9 @@ class DynaFormer(DynaPretrainedModel):
                 #   self,
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
-                    layer_index=li + idx + 2,
+                    layer_index=0,
                     e=e,
-                    input_reinjection=None,
+                    reinjection_embeddings=None,
                     router=self.router,
                     cum_sum=cum_sum,
                     tau=self.tau,
