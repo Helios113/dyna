@@ -37,9 +37,9 @@ train:
 callbacks:
   lr_monitor: {}
   clean_metrics:
-    interval: 3
+    interval: 100
   speed_monitor:
-    window_size: 1
+    window_size: 10
     gpu_flops_available:
         fp64: 67e12,
         fp32: 67e12,
@@ -55,13 +55,13 @@ callbacks:
   runtime_estimator: {}
   optimizer_monitor: {}
   entropy_callback:
-    log_interval: 3
+    log_interval: 100
   # layer_usage_monitor:
   #   log_interval: 20
   # # # activation_monitor_c: {}
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
   num_workers: 24

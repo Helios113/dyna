@@ -1612,7 +1612,7 @@ class DynaFormer(DynaPretrainedModel):
         cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
 
         continue_processing = True
-        input_reinjection = None
+        reinjection_embeddings = None
         if self.execution_mode.value in [ExecutionMode.geiping_moe, ExecutionMode.geiping_std]:
             for idx, layer in enumerate(self.head):
                 # Forward through layer

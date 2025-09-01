@@ -85,7 +85,7 @@ trainer_config:
   precision: "amp_fp16"
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
-  load_path: "s3://loop-llm/dyna/base_01sep25_ez15l7v5_dim~768_n_l~2_n_r~6_n_h~3_d_hd~128_n_e_ffn~192_n_e_attn~10_ee~False_mode~moe_norm~peri_rescale~cum_avg_prot_emb-ba100.pt"
+  load_path: "s3://loop-llm/dyna/base_01sep25_313grbwp_dim~768_n_l~2_n_r~6_n_h~3_d_hd~128_n_e_ffn~192_n_e_attn~10_ee~False_mode~moe_norm~peri_rescale~cum_avg_prot_emb-ba800.pt"
   save_interval: "100ba"
   parallelism_config:
     pipeline_parallel_size: null

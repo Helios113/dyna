@@ -76,7 +76,8 @@ class ShannonEntropyCallback(Callback):
             probs = F.softmax(logits, dim=-1)
 
             # Add epsilon for numerical stability
-            probs = probs + self.epsilon
+            probs = torch.clamp(probs.float(), min=self.epsilon).to(probs.dtype)
+            print(probs.min(), probs.max(), probs.mean())
 
             # Compute log probabilities
             log_probs = torch.log(probs)

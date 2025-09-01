@@ -13,7 +13,7 @@
 
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_sq_160M
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=geiping_160M
 
 
 status=$?
