@@ -1756,7 +1756,6 @@ class DynaLM(DynaPretrainedModel):
                 logits.view(-1, logits.size(-1)),
                 _labels.to(logits.device).view(-1),
             )
-            print("Loss here:", loss.item(), flush=True)
             
             
         return CausalLMOutputWithPast(
@@ -1825,5 +1824,4 @@ class ComposerDynaModel(HuggingFaceModel):
         #     batch["labels"],
         #     self.loss_fn,
         # )
-        print("Loss:", loss.item(), flush=True)
         return loss

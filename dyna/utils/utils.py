@@ -72,7 +72,7 @@ def make_wandb_run_name(model_config: DictConfig, trainer_config: DictConfig) ->
         "rescaling_method": "rescale"
     }
     
-    if model_config.get("execution_mode")=="moa":
+    if model_config.get("execution_mode")=="moe":
         keys = abbrev_moa
     else:
         keys = abbrev_trans

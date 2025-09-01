@@ -1,18 +1,19 @@
 #!/bin/bash
 #SBATCH -J run
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=24
+#SBATCH --cpus-per-task=20
 # 20 cpus per gpu
 #SBATCH --gres=gpu:1
 # 3GPUs for 1B+, 2GPUs for 760M
 #SBATCH --ntasks-per-node=1
-#SBATCH --time=11:58:00
-#! specify node
-#SBATCH -w mauao
+#SBATCH --time=12:00:00
+#SBATCH -w ruapehu
 #SBATCH --output=tests_new/%x.%j.ans
 
 
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_160M
+
 
 status=$?
 if [ $status -eq 0 ]; then
