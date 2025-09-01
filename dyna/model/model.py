@@ -17,6 +17,7 @@ from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
 from .model_config import NormStructure, RescaleMethod, ExecutionMode
 import math
+
 # from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Float, Int, Bool
@@ -197,9 +198,7 @@ class AttentionModule(DynaModule):
         if self.n_rotate > 0:
             q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
 
-        return F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attention_mask
-        )
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
 
     def _trim_attention_mask(
         self,
@@ -305,6 +304,7 @@ class DummyAttention(AttentionModule):
         #     torch.full([1], 1.0 / math.sqrt(self.d_head)),
         #     persistent=False,
         # )
+
     @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         # Initialize projection parameters
@@ -312,7 +312,9 @@ class DummyAttention(AttentionModule):
         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
         # FIX: Use proper scaling for output projection
-        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head))
+        torch.nn.init.normal_(
+            self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head)
+        )
 
     def forward(
         self,
@@ -340,10 +342,12 @@ class LayerModule(Module, ABC):
         config: DynaConfig,
         attention_module: AttentionModule,
         ffn_module: DynaModule,
+        input_projection: Module | None = None,
     ):
         super().__init__()
         self.attention = attention_module
         self.ffn = ffn_module
+        self.input_projection = input_projection
         # Layer normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.attn_pre = norm_class(config.d_model)
@@ -658,6 +662,7 @@ class SigmaMoE(DynaModule):
         )
 
         self.selection_history_s_moe = []
+
     @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
@@ -819,6 +824,7 @@ class BasicFFN(DynaModule):
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
         output = self.projection_down(self.activation(self.projection_up(token_stream)))
         return output, None  # Return None for the selection index to match SigmaMoE
+
     @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
@@ -872,6 +878,7 @@ class BasicAttn(AttentionModule):
         #     torch.full([1], 1.0 / math.sqrt(self.d_head)),
         #     persistent=False,
         # )
+
     @torch.no_grad
     def reset_parameters(self, std_scale: float) -> None:
         # Initialize projection parameters
@@ -879,7 +886,9 @@ class BasicAttn(AttentionModule):
         torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
         torch.nn.init.normal_(self.v.weight, 0, std_scale / math.sqrt(self.d_model))
         # FIX: Use proper scaling for output projection
-        torch.nn.init.normal_(self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head))
+        torch.nn.init.normal_(
+            self.o.weight, 0, std_scale / math.sqrt(self.n_heads * self.d_head)
+        )
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss since BasicAttn doesn't use expert routing."""
@@ -1306,7 +1315,7 @@ class RotaryPosEncoding(Module):
 class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
 
-    def __init__(self, config: DynaConfig):
+    def __init__(self, config: DynaConfig, input_reinjection: bool = False):
         super().__init__(
             config=config,
             attention_module=SwitchHead(
@@ -1327,13 +1336,16 @@ class MoEUTLayer(LayerModule):
                 dropout_expert=config.dropout_expert_ffn,
                 n_expert_shared_ffn=config.n_expert_shared_ffn,
             ),
+            input_projection=torch.nn.Linear(2*config.d_model, config.d_model, bias=False) if input_reinjection else None,
         )
+        self.input_reinjection = input_reinjection
 
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
+        reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
         router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
@@ -1352,6 +1364,13 @@ class MoEUTLayer(LayerModule):
 
         if not continue_processing:
             return x, False, 0, s_exit, ((None, None), None)
+        
+        
+        if self.input_reinjection and reinjection_embeddings is not None:
+            # Concatenate along the feature dimension
+            x = torch.cat((x, reinjection_embeddings), dim=-1)
+            # Project back to original d_model dimension
+            x = self.input_projection(x)
 
         # === ATTENTION BLOCK ===
         q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
@@ -1397,7 +1416,7 @@ class MoEUTLayer(LayerModule):
 
 @beartype
 class SimpleLayer(LayerModule):
-    def __init__(self, config: DynaConfig):
+    def __init__(self, config: DynaConfig, input_reinjection: bool = False):
 
         super().__init__(
             config,
@@ -1411,13 +1430,16 @@ class SimpleLayer(LayerModule):
                 config.d_model,
                 config.d_ffn,
             ),
+            input_projection=torch.nn.Linear(2*config.d_model, config.d_model, bias=False) if input_reinjection else None,
         )
+        self.input_reinjection = input_reinjection
 
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
+        reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
         router: Parameter,
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
@@ -1436,6 +1458,11 @@ class SimpleLayer(LayerModule):
         if not continue_processing:
             return x, False, 0, s_exit, ((None, None), None)
 
+        if self.input_reinjection and reinjection_embeddings is not None:
+            # Concatenate along the feature dimension
+            x = torch.cat((x, reinjection_embeddings), dim=-1)
+            # Project back to original d_model dimension
+            x = self.input_projection(x)    
         # === ATTENTION BLOCK ===
         q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
         att_out, expert_sel_attn = self.attention(
@@ -1492,6 +1519,7 @@ class DynaFormer(DynaPretrainedModel):
         self.d_model = config.d_model
         self.enable_early_exit = config.enable_early_exit
         self.collect_reg_loss = config.collect_reg_loss
+        self.execution_mode = config.execution_mode
         self.router = Parameter(
             torch.zeros(self.d_model, device=config.device), requires_grad=False
         )
@@ -1508,6 +1536,16 @@ class DynaFormer(DynaPretrainedModel):
                 self.layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
+            case ExecutionMode.geiping_std.value:
+                self.head = ModuleList([SimpleLayer(config) for _ in range(2)])
+                self.layers = ModuleList([SimpleLayer(config, True) for _ in range(config.n_layers)])
+                self.tail = ModuleList([SimpleLayer(config) for _ in range(2)])
+                
+            case ExecutionMode.geiping_moe.value:
+                self.head = ModuleList([MoEUTLayer(config) for _ in range(2)])
+                self.layers = ModuleList([MoEUTLayer(config, True) for _ in range(config.n_layers)])
+                self.tail = ModuleList([MoEUTLayer(config) for _ in range(2)])
+                
             case _:
                 raise ValueError(
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
@@ -1574,11 +1612,45 @@ class DynaFormer(DynaPretrainedModel):
         cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
 
         continue_processing = True
+        input_reinjection = None
+        if self.execution_mode.value in [ExecutionMode.geiping_moe, ExecutionMode.geiping_std]:
+            for idx, layer in enumerate(self.head):
+                # Forward through layer
+                #   self,
+                x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                    x=x,
+                    layer_index=0,
+                    e=e,
+                    reinjection_embeddings=None,
+                    router=self.router,
+                    cum_sum=cum_sum,
+                    tau=self.tau,
+                    mask=mask,
+                )
+                if self.gather_stats:
+                    # Track sequence lengths and entropy for analysis
+                    # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    with torch.no_grad():
+                        self._latent_vectors[-1].append(
+                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                        )
+                        if expert_sel[0] is not None:
+                            self._expert_sel[-1].append(expert_sel)
+            reinjection_embeddings = x.clone()
+            x = torch.rand_like(x)
         for li in range(self.n_repeats):
             for idx, layer in enumerate(self.layers):
                 # Forward through layer
+                #   self,
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
-                    x, li + idx + 2, e, self.router, cum_sum, self.tau, mask
+                    x=x,
+                    layer_index=li + idx + 2,
+                    e=e,
+                    reinjection_embeddings=reinjection_embeddings,
+                    router=self.router,
+                    cum_sum=cum_sum,
+                    tau=self.tau,
+                    mask=mask,
                 )
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
@@ -1590,13 +1662,39 @@ class DynaFormer(DynaPretrainedModel):
                     # Track sequence lengths and entropy for analysis
                     # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
                     with torch.no_grad():
-                        self._latent_vectors[-1].append(self._temp_lm_head(x[:, -1, :]).detach().clone().cpu())
+                        self._latent_vectors[-1].append(
+                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                        )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
 
             if not continue_processing:
                 break
-
+        
+        
+        if self.execution_mode.value in [ExecutionMode.geiping_moe, ExecutionMode.geiping_std]:
+            for idx, layer in enumerate(self.tail):
+                # Forward through layer
+                #   self,
+                x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                    x=x,
+                    layer_index=0,
+                    e=e,
+                    reinjection_embeddings=None,
+                    router=self.router,
+                    cum_sum=cum_sum,
+                    tau=self.tau,
+                    mask=mask,
+                )
+                if self.gather_stats:
+                    # Track sequence lengths and entropy for analysis
+                    # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
+                    with torch.no_grad():
+                        self._latent_vectors[-1].append(
+                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                        )
+                        if expert_sel[0] is not None:
+                            self._expert_sel[-1].append(expert_sel)
         # Collect regularization loss if enabled
         reg_loss = None
         if self.collect_reg_loss:
@@ -1621,7 +1719,7 @@ class DynaLM(DynaPretrainedModel):
         self.use_rms_norm = config.use_rms_norm
         self.d_model = config.d_model
         # Input/output layers
-        
+
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
 
@@ -1639,7 +1737,9 @@ class DynaLM(DynaPretrainedModel):
 
     @torch.no_grad
     def reset_parameters(self):
-        torch.nn.init.kaiming_normal_(self.embedding.weight, mode="fan_in", nonlinearity="linear")
+        torch.nn.init.kaiming_normal_(
+            self.embedding.weight, mode="fan_in", nonlinearity="linear"
+        )
         self.transformer.reset_parameters()
 
     def _generate_causal_mask(
@@ -1757,8 +1857,7 @@ class DynaLM(DynaPretrainedModel):
                 logits.view(-1, logits.size(-1)),
                 _labels.to(logits.device).view(-1),
             )
-            
-            
+
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
@@ -1803,13 +1902,14 @@ class ComposerDynaModel(HuggingFaceModel):
         )
 
     def forward(self, batch) -> CausalLMOutputWithPast:
-        
+
         return self.model(
             input_ids=batch.get("input_ids", None),
             labels=batch.get("labels", None),
             inputs_embeds=batch.get("inputs_embeds", None),
             attention_mask=batch.get("attention_mask", None),
         )
+
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
         labels = batch["labels"]
         logits = outputs.logits
