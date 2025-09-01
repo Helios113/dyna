@@ -115,7 +115,10 @@ class ShannonEntropyCallback(Callback):
             
         if batch_entropy:
             metrics_dict["metrics/shanon_entropy"] = batch_entropy[-1].mean().item()
-            metrics_dict["entropy/shanon_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
+            try:
+                metrics_dict["entropy/shanon_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy))
+            except Exception as e:
+                print(f"Error creating entropy plot: {e}, skipping plot logging.")
 
         logger.log_metrics(metrics_dict)
 
@@ -165,7 +168,6 @@ class ShannonEntropyCallback(Callback):
         maxs = [mean+std for mean, std in zip(means, stds)]
         mins = [mean-std for mean, std in zip(means, stds)]
         # x = np.arange(len(means))
-
         fig, ax = plt.subplots(figsize=self.figsize)
         # Plot mean line
         ax.plot(means, color='blue', label='Mean Entropy')
