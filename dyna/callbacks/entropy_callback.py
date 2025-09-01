@@ -61,7 +61,7 @@ class ShannonEntropyCallback(Callback):
             )
         return False
 
-    def _compute_shannon_entropy(self, logits: torch.Tensor, lm_head: torch.nn.Module) -> torch.Tensor:
+    def _compute_shannon_entropy(self, logits: torch.Tensor) -> torch.Tensor:
         """
         Compute Shannon entropy from logits.
 
@@ -73,7 +73,7 @@ class ShannonEntropyCallback(Callback):
         """
         # Convert logits to probabilities
         with torch.no_grad():
-            probs = F.softmax(lm_head(logits), dim=-1)
+            probs = F.softmax(logits, dim=-1)
 
             # Add epsilon for numerical stability
             probs = probs + self.epsilon
@@ -110,7 +110,7 @@ class ShannonEntropyCallback(Callback):
                     data_proc[i] = torch.cat((data_proc[i],sample))
         
         for elem in data_proc:
-            entropy = self._compute_shannon_entropy(elem, state.model.model.transformer._temp_lm_head)
+            entropy = self._compute_shannon_entropy(elem)
             batch_entropy.append(entropy)
             
         if batch_entropy:
@@ -167,7 +167,6 @@ class ShannonEntropyCallback(Callback):
         # x = np.arange(len(means))
 
         fig, ax = plt.subplots(figsize=self.figsize)
-        print("means", means, flush=True)
         # Plot mean line
         ax.plot(means, color='blue', label='Mean Entropy')
         ax.ticklabel_format(style='plain', axis='both') 

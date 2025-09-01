@@ -1,19 +1,17 @@
 #!/bin/bash
-#SBATCH -J run
-#SBATCH -w mauao
+#SBATCH -J test
+#SBATCH -w ruapehu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=24
-#SBATCH --gres=gpu:a40:1
-#SBATCH --mem=64G                
-#SBATCH --time=04:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --time=12:00:00
 #SBATCH --partition=normal
-#SBATCH --output=tests_new/%x.%j.ans
-
-
+#SBATCH --output=tests_new/%x.%j.out
+#SBATCH --error=tests_new/%x.%j.err
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_sq_160M
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M data_config.path="/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
 
 
 status=$?

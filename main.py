@@ -35,17 +35,16 @@ streaming.base.util.clean_stale_shared_memory()
 @beartype
 def main(cfg: DictConfig):
     cfg = build_full_concrete_config(cfg)
-
+    print(OmegaConf.to_yaml(cfg))
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config)
     cfg.trainer_config.save_filename = run_name+"-ba{batch}.pt"
-    wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name)
+    wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name, init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True)})
     # We don't need a tokenizer becuase all of our data is pre-tokenized.
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     # Instead of passing the DictConfig directly, unpack it as kwargs
     conf = DynaConfig(**cfg.model_config)
-    print("Token id of ignore token", tokenizer.eos_token_id)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
     train_dataloader = get_data_loader(
         cfg.data_config,

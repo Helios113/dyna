@@ -16,7 +16,7 @@ from torch.nn import Module, ModuleList, Parameter
 from dyna.model.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 from beartype import beartype
 from .model_config import NormStructure, RescaleMethod, ExecutionMode
-
+import math
 # from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Float, Int, Bool
@@ -543,9 +543,9 @@ class LayerModule(Module, ABC):
                 if e is not None:
                     residual_stream = residual_stream - e
                 if self.enable_early_exit:
-                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
+                    scale_factor = math.sqrt(layer_index) - 1 / math.sqrt(layer_index)
                     update_factor = (
-                        cum_sum[skip_mask].unsqueeze(1) * tau / torch.sqrt(layer_index)
+                        cum_sum[skip_mask].unsqueeze(1) * tau / math.sqrt(layer_index)
                     )
 
                     residual_stream[skip_mask] = (
@@ -555,9 +555,9 @@ class LayerModule(Module, ABC):
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
-                    scale_factor = torch.sqrt(layer_index) - 1 / torch.sqrt(layer_index)
+                    scale_factor = math.sqrt(layer_index) - 1 / math.sqrt(layer_index)
                     residual_stream = scale_factor * residual_stream + update / (
-                        torch.sqrt(layer_index)
+                        math.sqrt(layer_index)
                     )
                 if e is not None:
                     residual_stream = residual_stream + e
@@ -1589,9 +1589,10 @@ class DynaFormer(DynaPretrainedModel):
                 if self.gather_stats:
                     # Track sequence lengths and entropy for analysis
                     # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                    self._latent_vectors[-1].append(x[:, -1, :])
-                    # self._exit_logits[-1].append(s_exit)
-                    self._expert_sel[-1].append(expert_sel)
+                    with torch.no_grad():
+                        self._latent_vectors[-1].append(self._temp_lm_head(x[:, -1, :]).detach().clone().cpu())
+                        if expert_sel[0] is not None:
+                            self._expert_sel[-1].append(expert_sel)
 
             if not continue_processing:
                 break

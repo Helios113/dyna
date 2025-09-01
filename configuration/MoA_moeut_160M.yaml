@@ -43,7 +43,7 @@ callbacks:
   clean_metrics:
     interval: 100
   speed_monitor:
-    window_size: 1
+    window_size: 10
     gpu_flops_available:
         fp64: 67e12,
         fp32: 67e12,
@@ -69,7 +69,7 @@ callbacks:
   # # # activation_monitor_c: {}
 
 data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams_small"
+  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
   dataset:
     max_seq_len: ${model_config.max_seq_len}
   num_workers: 24
