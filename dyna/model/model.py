@@ -155,6 +155,7 @@ class DynaConfig(PretrainedConfig):
         self.use_rms_norm = kwargs.pop("use_rms_norm", True)
         self.collect_reg_loss = kwargs.pop("collect_reg_loss", False)
         self.device = kwargs.pop("device", "cuda")
+        self.sample_iterations = kwargs.pop("sample_iterations", False)
         # Handle execution_mode enum
         execution_mode_val = kwargs.pop("execution_mode", "moe")
         if isinstance(execution_mode_val, str):
@@ -1603,6 +1604,7 @@ class DynaFormer(DynaPretrainedModel):
         x: Float[Tensor, "batch seq d_model"],
         e: Float[Tensor, "batch seq d_model"] | None,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        iterations: int = 1,
     ) -> Float[Tensor, "batch seq d_model"]:
         """Forward pass through the model."""
         self._expert_sel.append([])
@@ -1638,7 +1640,7 @@ class DynaFormer(DynaPretrainedModel):
                             self._expert_sel[-1].append(expert_sel)
             reinjection_embeddings = x.clone()
             x = torch.rand_like(x)
-        for li in range(self.n_repeats):
+        for li in range(iterations):
             for idx, layer in enumerate(self.layers):
                 # Forward through layer
                 #   self,
@@ -1731,7 +1733,7 @@ class DynaLM(DynaPretrainedModel):
         self.rescaling_method = config.rescaling_method
         # Initialize parameters
         self.reset_parameters()
-
+        self.sample_iterations = config.sample_iterations
         # Provide LM head to transformer for entropy computation
         self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
 
@@ -1844,8 +1846,14 @@ class DynaLM(DynaPretrainedModel):
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
-        x = self.transformer(x, e, (attention_mask, src_len_mask))
-        # print("Expected: transformer, true:",x)
+        
+        # decide on number of iterations
+        iterations = self.n_repeats
+        if self.sample_iterations:
+            iterations = torch.randint(0, self.n_repeats, (1,)).item() if self.training else self.n_repeats
+        x = self.transformer(x, e, (attention_mask, src_len_mask), iterations=iterations)
+
+
         # Apply output projection
         logits = self.lm_head(self.out_norm(x))
         # print("Expected: lm_head, true:",logits)

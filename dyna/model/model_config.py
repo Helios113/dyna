@@ -52,6 +52,7 @@ class ModelConfig:
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
     norm_structure: NormStructure = NormStructure.peri
     run_id: str | None = None
+    sample_iterations: bool = False
 
 
 @dataclass
