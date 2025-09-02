@@ -15,6 +15,9 @@ class RescaleMethod(str, Enum):
     cum_avg_no_prot_emb = "cum_avg_no_prot_emb"
     sqrt_prot_emb = "sqrt_prot_emb"
     sqrt_no_prot_emb = "sqrt_no_prot_emb"
+    sqrt_scale_prot_emb = "sqrt_scale_prot_emb"
+    avg_prot_emb = "avg_prot_emb"
+    
 
 class ExecutionMode(str, Enum):
     moe = "moe"

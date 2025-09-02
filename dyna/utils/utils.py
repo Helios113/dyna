@@ -37,63 +37,74 @@ def make_wandb_run_name(model_config: DictConfig, trainer_config: DictConfig) ->
     """
     # Consistent part: use config['run_id'] if present, else generate random string
     run_name = trainer_config.get("run_name")
-    if not run_name:
-        run_name = generate_id(8)
-    # Unique part: timestamp
-    timestamp = time.strftime("%d%b%y").lower()
-    unique = generate_id(8)
-    # Important info: select a few key hyperparameters (customize as needed)
-    abbrev_moa = {
-        "d_model": "dim",
-        "n_layers": "n_l",
-        "n_repeats": "n_r",
-        "n_heads": "n_h",
-        "d_head": "d_hd",
-        "n_experts_ffn": "n_e_ffn",
-        "n_experts_attn": "n_e_attn",
-        "ff_expert_size": "f_e_size",
-        "device_train_batch_size": "bs",
-        "enable_early_exit": "ee",
-        "execution_mode": "mode",
-        "norm_structure": "norm",
-        "rescaling_method": "rescale"
-    }
-    
-    abbrev_trans = {
-        "d_model": "dim",
-        "d_ffn": "d_ffn",
-        "n_layers": "n_l",
-        "n_heads": "n_h",
-        "d_head": "d_hd",
-        "device_train_batch_size": "bs",
-        "enable_early_exit": "ee",
-        "execution_mode": "mode",
-        "norm_structure": "norm",
-        "rescaling_method": "rescale"
-    }
-    
-    if model_config.get("execution_mode")=="moe":
-        keys = abbrev_moa
+    load_path = trainer_config.get("load_path")
+    if load_path is not None:
+        name = os.path.basename(load_path)
     else:
-        keys = abbrev_trans
+        if not run_name:
+            run_name = generate_id(8)
+        # Unique part: timestamp
+        timestamp = time.strftime("%d%b%y").lower()
+        unique = generate_id(8)
+        # Important info: select a few key hyperparameters (customize as needed)
+        abbrev_moa = {
+            "d_model": "dim",
+            "n_layers": "n_l",
+            "n_repeats": "n_r",
+            "n_heads": "n_h",
+            "d_head": "d_hd",
+            "n_experts_ffn": "n_e_ffn",
+            "n_experts_attn": "n_e_attn",
+            "ff_expert_size": "f_e_size",
+            "device_train_batch_size": "bs",
+            "enable_early_exit": "ee",
+            "execution_mode": "mode",
+            "norm_structure": "norm",
+            "rescaling_method": "rescale"
+        }
+        
+        abbrev_trans = {
+            "d_model": "dim",
+            "d_ffn": "d_ffn",
+            "n_layers": "n_l",
+            "n_heads": "n_h",
+            "d_head": "d_hd",
+            "device_train_batch_size": "bs",
+            "enable_early_exit": "ee",
+            "execution_mode": "mode",
+            "norm_structure": "norm",
+            "rescaling_method": "rescale"
+        }
+        
+        if model_config.get("execution_mode")=="moe":
+            keys = abbrev_moa
+        else:
+            keys = abbrev_trans
 
-    info = []
-    for k, short in keys.items():
-        val = None
-        if k in model_config:
-            val = model_config[k]
-        elif k in trainer_config:
-            val = trainer_config[k]
-        if "." in str(val):
-            val = str(val).split(".")[-1]  # Simplify floats
-        if val is not None:
-            info.append(f"{short}~{val}")
+        info = []
+        for k, short in keys.items():
+            val = None
+            if k in model_config:
+                val = model_config[k]
+            elif k in trainer_config:
+                val = trainer_config[k]
+            if "." in str(val):
+                val = str(val).split(".")[-1]  # Simplify floats
+            if val is not None:
+                info.append(f"{short}~{val}")
 
-    info_str = "_".join(info)
-    # Compose name
-    name = f"{run_name}_{timestamp}_{unique}"
-    if info_str:
-        name += f"_{info_str}"
+        info_str = "_".join(info)
+        # Compose name
+        name = f"{run_name}_{timestamp}_{unique}"
+        if info_str:
+            name += f"_{info_str}"
+    has_index = name.split("_")[0].isdigit()
+    if has_index:
+        index = int(name.split("_")[0])
+        name = "_".join(name.split("_")[1:])
+        name = str(index+1)+"_"+name
+    else:
+        name = "1_"+name
     return name
 
 

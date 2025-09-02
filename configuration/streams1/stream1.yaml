@@ -1,5 +1,0 @@
-cosmo_client_0:
-  remote: s3://loop-llm/smoll_corpus/fineweb-edu-dedup
-  local: /nfs-share/pa511/code_bases/dyna_project/dyna/cache
-  split: train
-  proportion: 1.00

@@ -176,3 +176,9 @@ What can be the issue
     Metrics some how affect gradient -- mhmmm
 
     Both transformer with simple and moeut with moeut layers gets messed up so likley it is the norming and block application
+
+
+
+srun -w ruapehu -c 24 --gres=gpu:0 --partition=interactive --pty bash
+
+find . -user "$USER" -type f -delete 2>/dev/null

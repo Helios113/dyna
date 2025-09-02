@@ -1,5 +1,0 @@
-fineweb_edu_dedup_client_0:
-  remote: s3://smollm-corpus/shared/fineweb_edu_dedup/client_0
-  local: /nfs-share/pa511/code_bases/dyna_project/dyna/cache/train
-  split: train
-  proportion: 0.7

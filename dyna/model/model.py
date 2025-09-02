@@ -33,6 +33,8 @@ DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
 PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.cum_avg_prot_emb,
     RescaleMethod.sqrt_prot_emb,
+    RescaleMethod.sqrt_scale_prot_emb,
+    RescaleMethod.avg_prot_emb,
 ]
 
 
@@ -566,7 +568,41 @@ class LayerModule(Module, ABC):
                     )
                 if e is not None:
                     residual_stream = residual_stream + e
+            case RescaleMethod.sqrt_scale_prot_emb.value:
+                residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    update_factor = cum_sum[skip_mask].unsqueeze(1) * tau
+                    residual_stream[skip_mask] = (
+                        residual_stream[skip_mask]
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                    ) / math.sqrt(2)
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    if layer_index == 2:
+                        residual_stream = residual_stream + update
+                    else:
+                        residual_stream = (residual_stream + update) / (math.sqrt(2))
 
+                residual_stream = residual_stream + e
+            case RescaleMethod.avg_prot_emb.value:
+                residual_stream = residual_stream - e
+                if self.enable_early_exit:
+                    update_factor = cum_sum[skip_mask].unsqueeze(1) * tau
+                    residual_stream[skip_mask] = (
+                        residual_stream[skip_mask] / 2
+                        + update.view(-1, update.shape[-1])[: skip_mask.sum()]
+                        * update_factor
+                        / 2
+                    )
+                else:
+                    # Apply to all tokens when early exit is disabled
+                    if layer_index == 2:
+                        residual_stream = residual_stream + update
+                    else:
+                        residual_stream = residual_stream / 2 + update / 2
+
+                residual_stream = residual_stream + e
         if self.norm_structure.value == NormStructure.post.value:
             residual_stream = norm_to_use(residual_stream)
 
@@ -1337,7 +1373,11 @@ class MoEUTLayer(LayerModule):
                 dropout_expert=config.dropout_expert_ffn,
                 n_expert_shared_ffn=config.n_expert_shared_ffn,
             ),
-            input_projection=torch.nn.Linear(2*config.d_model, config.d_model, bias=False) if input_reinjection else None,
+            input_projection=(
+                torch.nn.Linear(2 * config.d_model, config.d_model, bias=False)
+                if input_reinjection
+                else None
+            ),
         )
         self.input_reinjection = input_reinjection
 
@@ -1365,8 +1405,7 @@ class MoEUTLayer(LayerModule):
 
         if not continue_processing:
             return x, False, 0, s_exit, ((None, None), None)
-        
-        
+
         if self.input_reinjection and reinjection_embeddings is not None:
             # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
@@ -1431,7 +1470,11 @@ class SimpleLayer(LayerModule):
                 config.d_model,
                 config.d_ffn,
             ),
-            input_projection=torch.nn.Linear(2*config.d_model, config.d_model, bias=False) if input_reinjection else None,
+            input_projection=(
+                torch.nn.Linear(2 * config.d_model, config.d_model, bias=False)
+                if input_reinjection
+                else None
+            ),
         )
         self.input_reinjection = input_reinjection
 
@@ -1463,7 +1506,7 @@ class SimpleLayer(LayerModule):
             # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
             # Project back to original d_model dimension
-            x = self.input_projection(x)    
+            x = self.input_projection(x)
         # === ATTENTION BLOCK ===
         q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, skip_mask)
         att_out, expert_sel_attn = self.attention(
@@ -1539,14 +1582,18 @@ class DynaFormer(DynaPretrainedModel):
                 )
             case ExecutionMode.geiping_std.value:
                 self.head = ModuleList([SimpleLayer(config) for _ in range(2)])
-                self.layers = ModuleList([SimpleLayer(config, True) for _ in range(config.n_layers)])
+                self.layers = ModuleList(
+                    [SimpleLayer(config, True) for _ in range(config.n_layers)]
+                )
                 self.tail = ModuleList([SimpleLayer(config) for _ in range(2)])
-                
+
             case ExecutionMode.geiping_moe.value:
                 self.head = ModuleList([MoEUTLayer(config) for _ in range(2)])
-                self.layers = ModuleList([MoEUTLayer(config, True) for _ in range(config.n_layers)])
+                self.layers = ModuleList(
+                    [MoEUTLayer(config, True) for _ in range(config.n_layers)]
+                )
                 self.tail = ModuleList([MoEUTLayer(config) for _ in range(2)])
-                
+
             case _:
                 raise ValueError(
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
@@ -1567,6 +1614,7 @@ class DynaFormer(DynaPretrainedModel):
         # Initialize tracking variables
         self._seq_len = []
         self._latent_vectors = []
+        self._residual_magnitudes = []
         self._exit_logits = []
         self._expert_sel = []
 
@@ -1611,17 +1659,20 @@ class DynaFormer(DynaPretrainedModel):
         self._exit_logits.append([])
         self._latent_vectors.append([])
         self._seq_len.append([])
+        self._residual_magnitudes.append([])
         cum_sum = torch.zeros(x.shape[0], x.shape[1], device=x.device, dtype=x.dtype)
 
         continue_processing = True
         reinjection_embeddings = None
-        if self.execution_mode.value in [ExecutionMode.geiping_moe, ExecutionMode.geiping_std]:
+        if self.execution_mode.value in [
+            ExecutionMode.geiping_moe,
+            ExecutionMode.geiping_std,
+        ]:
             for idx, layer in enumerate(self.head):
-                # Forward through layer
-                #   self,
+
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
-                    layer_index=0,
+                    layer_index=idx + 1,
                     e=e,
                     reinjection_embeddings=None,
                     router=self.router,
@@ -1630,23 +1681,32 @@ class DynaFormer(DynaPretrainedModel):
                     mask=mask,
                 )
                 if self.gather_stats:
-                    # Track sequence lengths and entropy for analysis
-                    # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
                     with torch.no_grad():
                         self._latent_vectors[-1].append(
                             self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
+                        self._residual_magnitudes.append(
+                            torch.norm(x, dim=-1, p=2).cpu()
+                        )
             reinjection_embeddings = x.clone()
             x = torch.rand_like(x)
         for li in range(iterations):
             for idx, layer in enumerate(self.layers):
-                # Forward through layer
-                #   self,
+                # Calculate correct layer index based on execution mode
+                if self.execution_mode.value in [
+                    ExecutionMode.geiping_moe,
+                    ExecutionMode.geiping_std,
+                ]:
+                    layer_index = 2 + (li * self.n_layers) + idx + 2
+                else:
+                    # Standard: current_position_in_repeated_layers + 2
+                    layer_index = (li * self.n_layers) + idx + 2
+
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
-                    layer_index=li + idx + 2,
+                    layer_index=layer_index,
                     e=e,
                     reinjection_embeddings=reinjection_embeddings,
                     router=self.router,
@@ -1669,18 +1729,23 @@ class DynaFormer(DynaPretrainedModel):
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
+                        self._residual_magnitudes.append(torch.norm(x, dim=-1).cpu())
 
             if not continue_processing:
                 break
-        
-        
-        if self.execution_mode.value in [ExecutionMode.geiping_moe, ExecutionMode.geiping_std]:
+
+        if self.execution_mode.value in [
+            ExecutionMode.geiping_moe,
+            ExecutionMode.geiping_std,
+        ]:
+
             for idx, layer in enumerate(self.tail):
-                # Forward through layer
-                #   self,
+                # Calculate tail layer index: head(2) + all_repeated_layers + current_tail_position + 1
+                layer_index = 2 + (iterations * self.n_layers) + idx + 1
+
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
-                    layer_index=0,
+                    layer_index=layer_index,
                     e=e,
                     reinjection_embeddings=None,
                     router=self.router,
@@ -1697,6 +1762,7 @@ class DynaFormer(DynaPretrainedModel):
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
+                        self._residual_magnitudes.append(torch.norm(x, dim=-1).cpu())
         # Collect regularization loss if enabled
         reg_loss = None
         if self.collect_reg_loss:
@@ -1846,13 +1912,18 @@ class DynaLM(DynaPretrainedModel):
 
         # Prepare protected embeddings if enabled
         e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
-        
+
         # decide on number of iterations
         iterations = self.n_repeats
         if self.sample_iterations:
-            iterations = torch.randint(0, self.n_repeats, (1,)).item() if self.training else self.n_repeats
-        x = self.transformer(x, e, (attention_mask, src_len_mask), iterations=iterations)
-
+            iterations = (
+                torch.randint(0, self.n_repeats, (1,)).item()
+                if self.training
+                else self.n_repeats
+            )
+        x = self.transformer(
+            x, e, (attention_mask, src_len_mask), iterations=iterations
+        )
 
         # Apply output projection
         logits = self.lm_head(self.out_norm(x))

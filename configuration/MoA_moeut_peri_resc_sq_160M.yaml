@@ -17,7 +17,7 @@ model_config:
   collect_reg_loss: False
   enable_early_exit: False
   norm_structure: "peri"
-  rescaling_method: "sqrt_no_prot_emb"
+  rescaling_method: "sqrt_prot_emb"
 
 
 # class NormStructure(Enum):
@@ -41,7 +41,7 @@ train:
 callbacks:
   lr_monitor: {}
   clean_metrics:
-    interval: 10
+    interval: 100
   speed_monitor:
     window_size: 10
     gpu_flops_available:
@@ -61,12 +61,11 @@ callbacks:
   expert_selection_callback:
     attn_experts: ${model_config.n_experts_attn}
     ffn_experts: ${model_config.n_experts_ffn}
-    log_interval: 10
+    log_interval: 100
   entropy_callback:
-    log_interval: 10
-  # layer_usage_monitor:
-  #   log_interval: 20
-  # # # activation_monitor_c: {}
+    log_interval: 100
+  residual_magnitude:
+    log_interval: 100
 
 data_config:
   path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
@@ -76,16 +75,14 @@ data_config:
   pin_memory: false
 
   
-
 trainer_config:
-  run_name: "base"
+  run_name: "dyna"
   max_duration: ${train.max_duration}
   train_dataloader_label: "train"
   device_train_microbatch_size: auto
   precision: "amp_fp16"
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
-  load_path: "s3://loop-llm/dyna/base_01sep25_wps6raj6_dim~768_n_l~2_n_r~6_n_h~3_d_hd~128_n_e_ffn~192_n_e_attn~10_ee~False_mode~moe_norm~peri_rescale~sqrt_no_prot_emb-ba100.pt"
   save_interval: "100ba"
   parallelism_config:
     pipeline_parallel_size: null
@@ -97,3 +94,10 @@ scheduler_config:
   t_max: ${train.max_duration}
   t_cooldown: ${train.cooldown}
   alpha_f: 1.0
+
+optimizer_config:
+  name: "decoupled_adamw"
+  lr: 0.0014
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1e-8

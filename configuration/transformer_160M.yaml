@@ -37,7 +37,7 @@ train:
 callbacks:
   lr_monitor: {}
   clean_metrics:
-    interval: 3
+    interval: 100
   speed_monitor:
     window_size: 1
     gpu_flops_available:
@@ -55,7 +55,9 @@ callbacks:
   runtime_estimator: {}
   optimizer_monitor: {}
   entropy_callback:
-    log_interval: 3
+    log_interval: 100
+  residual_magnitude:
+    log_interval: 100
   # layer_usage_monitor:
   #   log_interval: 20
   # # # activation_monitor_c: {}
@@ -86,3 +88,11 @@ scheduler_config:
   t_max: ${train.max_duration}
   t_cooldown: ${train.cooldown}
   alpha_f: 1.0
+
+
+optimizer_config:
+  name: "decoupled_adamw"
+  lr: 0.0014
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1e-8

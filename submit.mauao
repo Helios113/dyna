@@ -8,12 +8,12 @@
 #SBATCH --mem=64G                
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
-#SBATCH --output=tests_new/%x.%j.ans
+#SBATCH --output=slurm_outputs/%x.%j.ans
 
 
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_sq_160M
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_avg_160M
 
 
 status=$?

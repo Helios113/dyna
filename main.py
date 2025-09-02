@@ -53,7 +53,7 @@ def main(cfg: DictConfig):
     )
 
     # Make optimizer
-    optimizer = DecoupledAdamW(model.parameters())
+    optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
 
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None

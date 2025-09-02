@@ -97,3 +97,11 @@ scheduler_config:
   t_max: ${train.max_duration}
   t_cooldown: ${train.cooldown}
   alpha_f: 1.0
+
+
+optimizer_config:
+  name: "decoupled_adamw"
+  lr: 0.0014
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1e-8
