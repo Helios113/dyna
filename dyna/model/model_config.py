@@ -161,7 +161,7 @@ class DatasetConfig:
     cache_limit: int | str | None = None
     partition_algo: str = "relaxed"
     num_canonical_nodes: int | None = None
-    shuffle: bool = False
+    shuffle: bool = True
     shuffle_algo: str = "py1e"
     shuffle_seed: int = 9176
     shuffle_block_size: int | None = None

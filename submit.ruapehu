@@ -9,7 +9,9 @@
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.ans
 
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_160M
+
 
 
 status=$?

@@ -64,8 +64,7 @@ def main(cfg: DictConfig):
     composer_trace_dir = "composer_profiler"
     torch_trace_dir = "torch_traces_new"
     
-    
-    clipping_type = 'norm' # can also be 'adaptive' or 'value'
+    clipping_type = cfg.optimizer_config.clipping_type 
     gc = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
 
 

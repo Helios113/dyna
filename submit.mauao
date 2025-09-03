@@ -4,8 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=24
-#SBATCH --gres=gpu:a40:1
-#SBATCH --mem=64G                
+#SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.ans
@@ -13,8 +12,8 @@
 
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_avg_160M
-
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
 
 status=$?
 if [ $status -eq 0 ]; then

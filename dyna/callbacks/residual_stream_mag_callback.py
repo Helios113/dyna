@@ -60,12 +60,13 @@ class ResidualMagnitudeCallback(Callback):
             for i, sample in enumerate(elem):                
                 if i == len(residual_magnitudes):
                     residual_magnitudes.append(sample)
-                    
                 else:
                     residual_magnitudes[i] = torch.cat((residual_magnitudes[i],sample))
 
-
-        metrics_dict["metrics/residual_magnitude"] = self._fig_to_wandb_image(self._create_entropy_plot(residual_magnitudes, step))
+        print(len(residual_magnitudes), "residual magnitudes", flush=True)
+        print(residual_magnitudes[0].shape, "residual magnitudes[0] shape", flush=True)
+        
+        metrics_dict["metrics/residual_magnitude"] = self._fig_to_wandb_image(self._create_magnitude_plot(residual_magnitudes, step))
     
         logger.log_metrics(metrics_dict)
 
@@ -78,8 +79,6 @@ class ResidualMagnitudeCallback(Callback):
         return {
             "last_batch_logged": self.last_batch_logged,
             "log_key": self.log_key,
-            "epsilon": self.epsilon,
-            "total_blocks_so_far": self.total_blocks_so_far,
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -97,7 +96,7 @@ class ResidualMagnitudeCallback(Callback):
         img = wandb.Image(pil_img)
         plt.close(fig)
         return img
-    def _create_entropy_plot(self, data: list[torch.Tensor], step) -> plt.Figure:
+    def _create_magnitude_plot(self, data: list[torch.Tensor], step) -> plt.Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
 
         if not data:

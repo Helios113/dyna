@@ -1,0 +1,5 @@
+name: "wsld"
+t_warmup: ${train.warmup}
+t_max: ${train.max_duration}
+t_cooldown: ${train.cooldown}
+alpha_f: 1.0

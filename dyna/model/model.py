@@ -593,14 +593,13 @@ class LayerModule(Module, ABC):
                         residual_stream[skip_mask] / 2
                         + update.view(-1, update.shape[-1])[: skip_mask.sum()]
                         * update_factor
-                        / 2
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
                     if layer_index == 2:
                         residual_stream = residual_stream + update
                     else:
-                        residual_stream = residual_stream / 2 + update / 2
+                        residual_stream = residual_stream / 2 + update
 
                 residual_stream = residual_stream + e
         if self.norm_structure.value == NormStructure.post.value:
@@ -1729,7 +1728,7 @@ class DynaFormer(DynaPretrainedModel):
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
-                        self._residual_magnitudes.append(torch.norm(x, dim=-1).cpu())
+                        self._residual_magnitudes[-1].append(torch.norm(x, dim=-1).detach().clone().cpu())
 
             if not continue_processing:
                 break
