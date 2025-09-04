@@ -16,6 +16,7 @@ from dyna.model.model_config import (
     TrainerConfig,
     DataConfig,
     SchedulerConfig,
+    FSDPConfig
 )
 import glob
 import yaml
@@ -225,13 +226,22 @@ def build_full_concrete_config(cfg):
 
     scheduler_schema = OmegaConf.structured(SchedulerConfig)
     scheduler_config = OmegaConf.merge(scheduler_schema, cfg.scheduler_config)
-
+    
+    fsdp_schema = OmegaConf.structured(FSDPConfig)
+    fsdp_config = cfg.get("fsdp_config", {})
+    if fsdp_config:
+        fsdp_config = OmegaConf.merge(fsdp_schema, fsdp_config)
+    
     # Merge all configs into one dict for duplicate key checking
     merged_config = {}
     merged_config.update(OmegaConf.to_container(model_config, resolve=True))
     merged_config.update(OmegaConf.to_container(trainer_config, resolve=True))
     merged_config.update(OmegaConf.to_container(data_config, resolve=True))
     merged_config.update(OmegaConf.to_container(scheduler_config, resolve=True))
+    if fsdp_config:
+        merged_config.update(OmegaConf.to_container(fsdp_config, resolve=True))
+        cfg.fsdp_config.load_planner = fsdp_config.get("load_planner", "default")
+    
     check_duplicate_keys(merged_config)
 
     # Convert merged_config back into an OmegaConf DictConfig
@@ -239,6 +249,10 @@ def build_full_concrete_config(cfg):
     cfg.trainer_config = trainer_config
     cfg.data_config = data_config
     cfg.scheduler_config = scheduler_config
+
+    if fsdp_config:
+        cfg.fsdp_config = fsdp_config
+    
     return cfg
 
 

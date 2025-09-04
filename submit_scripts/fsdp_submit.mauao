@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH -J dyna
+#SBATCH -w mauao
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=24
+#SBATCH --gres=gpu:2
+#SBATCH --time=12:00:00
+#SBATCH --partition=normal
+#SBATCH --output=slurm_outputs/%x.%j.ans
+
+export MASTER_ADDR="127.0.0.2"
+
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+# HYDRA_FULL_ERROR=1 uv run composer -n 2 -v main.py --config-name=MoA_moeut_peri_resc_160M 
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M 
+
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+status=$?
+if [ $status -eq 0 ]; then
+   # Add notification after job completion
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment finished" \
+    --form-string "sound=experiment" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json
+
+else
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment failed" \
+    --form-string "sound=experiment_failed" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json
+fi

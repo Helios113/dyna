@@ -4,6 +4,7 @@ defaults:
   - callbacks: default_100
   - data_config: smoll
   - optimizer_config: adamw
+  - fsdp_config: null
 
 model_config:
   execution_mode: moe
@@ -40,10 +41,4 @@ trainer_config:
   precision: "amp_bf16"
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
-  load_path: "s3://loop-llm/dyna/1_base_03sep25_pz0bmm4a_dim~768_n_l~2_n_r~6_n_h~3_d_hd~128_n_e_ffn~192_n_e_attn~10_ee~False_mode~moe_norm~peri_rescale~cum_avg_prot_emb-ba100.pt"
   save_interval: "100ba"
-  parallelism_config:
-    pipeline_parallel_size: null
-    tensor_parallel_size: null
-
-

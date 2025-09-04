@@ -76,9 +76,6 @@ trainer_config:
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "100ba"
-  parallelism_config:
-    pipeline_parallel_size: null
-    tensor_parallel_size: null
 
 scheduler_config:
   name: "wsld"

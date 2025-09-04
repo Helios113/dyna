@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH -J dyna
+#SBATCH -w mauao
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=24
+#SBATCH --gres=gpu:2
+#SBATCH --time=12:00:00
+#SBATCH --partition=normal
+#SBATCH --output=slurm_outputs/%x.%j.ans
+
+
+
+killall -u pa511 -m .

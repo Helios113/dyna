@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 import math
+
+import atexit
 from collections.abc import Callable
 from typing import Optional
 import torch
@@ -36,6 +38,20 @@ PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.sqrt_scale_prot_emb,
     RescaleMethod.avg_prot_emb,
 ]
+
+
+def cleanup_distributed():
+    """Clean up distributed training resources."""
+    if torch.distributed.is_initialized():
+        try:
+            torch.distributed.destroy_process_group()
+        except Exception as e:
+            print(f"Warning: Error during distributed cleanup: {e}")
+
+
+def setup_distributed_cleanup():
+    """Register cleanup function to run at program exit."""
+    atexit.register(cleanup_distributed)
 
 
 @beartype
@@ -156,7 +172,6 @@ class DynaConfig(PretrainedConfig):
         self.enable_early_exit = kwargs.pop("enable_early_exit", False)
         self.use_rms_norm = kwargs.pop("use_rms_norm", True)
         self.collect_reg_loss = kwargs.pop("collect_reg_loss", False)
-        self.device = kwargs.pop("device", "cuda")
         self.sample_iterations = kwargs.pop("sample_iterations", False)
         # Handle execution_mode enum
         execution_mode_val = kwargs.pop("execution_mode", "moe")
@@ -375,7 +390,7 @@ class LayerModule(Module, ABC):
     def _check_early_exit(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        router: Parameter,
+        router: Float[Tensor, "d_model"],
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
     ) -> tuple[
@@ -389,7 +404,7 @@ class LayerModule(Module, ABC):
 
         # Compute exit scores
         s_exit: Float[Tensor, "batch seq"] = F.sigmoid(F.linear(x, router))
-        cum_sum += s_exit
+        cum_sum = cum_sum+s_exit
 
         # Create skip mask (True = continue processing)
         skip_mask: Bool[Tensor, "batch seq"] = cum_sum < tau
@@ -635,7 +650,7 @@ class LayerModule(Module, ABC):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: Float[Tensor, "batch seq d_model"],
-        router: Parameter,
+        router: Float[Tensor, "d_model"],
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -1379,14 +1394,15 @@ class MoEUTLayer(LayerModule):
             ),
         )
         self.input_reinjection = input_reinjection
-
+    def fsdp_wrap_fn(self, module: Module) -> bool:
+        return _fsdp_wrap_fn(self, module)
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        router: Parameter,
+        router: Float[Tensor, "d_model"],
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -1483,7 +1499,7 @@ class SimpleLayer(LayerModule):
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        router: Parameter,
+        router: Float[Tensor, "d_model"],
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
@@ -1536,7 +1552,8 @@ class SimpleLayer(LayerModule):
             s_exit,
             (expert_sel_attn, expert_sel_ffn),
         )
-
+    def fsdp_wrap_fn(self, module: Module) -> bool:
+        return _fsdp_wrap_fn(self, module)
 
 @beartype
 class DynaPretrainedModel(PreTrainedModel):
@@ -1564,10 +1581,10 @@ class DynaFormer(DynaPretrainedModel):
         self.collect_reg_loss = config.collect_reg_loss
         self.execution_mode = config.execution_mode
         self.router = Parameter(
-            torch.zeros(self.d_model, device=config.device), requires_grad=False
+            torch.zeros(self.d_model), requires_grad=False
         )
         self.tau = Parameter(
-            torch.ones(1, device=config.device), requires_grad=self.enable_early_exit
+            torch.ones(1), requires_grad=self.enable_early_exit
         )
         self.gather_stats = False
         match config.execution_mode.value:
@@ -1668,7 +1685,6 @@ class DynaFormer(DynaPretrainedModel):
             ExecutionMode.geiping_std,
         ]:
             for idx, layer in enumerate(self.head):
-
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
                     layer_index=idx + 1,
@@ -1728,7 +1744,9 @@ class DynaFormer(DynaPretrainedModel):
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
-                        self._residual_magnitudes[-1].append(torch.norm(x, dim=-1).detach().clone().cpu())
+                        self._residual_magnitudes[-1].append(
+                            torch.norm(x, dim=-1).detach().clone().cpu()
+                        )
 
             if not continue_processing:
                 break
@@ -1769,6 +1787,10 @@ class DynaFormer(DynaPretrainedModel):
 
         return x
 
+    # FSDP Wrap function
+    def fsdp_wrap_fn(self, module: Module) -> bool:
+        return _fsdp_wrap_fn(self, module)
+
 
 # Done
 @beartype
@@ -1781,6 +1803,12 @@ class DynaLM(DynaPretrainedModel):
         # Core transformer
         self.transformer = DynaFormer(config)
 
+        for child in self.transformer.children():
+            if isinstance(child, torch.nn.ModuleList):
+                continue
+            if isinstance(child, torch.nn.Module):
+                child._fsdp_wrap = True
+
         # Model configuration
         self.n_repeats = config.n_repeats
         self.use_rms_norm = config.use_rms_norm
@@ -1789,6 +1817,9 @@ class DynaLM(DynaPretrainedModel):
 
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.embedding._fsdp_wrap = True
+        
+        self.lm_head._fsdp_wrap = True
 
         # Output normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
@@ -1944,6 +1975,9 @@ class DynaLM(DynaPretrainedModel):
             attentions=None,
         )
 
+    def fsdp_wrap_fn(self, module: Module) -> bool:
+        return _fsdp_wrap_fn(self, module)
+
 
 # Done
 @beartype
@@ -1955,6 +1989,8 @@ class ComposerDynaModel(HuggingFaceModel):
         config: DynaConfig,
         tokenizer: PreTrainedTokenizerBase,
     ):
+        # Setup distributed cleanup
+        setup_distributed_cleanup()
 
         model = DynaLM(config, tokenizer.eos_token_id)
         # Configuration
@@ -1978,9 +2014,9 @@ class ComposerDynaModel(HuggingFaceModel):
         self.loss_fn = torch.nn.CrossEntropyLoss(
             reduction="mean", ignore_index=CROSS_ENTROPY_IGNORE_INDEX
         )
-
+    def fsdp_wrap_fn(self, module: Module) -> bool:
+        return _fsdp_wrap_fn(self, module)
     def forward(self, batch) -> CausalLMOutputWithPast:
-
         return self.model(
             input_ids=batch.get("input_ids", None),
             labels=batch.get("labels", None),
@@ -2004,3 +2040,13 @@ class ComposerDynaModel(HuggingFaceModel):
         #     self.loss_fn,
         # )
         return loss
+
+
+def _fsdp_wrap_fn(
+    self: DynaLM | DynaFormer,
+    module: Module,
+) -> bool:
+    # FSDP Wrap function for MPT Models
+    if hasattr(module, "_fsdp_kwargs_dict"):
+        return module._fsdp_kwargs_dict  # type: ignore
+    return isinstance(module, LayerModule | DynaModule | DynaFormer | ComposerDynaModel)

@@ -14,7 +14,7 @@ from dyna.utils.utils import build_full_concrete_config
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-@hydra.main(version_base=None, config_path="../configuration", config_name="MoA_moeut")
+@hydra.main(version_base=None, config_path="../configuration", config_name="MoA_moeut_160M")
 def main(cfg: DictConfig):
     # Build full concrete config (merges model, trainer, data, etc.)
     full_cfg = build_full_concrete_config(cfg)
@@ -46,21 +46,7 @@ def main(cfg: DictConfig):
     
     print(f"Total DataSize: {data.numel()*8/1000000}MB")
 
-   
-    # print("eval1")
-    
-    # output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    # with torch.no_grad():
-    #     print("eval")
-    #     output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    # model.train()
-    # print("train2")
-    # output = model({"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    # loss = model.loss(output,{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)})
-    # loss.backward()
-    # for name, param in model.named_parameters(recurse=True):
-    #     print(name, param.grad is not None)
-    # Use torchinfo summary for comprehensive model profiling
+
     model_summary = summary(
         model,
         input_data=[{"input_ids": torch.randint(0, hf_cfg.vocab_size, input_size, device=device)}],

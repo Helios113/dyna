@@ -3,6 +3,7 @@ from transformers import AutoTokenizer
 from composer.loggers import WandBLogger
 from dyna.model.model import ComposerDynaModel, DynaConfig
 from composer import Trainer
+from composer.utils import get_device
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from composer.optim import DecoupledAdamW
@@ -15,6 +16,7 @@ from dyna.utils.utils import (
     build_full_concrete_config,
     get_scheduler,
 )
+from composer.utils import dist
 from beartype import beartype
 from torch.profiler import profile, ProfilerActivity, record_function
 from torch.profiler import schedule
@@ -29,11 +31,20 @@ def trace_handler(p):
 from composer.algorithms import GradientClipping
 from composer.trainer import Trainer
 
-import streaming
-streaming.base.util.clean_stale_shared_memory()
+from streaming.base.util import clean_stale_shared_memory
+
+import torch.distributed as dist
+
+def safe_clean_stale_shared_memory():
+    # only rank 0 (main process) initializes
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        return clean_stale_shared_memory()
+
+
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
 @beartype
 def main(cfg: DictConfig):
+    safe_clean_stale_shared_memory()
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config)
@@ -51,7 +62,6 @@ def main(cfg: DictConfig):
         tokenizer=tokenizer,
         device_train_batch_size=cfg.train.device_train_batch_size,
     )
-
     # Make optimizer
     optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
 
@@ -77,8 +87,11 @@ def main(cfg: DictConfig):
         schedulers=scheduler,
         loggers=loggers,
         algorithms=[gc],
+        parallelism_config={'fsdp': cfg.get('fsdp_config', None)},
         **cfg.trainer_config,
     )
+    # dist.barrier()
+    
 
     trainer.fit()
 

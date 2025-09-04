@@ -88,9 +88,7 @@ trainer_config:
   save_folder: "s3://loop-llm/llm-models/latest/"
   save_interval: "1ba"
   device: "gpu"
-  parallelism_config:
-    pipeline_parallel_size: null
-    tensor_parallel_size: null
+
 
 scheduler_config:
   name: "wsld"
