@@ -7,13 +7,16 @@
 #SBATCH --gres=gpu:2
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
-#SBATCH --output=slurm_outputs/%x.%j.ans
+#SBATCH --output=slurm_outputs/%x.%j.log
 
 export MASTER_ADDR="127.0.0.2"
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-# HYDRA_FULL_ERROR=1 uv run composer -n 2 -v main.py --config-name=MoA_moeut_peri_resc_160M 
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M 
+rm -rf /tmp > /dev/null
+
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_resc_160M 
+TORCH_DISTRIBUTED_DEBUG=INFO WANDB_MODE=disabled HYDRA_FULL_ERROR=1 uv run composer -n 2 -v main.py --config-name=exp_MoA_moeut_peri_resc_160M
+
 
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
 status=$?

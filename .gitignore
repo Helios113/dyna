@@ -19,3 +19,4 @@ logs/
 *.json
 *.err
 *.out
+*.log

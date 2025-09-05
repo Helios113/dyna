@@ -240,7 +240,7 @@ def build_full_concrete_config(cfg):
     merged_config.update(OmegaConf.to_container(scheduler_config, resolve=True))
     if fsdp_config:
         merged_config.update(OmegaConf.to_container(fsdp_config, resolve=True))
-        cfg.fsdp_config.load_planner = fsdp_config.get("load_planner", "default")
+        # cfg.fsdp_config.load_planner = fsdp_config.get("load_planner", "default")
     
     check_duplicate_keys(merged_config)
 

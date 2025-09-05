@@ -28,10 +28,21 @@ class CleanMetrics(Callback):
             if isinstance(interval, str)
             else Time(interval, TimeUnit.BATCH)
         )
-        
+    
+    
+    def find_transformer_module(self, module: torch.nn.Module):
+        # Recursively search for a child named 'transformer'
+        for name, child in module.named_children():
+            if name == "transformer":
+                return child
+            result = self.find_transformer_module(child)
+            if result is not None:
+                return result
+        return None
 
     def batch_start(self, state: State, logger: Logger) -> None:
-        transformer = state.model.model.transformer
+        
+        transformer = self.find_transformer_module(state.model)
         
         if (state.timestamp.get(self.interval.unit) + Time.from_timestring("1ba"))  % self.interval.value == 0:
             transformer.gather_stats = True

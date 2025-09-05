@@ -21,7 +21,7 @@ from beartype import beartype
 from torch.profiler import profile, ProfilerActivity, record_function
 from torch.profiler import schedule
 import torch
-
+from composer.utils import FSDPConfig
 def trace_handler(p):
     p.export_chrome_trace(
         "/nfs-share/pa511/code_bases/dyna_project/dyna/torch_traces_sel/trace_new"
@@ -40,7 +40,6 @@ def safe_clean_stale_shared_memory():
     if not dist.is_initialized() or dist.get_rank() == 0:
         return clean_stale_shared_memory()
 
-
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
 @beartype
 def main(cfg: DictConfig):
@@ -57,6 +56,8 @@ def main(cfg: DictConfig):
     # Instead of passing the DictConfig directly, unpack it as kwargs
     conf = DynaConfig(**cfg.model_config)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
+    
+    
     train_dataloader = get_data_loader(
         cfg.data_config,
         tokenizer=tokenizer,
@@ -64,7 +65,6 @@ def main(cfg: DictConfig):
     )
     # Make optimizer
     optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
-
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 
@@ -76,8 +76,8 @@ def main(cfg: DictConfig):
     
     clipping_type = cfg.optimizer_config.clipping_type 
     gc = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
-
-
+    # initialize_dist()
+    # prepare_fsdp_module(model,optimizer, FSDPConfig(**cfg.get('fsdp_config', {})))
     trainer = Trainer(
         model=model,
         train_dataloader=train_dataloader,
@@ -85,9 +85,9 @@ def main(cfg: DictConfig):
         callbacks=callbacks,
         optimizers=optimizer,
         schedulers=scheduler,
+        parallelism_config= {"fsdp_config": cfg.get("fsdp_config", {})},
         loggers=loggers,
         algorithms=[gc],
-        parallelism_config={'fsdp': cfg.get('fsdp_config', None)},
         **cfg.trainer_config,
     )
     # dist.barrier()
