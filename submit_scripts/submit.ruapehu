@@ -9,10 +9,13 @@
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
 
+HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_160M
+# rm -rf /tmp > /dev/null
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
-# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_160M
-rm -rf /tmp > /dev/null
-HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_rescavg_ee_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=geiping_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=new_abbie_160M
 
 
 status=$?

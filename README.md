@@ -182,3 +182,8 @@ What can be the issue
 srun -w ruapehu -c 24 --gres=gpu:0 --partition=interactive --pty bash
 
 find . -user "$USER" -type f -delete 2>/dev/null
+
+
+The averaging is not great -- 
+    How to fix it?
+Lora entropy ?

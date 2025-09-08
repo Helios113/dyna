@@ -115,6 +115,41 @@ def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tenso
     return -entropy_l(sel).mean()
 
 
+# class LayerScaledIdentityFn(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, input, layer_idx: int, total_layers: int):
+#         # Save values needed for backward
+#         ctx.layer_idx = layer_idx
+#         ctx.total_layers = total_layers
+#         return input.clone()  # return unchanged
+
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         # Compute scaling factor
+#         scale = (ctx.total_layers - ctx.layer_idx) ** 2
+#         grad_input = grad_output * scale
+#         # None for layer_idx and total_layers (no gradients for ints)
+#         return grad_input, None, None
+
+
+class LayerScaledIdentityFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, total_layers: int):
+        # Save values needed for backward
+        ctx.total_layers = total_layers
+        return input.clone()  # return unchanged
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Compute scaling factor
+        grad_input = grad_output * ctx.total_layers
+        return grad_input, None
+
+
+def layer_scaled_identity(x, total_layers: int):
+    return LayerScaledIdentityFn.apply(x, total_layers)
+
+
 class DynaConfig(PretrainedConfig):
     """Configuration class for Dyna model."""
 
@@ -179,6 +214,7 @@ class DynaConfig(PretrainedConfig):
             self.execution_mode = ExecutionMode[execution_mode_val]
         else:
             self.execution_mode = execution_mode_val
+        self.repeat_residual = kwargs.pop("repeat_residual", False)
 
 
 @beartype
@@ -521,6 +557,7 @@ class LayerModule(Module, ABC):
         layer_index: int,
         norm_to_use: Module,
         e: Optional[Float[Tensor, "batch seq d_model"]] = None,
+        total_layers: int = 1,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
@@ -577,7 +614,7 @@ class LayerModule(Module, ABC):
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
-                    scale_factor = math.sqrt(layer_index) - 1 / math.sqrt(layer_index)
+                    scale_factor = (math.sqrt(layer_index) - 1 )/ math.sqrt(layer_index)
                     residual_stream = scale_factor * residual_stream + update / (
                         math.sqrt(layer_index)
                     )
@@ -610,10 +647,6 @@ class LayerModule(Module, ABC):
                         * update_factor
                     )
                 else:
-                    # Apply to all tokens when early exit is disabled
-                    if layer_index == 2:
-                        residual_stream = residual_stream + update
-                    else:
                         residual_stream = residual_stream / 2 + update
 
                 residual_stream = residual_stream + e
@@ -1397,7 +1430,6 @@ class MoEUTLayer(LayerModule):
             ),
         )
         self.input_reinjection = input_reinjection
-
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
@@ -1408,6 +1440,7 @@ class MoEUTLayer(LayerModule):
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        total_layers: int,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         bool,
@@ -1444,7 +1477,15 @@ class MoEUTLayer(LayerModule):
         del q_val, k_val, v_val
 
         x = self._apply_update_to_residual(
-            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
+            x,
+            att_out,
+            skip_mask,
+            cum_sum,
+            tau,
+            layer_index,
+            self.attn_post,
+            e,
+            total_layers,
         )
 
         # Clean up attention output
@@ -1456,7 +1497,15 @@ class MoEUTLayer(LayerModule):
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
 
         x = self._apply_update_to_residual(
-            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
+            x,
+            ffn_out,
+            skip_mask,
+            cum_sum,
+            tau,
+            layer_index,
+            self.ffn_post,
+            e,
+            total_layers,
         )
 
         # Clean up FFN output and other intermediate tensors
@@ -1505,6 +1554,7 @@ class SimpleLayer(LayerModule):
         cum_sum: Float[Tensor, "batch seq"],
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        total_layers: int,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         bool,
@@ -1535,7 +1585,15 @@ class SimpleLayer(LayerModule):
         )
 
         x = self._apply_update_to_residual(
-            x, att_out, skip_mask, cum_sum, tau, layer_index, self.attn_post, e
+            x,
+            att_out,
+            skip_mask,
+            cum_sum,
+            tau,
+            layer_index,
+            self.attn_post,
+            e,
+            total_layers,
         )
 
         # === FFN BLOCK ===
@@ -1544,7 +1602,15 @@ class SimpleLayer(LayerModule):
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
 
         x = self._apply_update_to_residual(
-            x, ffn_out, skip_mask, cum_sum, tau, layer_index, self.ffn_post, e
+            x,
+            ffn_out,
+            skip_mask,
+            cum_sum,
+            tau,
+            layer_index,
+            self.ffn_post,
+            e,
+            total_layers,
         )
 
         return (
@@ -1613,6 +1679,7 @@ class DynaFormer(DynaPretrainedModel):
                 raise ValueError(
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
+        self.repeat_residual = config.repeat_residual
 
         # # Initialize parameters
         # self.reset_parameters()
@@ -1661,6 +1728,7 @@ class DynaFormer(DynaPretrainedModel):
             elif isinstance(layer, DynaModule) and hasattr(layer, "get_reg_loss"):
                 reg_loss = reg_loss + self.reg_entropy * layer.get_reg_loss()
         return reg_loss
+
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
@@ -1678,6 +1746,7 @@ class DynaFormer(DynaPretrainedModel):
 
         continue_processing = True
         reinjection_embeddings = None
+        residual_embeddings = None
         if self.execution_mode.value in [
             ExecutionMode.geiping_moe,
             ExecutionMode.geiping_std,
@@ -1696,7 +1765,7 @@ class DynaFormer(DynaPretrainedModel):
                 if self.gather_stats:
                     with torch.no_grad():
                         self._latent_vectors[-1].append(
-                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                            self._temp_lm_head(x[:, -1, :]).clone().detach().cpu()
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
@@ -1716,7 +1785,8 @@ class DynaFormer(DynaPretrainedModel):
                 else:
                     # Standard: current_position_in_repeated_layers + 2
                     layer_index = (li * self.n_layers) + idx + 2
-
+                if self.repeat_residual and li > 0:
+                    x = x + residual_embeddings
                 x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
                     x=x,
                     layer_index=layer_index,
@@ -1726,7 +1796,11 @@ class DynaFormer(DynaPretrainedModel):
                     cum_sum=cum_sum,
                     tau=self.tau,
                     mask=mask,
+                    total_layers=self.n_layers * iterations,
                 )
+                print(f"Layer {layer_index} done")
+                print("x norm:", torch.norm(x).item())
+                
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
 
@@ -1738,14 +1812,15 @@ class DynaFormer(DynaPretrainedModel):
                     # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
                     with torch.no_grad():
                         self._latent_vectors[-1].append(
-                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                            self._temp_lm_head(x[:, -1, :]).clone().detach().cpu()
                         )
                         if expert_sel[0] is not None:
                             self._expert_sel[-1].append(expert_sel)
                         self._residual_magnitudes[-1].append(
                             torch.norm(x, dim=-1).detach().clone().cpu()
                         )
-
+            if self.repeat_residual:
+                residual_embeddings = x.clone()
             if not continue_processing:
                 break
 
@@ -2014,7 +2089,7 @@ class ComposerDynaModel(HuggingFaceModel):
         self.model.reset_parameters()
 
     def forward(self, batch) -> CausalLMOutputWithPast:
-        
+
         return self.model(
             input_ids=batch.get("input_ids", None),
             labels=batch.get("labels", None),

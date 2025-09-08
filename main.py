@@ -22,6 +22,9 @@ from torch.profiler import profile, ProfilerActivity, record_function
 from torch.profiler import schedule
 import torch
 from composer.utils import FSDPConfig
+from composer.utils import reproducibility
+GLOBAL_SEED = 42
+reproducibility.configure_deterministic_mode()
 def trace_handler(p):
     p.export_chrome_trace(
         "/nfs-share/pa511/code_bases/dyna_project/dyna/torch_traces_sel/trace_new"
@@ -43,6 +46,8 @@ def safe_clean_stale_shared_memory():
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
 @beartype
 def main(cfg: DictConfig):
+    reproducibility.seed_all(GLOBAL_SEED)
+    
     safe_clean_stale_shared_memory()
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))

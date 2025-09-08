@@ -7,16 +7,12 @@ defaults:
   - fsdp_config: null
 
 model_config:
-  execution_mode: moe
+  execution_mode: transformer
   d_model: 768
+  d_ffn: 3072
   n_repeats: 6
-  n_heads: 3
-  n_experts_ffn: 192
-  n_experts_attn: 10
-  d_head: 128
-  k_ffn: 12
-  k_attn: 2
-  d_expert_ffn: 128
+  n_heads: 12
+  d_head: 64
   n_layers: 2
   vocab_size: 50368
   max_seq_len: 1024
@@ -24,18 +20,18 @@ model_config:
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  norm_structure: peri
-  rescaling_method: none
-  repeat_residual: false
+  norm_structure: "peri"
+  rescaling_method: "sqrt_prot_emb"
+  sample_iterations: True
 
 train:
-  max_duration: "100ba"
-  warmup: "634ba"
+  max_duration: "3171ba"
+  warmup: "200ba"
   cooldown: "634ba"
   device_train_batch_size: 1024
 
 trainer_config:
-  run_name: "moe_basline"
+  run_name: "abbie_n"
   max_duration: ${train.max_duration}
   train_dataloader_label: "train"
   device_train_microbatch_size: auto
@@ -43,5 +39,6 @@ trainer_config:
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "100ba"
+
 
 

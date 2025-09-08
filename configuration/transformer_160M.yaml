@@ -4,7 +4,7 @@ defaults:
   - callbacks: default_100
   - data_config: smoll
   - optimizer_config: adamw
-  - fsdp_config: fsdp
+  - fsdp_config: null
 
 model_config:
   execution_mode: transformer

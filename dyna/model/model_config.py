@@ -60,6 +60,7 @@ class ModelConfig:
     norm_structure: NormStructure = NormStructure.peri
     run_id: str | None = None
     sample_iterations: bool = False
+    repeat_residual: bool = False
 
 
 @dataclass
@@ -124,7 +125,7 @@ class TrainerConfig:
     accumulate_train_batch_on_tokens: bool = False
 
     # Reproducibility
-    seed: int | None = None
+    seed: int | None = 42
     deterministic_mode: bool = False
 
     # Distributed Training

@@ -1,3 +1,11 @@
+defaults:
+  - _self_
+  - scheduler_config: wsld
+  - callbacks: default_100
+  - data_config: smoll
+  - optimizer_config: adamw
+  - fsdp_config: null
+
 model_config:
   execution_mode: geiping_std
   d_model: 768
@@ -14,7 +22,7 @@ model_config:
   enable_early_exit: False
   norm_structure: pre
   rescaling_method: none
-
+  sample_iterations: True
 
 # class NormStructure(Enum):
 #     Peri = 0
@@ -34,38 +42,6 @@ train:
   cooldown: "634ba"
   device_train_batch_size: 1024
 
-callbacks:
-  lr_monitor: {}
-  clean_metrics:
-    interval: 100
-  speed_monitor:
-    window_size: 10
-    gpu_flops_available:
-        fp64: 67e12,
-        fp32: 67e12,
-        tf32: 989e12 / 2,
-        fp16: 1.979e15 / 2,
-        amp_fp16: 1.979e15 / 2,
-        bf16: 1.979e15 / 2,
-        amp_bf16: 1.979e15 / 2,
-        fp8: 3.958e15 / 2,
-        amp_fp8: 3.958e15 / 2,
-        int8: 3.958e15 / 2,
-  memory_monitor: {}
-  runtime_estimator: {}
-  optimizer_monitor: {}
-  entropy_callback:
-    log_interval: 100
-  # layer_usage_monitor:
-  #   log_interval: 20
-  # # # activation_monitor_c: {}
-
-data_config:
-  path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configuration/streams"
-  dataset:
-    max_seq_len: ${model_config.max_seq_len}
-  num_workers: 24
-
 
 trainer_config:
   run_name: "geiping"
@@ -77,9 +53,3 @@ trainer_config:
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "100ba"
 
-scheduler_config:
-  name: "wsld"
-  t_warmup: ${train.warmup}
-  t_max: ${train.max_duration}
-  t_cooldown: ${train.cooldown}
-  alpha_f: 1.0

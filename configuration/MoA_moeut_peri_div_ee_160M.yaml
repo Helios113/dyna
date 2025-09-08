@@ -24,18 +24,18 @@ model_config:
   n_expert_shared_ffn: 0
   collect_reg_loss: False
   enable_early_exit: False
-  norm_structure: peri
-  rescaling_method: none
-  repeat_residual: false
+  norm_structure: "peri"
+  rescaling_method: "avg_prot_emb"
+  sample_iterations: True
 
 train:
-  max_duration: "100ba"
+  max_duration: "3171ba"
   warmup: "634ba"
   cooldown: "634ba"
   device_train_batch_size: 1024
 
 trainer_config:
-  run_name: "moe_basline"
+  run_name: "const_ee_peri"
   max_duration: ${train.max_duration}
   train_dataloader_label: "train"
   device_train_microbatch_size: auto
@@ -43,5 +43,3 @@ trainer_config:
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "100ba"
-
-
