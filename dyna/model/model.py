@@ -1798,9 +1798,6 @@ class DynaFormer(DynaPretrainedModel):
                     mask=mask,
                     total_layers=self.n_layers * iterations,
                 )
-                print(f"Layer {layer_index} done")
-                print("x norm:", torch.norm(x).item())
-                
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
 
@@ -1808,17 +1805,15 @@ class DynaFormer(DynaPretrainedModel):
                 if not continue_processing:
                     break
                 if self.gather_stats:
-                    # Track sequence lengths and entropy for analysis
-                    # self._seq_len[-1].append(copy.deepcopy(seq_lengths))
-                    with torch.no_grad():
-                        self._latent_vectors[-1].append(
-                            self._temp_lm_head(x[:, -1, :]).clone().detach().cpu()
-                        )
-                        if expert_sel[0] is not None:
-                            self._expert_sel[-1].append(expert_sel)
-                        self._residual_magnitudes[-1].append(
-                            torch.norm(x, dim=-1).detach().clone().cpu()
-                        )
+
+                    self._latent_vectors[-1].append(
+                        self._temp_lm_head(x[:, -1, :]).detach().cpu()
+                    )
+                    if expert_sel[0] is not None:
+                        self._expert_sel[-1].append(expert_sel)
+                    self._residual_magnitudes[-1].append(
+                        torch.norm(x, dim=-1).detach().clone().cpu()
+                    )
             if self.repeat_residual:
                 residual_embeddings = x.clone()
             if not continue_processing:

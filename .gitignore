@@ -20,3 +20,8 @@ logs/
 *.err
 *.out
 *.log
+*jsonl
+*jsonl_tmp
+*.zip
+dyna_tmp*
+local_data/
