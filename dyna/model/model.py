@@ -614,7 +614,7 @@ class LayerModule(Module, ABC):
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
-                    scale_factor = (math.sqrt(layer_index) - 1 )/ math.sqrt(layer_index)
+                    scale_factor = (math.sqrt(layer_index) - 1) / math.sqrt(layer_index)
                     residual_stream = scale_factor * residual_stream + update / (
                         math.sqrt(layer_index)
                     )
@@ -647,7 +647,7 @@ class LayerModule(Module, ABC):
                         * update_factor
                     )
                 else:
-                        residual_stream = residual_stream / 2 + update
+                    residual_stream = residual_stream / 2 + update
 
                 residual_stream = residual_stream + e
         if self.norm_structure.value == NormStructure.post.value:
@@ -1430,6 +1430,11 @@ class MoEUTLayer(LayerModule):
             ),
         )
         self.input_reinjection = input_reinjection
+        if config.enable_early_exit:
+            self.saturation_detector = torch.nn.Parameter(
+                torch.randn(config.d_model, 2)
+            )
+
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
@@ -1441,20 +1446,19 @@ class MoEUTLayer(LayerModule):
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         total_layers: int,
+        skip_mask: None | Bool[Tensor, "batch seq"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
-        bool,
-        int,
-        None | Float[Tensor, "batch seq"],
         tuple,
+        Float[Tensor, "batch seq 2"],
     ]:
         """Forward pass through the layer with configurable behavior."""
-        skip_mask, continue_processing, s_exit = self._check_early_exit(
-            x, router, cum_sum, tau
-        )
+        # skip_mask, continue_processing, s_exit = self._check_early_exit(
+        #     x, router, cum_sum, tau
+        # )
 
-        if not continue_processing:
-            return x, False, 0, s_exit, ((None, None), None)
+        # if not continue_processing:
+        #     return x, False, 0, s_exit, ((None, None), None)
 
         if self.input_reinjection and reinjection_embeddings is not None:
             # Concatenate along the feature dimension
@@ -1495,7 +1499,15 @@ class MoEUTLayer(LayerModule):
 
         # FFN computation
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
+        saturation_event = None
 
+        if self.saturation_detector is not None:
+
+            saturation_event = F.gumbel_softmax(
+                F.linear(ffn_out, self.saturation_detector.T), hard=True
+            )
+
+            print(saturation_event.shape, flush=True)
         x = self._apply_update_to_residual(
             x,
             ffn_out,
@@ -1511,13 +1523,7 @@ class MoEUTLayer(LayerModule):
         # Clean up FFN output and other intermediate tensors
         del ffn_out, skip_mask
 
-        return (
-            x,
-            continue_processing,
-            max_len,
-            s_exit,
-            (expert_sel_attn, expert_sel_ffn),
-        )
+        return (x, (expert_sel_attn, expert_sel_ffn), saturation_event)
 
 
 @beartype
@@ -1735,8 +1741,13 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None,
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         iterations: int = 1,
-    ) -> Float[Tensor, "batch seq d_model"]:
-        """Forward pass through the model."""
+        input_ids: Int[Tensor, "batch seq"] | None = None,
+    ) -> tuple[Float[Tensor, "batch seq d_model"], torch.Tensor]:
+
+        if input_ids is not None:
+            _labels = torch.roll(input_ids, shifts=-1)
+            _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+
         self._expert_sel.append([])
         self._exit_logits.append([])
         self._latent_vectors.append([])
@@ -1774,6 +1785,7 @@ class DynaFormer(DynaPretrainedModel):
                         )
             reinjection_embeddings = x.clone()
             x = torch.rand_like(x)
+        skip_mask=None
         for li in range(iterations):
             for idx, layer in enumerate(self.layers):
                 # Calculate correct layer index based on execution mode
@@ -1787,7 +1799,7 @@ class DynaFormer(DynaPretrainedModel):
                     layer_index = (li * self.n_layers) + idx + 2
                 if self.repeat_residual and li > 0:
                     x = x + residual_embeddings
-                x, continue_processing, seq_lengths, s_exit, expert_sel = layer(
+                x_out, expert_sel, saturation_event = layer(
                     x=x,
                     layer_index=layer_index,
                     e=e,
@@ -1797,17 +1809,57 @@ class DynaFormer(DynaPretrainedModel):
                     tau=self.tau,
                     mask=mask,
                     total_layers=self.n_layers * iterations,
+                    skip_mask = skip_mask
                 )
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
+                if self.enable_early_exit:
 
+                    print(
+                        "layer ",
+                        layer_index,
+                        " saturation_event sum is ",
+                        saturation_event[:, :, 0].sum().item(),
+                        " out of ",
+                        saturation_event[:, :, 0].numel(),
+                        flush=True,
+                    )
+
+                    print(
+                        "energy per layer before update is ",
+                        energy_per_sample.sum(),
+                        flush=True,
+                    )
+
+                    # if prev_saturation is not None:
+                    #     saturation_event = saturation_event * prev_saturation
+                    x = x * saturation_event[:, :, 0:1] + x_out * (
+                        saturation_event[:, :, 1:2]
+                    )
+                    # prev_saturation = saturation_event
+                    skip_mask = saturation_event[:, :, 0].bool()
+                    energy_per_sample = energy_per_sample + saturation_event[:, :, 1]
+
+                else:
+                    x = x_out
                 # make continue_processing just be conditioned on the last token
                 if not continue_processing:
                     break
                 if self.gather_stats:
 
-                    self._latent_vectors[-1].append(
-                        self._temp_lm_head(x[:, -1, :]).detach().cpu()
+                    entropy_mask = _labels != CROSS_ENTROPY_IGNORE_INDEX
+
+                    tmp = (
+                        self.get_entropy(x_out[entropy_mask, :]).detach().clone().cpu()
+                    )
+
+                    print(
+                        f"Layer {layer_index} entropy: {tmp.mean().item()}", flush=True
+                    )
+
+                    print(
+                        f"torch.norm(x, dim=-1).detach().clone().cpu() {torch.norm(x, dim=-1).detach().clone().cpu().mean()}",
+                        flush=True,
                     )
                     if expert_sel[0] is not None:
                         self._expert_sel[-1].append(expert_sel)
