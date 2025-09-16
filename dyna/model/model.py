@@ -86,13 +86,12 @@ def compute_loss_from_logits(
 
 
 @beartype
-def round_up_to_multiple_of_256(n: torch.Tensor) -> torch.Tensor:
+def round_up_to_multiple_of_256(n: torch.Tensor) -> int:
     """Return the smallest number divisible by 256 that is >= n."""
     if n <= 0:
-        return torch.tensor(
-            256, device=n.device
-        )  # Ensure tensor is on the same device as input
-    return ((n - 1) // 256 + 1) * 256
+        return 256
+       
+    return int(((n - 1) // 256 + 1) * 256)
 
 
 @beartype
@@ -566,7 +565,7 @@ class LayerModule(Module, ABC):
 
         match self.rescaling_method.value:
             case RescaleMethod.none.value:
-                if self.enable_early_exit:
+                if self.enable_early_exit and skip_mask is not None:
                     residual_stream[skip_mask] = (
                         residual_stream[skip_mask]
                         + update.view(-1, update.shape[-1])[: skip_mask.sum()]
@@ -1786,6 +1785,7 @@ class DynaFormer(DynaPretrainedModel):
             reinjection_embeddings = x.clone()
             x = torch.rand_like(x)
         skip_mask=None
+        energy_per_sample = torch.zeros(x.shape[0],x.shape[1], device=x.device, dtype=x.dtype)
         for li in range(iterations):
             for idx, layer in enumerate(self.layers):
                 # Calculate correct layer index based on execution mode
@@ -1846,21 +1846,9 @@ class DynaFormer(DynaPretrainedModel):
                 if not continue_processing:
                     break
                 if self.gather_stats:
-
-                    entropy_mask = _labels != CROSS_ENTROPY_IGNORE_INDEX
-
-                    tmp = (
-                        self.get_entropy(x_out[entropy_mask, :]).detach().clone().cpu()
-                    )
-
-                    print(
-                        f"Layer {layer_index} entropy: {tmp.mean().item()}", flush=True
-                    )
-
-                    print(
-                        f"torch.norm(x, dim=-1).detach().clone().cpu() {torch.norm(x, dim=-1).detach().clone().cpu().mean()}",
-                        flush=True,
-                    )
+                    self._latent_vectors[-1].append(
+                            self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                        )
                     if expert_sel[0] is not None:
                         self._expert_sel[-1].append(expert_sel)
                     self._residual_magnitudes[-1].append(

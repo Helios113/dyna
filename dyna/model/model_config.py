@@ -111,7 +111,7 @@ class TrainerConfig:
     save_interval: str | None = "1ep"
     save_weights_only: bool = False
     save_ignore_keys: list | None = None
-    save_num_checkpoints_to_keep: int = -1
+    save_num_checkpoints_to_keep: int = 0
     save_metrics: bool = False
 
     # Graceful Resumption

@@ -1,3 +1,4 @@
+import os
 import random
 from transformers import AutoTokenizer
 from composer.loggers import WandBLogger
@@ -51,6 +52,13 @@ def main(cfg: DictConfig):
     safe_clean_stale_shared_memory()
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
+    hydra_workdir = hydra.utils.get_original_cwd()
+    id = random.randint(0, 1000000)
+    tmpdir = os.path.join(hydra_workdir, f"dyna_tmp_{id}")
+    print(f"Setting TMPDIR to {tmpdir}", flush=True)
+    # check if the directory exists, and create it if not
+    os.mkdir(tmpdir)
+    os.environ["TMPDIR"] = tmpdir
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config)
     cfg.trainer_config.save_filename = run_name+"-ba{batch}.pt"
     wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name, init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True)})
