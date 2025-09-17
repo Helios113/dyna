@@ -29,7 +29,7 @@ model_config:
   repeat_residual: false
 
 train:
-  max_duration: "100ba"
+  max_duration: "3171ba"
   warmup: "634ba"
   cooldown: "634ba"
   device_train_batch_size: 1024
@@ -42,6 +42,6 @@ trainer_config:
   precision: "amp_bf16"
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
-  save_interval: "100ba"
+  save_interval: "1000ba"
 
 

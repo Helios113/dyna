@@ -54,9 +54,13 @@ def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     hydra_workdir = hydra.utils.get_original_cwd()
     id = random.randint(0, 1000000)
+    torch.autograd.set_detect_anomaly(True)
     tmpdir = os.path.join(hydra_workdir, f"dyna_tmp_{id}")
     print(f"Setting TMPDIR to {tmpdir}", flush=True)
     # check if the directory exists, and create it if not
+    while os.path.exists(tmpdir):
+        id = random.randint(0, 1000000)
+        tmpdir = os.path.join(hydra_workdir, f"dyna_tmp_{id}")
     os.mkdir(tmpdir)
     os.environ["TMPDIR"] = tmpdir
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config)

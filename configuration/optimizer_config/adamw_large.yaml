@@ -1,0 +1,8 @@
+name: "decoupled_adamw"
+lr: 0.006
+weight_decay: 0.01
+betas: [0.9, 0.95]
+eps: 1e-8
+
+clipping_type: "norm"
+# can also be 'adaptive' or 'value'
