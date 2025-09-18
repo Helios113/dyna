@@ -457,7 +457,6 @@ class LayerModule(Module, ABC):
 
         return continue_mask, continue_processing, s_exit
 
-    # Done
     def _trim_sequence(
         self,
         x: Float[Tensor, "batch seq d_model"],
@@ -574,35 +573,7 @@ class LayerModule(Module, ABC):
         match self.rescaling_method.value:
             case RescaleMethod.none.value:
                 if self.enable_early_exit and continue_mask is not None:
-
-                    batch_idx, seq_idx = continue_mask.nonzero(as_tuple=True)
-
-                    elements_per_sample = torch.bincount(
-                        batch_idx, minlength=residual_stream.shape[0]
-                    )
-                    cumsum_elements_per_sample = torch.cumsum(
-                        torch.cat(
-                            [
-                                torch.tensor([0], device=residual_stream.device),
-                                elements_per_sample[:-1],
-                            ]
-                        ),
-                        dim=0,
-                    )
-                    local_indices = (
-                        torch.arange(batch_idx.numel(), device=residual_stream.device)
-                        - cumsum_elements_per_sample[batch_idx]
-                    )
-
-                    full_update = torch.ones_like(
-                        residual_stream,
-                        dtype=update.dtype,
-                        device=residual_stream.device,
-                    )
-
-                    full_update[batch_idx, seq_idx] = update[batch_idx, local_indices]
-
-                    residual_stream = residual_stream
+                    residual_stream = torch.scatter_add(residual_stream,1,continue_mask, update)
 
                 else:
                     residual_stream = residual_stream + update
@@ -1495,7 +1466,7 @@ class MoEUTLayer(LayerModule):
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
-        Float[Tensor, "batch seq 2"],
+        Float[Tensor, "batch seq"],
     ]:
         """Forward pass through the layer with configurable behavior."""
         # continue_mask, continue_processing, s_exit = self._check_early_exit(
@@ -1781,10 +1752,7 @@ class DynaFormer(DynaPretrainedModel):
         self,
         x: Float[Tensor, "batch seq d_model"],
         continue_mask: None | Bool[Tensor, "batch seq"],
-        saturation_event: Float[Tensor, "batch trimmed_seq 1"],
-        batch_idx: Int[Tensor, "elem"] | None = None,
-        seq_idx: Int[Tensor, "elem"] | None = None,
-        local_indices: Int[Tensor, "elem1"] | None = None,
+        saturation_event: Float[Tensor, "batch trimmed_seq"]
     ) -> Float[Tensor, "batch seq d_model"]:
         """Multiply elements of x at continue_mask positions by saturation_event, leave others unchanged."""
         if continue_mask is None:
@@ -1809,9 +1777,9 @@ class DynaFormer(DynaPretrainedModel):
             torch.arange(batch_idx.numel(), device=continue_mask.device)
             - cumsum_elements_per_sample[batch_idx]
         )
-        x[batch_idx, seq_idx] = (
-            x[batch_idx, seq_idx] * saturation_event[batch_idx, local_indices]
-        )
+
+        x[batch_idx, seq_idx] = x[batch_idx, seq_idx] * saturation_event[batch_idx, local_indices].unsqueeze(1)
+        
         return x
 
     def _update_continue_mask(
@@ -1862,15 +1830,15 @@ class DynaFormer(DynaPretrainedModel):
 
     def _update_energy_mask(
         self,
-        energy_per_sample: Float[Tensor, "batch seq 1"],
+        energy_per_sample: Float[Tensor, "batch seq"],
         continue_mask: None | Bool[Tensor, "batch seq"],
-        saturation_event: Float[Tensor, "batch trimmed_seq 1"],
+        saturation_event: Float[Tensor, "batch trimmed_seq"],
         batch_idx: Int[Tensor, "elem"] | None = None,
         seq_idx: Int[Tensor, "elem"] | None = None,
         local_indices: Int[Tensor, "elem1"] | None = None,
-    ) -> Float[Tensor, "batch seq 1"]:
+    ) -> Float[Tensor, "batch seq"]:
         if continue_mask is None:
-            return energy_per_sample * saturation_event
+            return energy_per_sample + saturation_event
 
         energy_per_sample[batch_idx, seq_idx] = (
             energy_per_sample[batch_idx, seq_idx]
@@ -1962,17 +1930,19 @@ class DynaFormer(DynaPretrainedModel):
                 if self.enable_early_exit:
                     x = x_out
                     if continue_mask is not None:
-
+                        
+                        
                         continue_mask, batch_idx, seq_idx, local_indices = (
                             self._update_continue_mask(
                                 continue_mask,
-                                torch.logical_or(
-                                    saturation_event.bool(),
-                                    (li > (self.min_loop_layers - 1))
-                                    * torch.ones_like(
-                                        saturation_event, dtype=torch.bool
-                                    ),
-                                ),
+                                saturation_event.bool(),
+                                # torch.logical_or(
+                                #     saturation_event.bool(),
+                                #     (li < (self.min_loop_layers))
+                                #     * torch.ones_like(
+                                #         saturation_event, dtype=torch.bool
+                                #     ),
+                                # ),
                             )
                         )
                         energy_per_sample = self._update_energy_mask(
@@ -1983,21 +1953,30 @@ class DynaFormer(DynaPretrainedModel):
                             seq_idx,
                             local_indices,
                         )
+                        x = self._multiply_residual(
+                            x, continue_mask, saturation_event
+                        )
                     else:
+                        continue_mask = saturation_event.bool()
+                        energy_per_sample = saturation_event
+                        
+                        # continue_mask = torch.logical_or(
+                        #     saturation_event.bool(),
+                        #     (li < (self.min_loop_layers))
+                        #     * torch.ones_like(saturation_event, dtype=torch.bool),
+                        # )
+                        x = self._multiply_residual(
+                            x, continue_mask, saturation_event
+                        )
                         print(
-                            "continued tokens ",
-                            saturation_event.sum().item(),
+                            "continued tokens 1",
+                            continue_mask.sum().item(),
                             "/",
-                            saturation_event.numel(),
+                            continue_mask.numel(),
                             flush=True,
                         )
-                        continue_mask = torch.logical_or(
-                            saturation_event.bool(),
-                            (li > (self.min_loop_layers - 1))
-                            * torch.ones_like(saturation_event, dtype=torch.bool),
-                        )
-                        energy_per_sample = saturation_event
-
+                        
+                    
                     if continue_mask is not None and continue_mask.sum() == 0:
                         continue_processing = False
 
@@ -2054,7 +2033,8 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return x, energy_per_sample / 100
+        print("final energy", energy_per_sample.requires_grad)
+        return x, energy_per_sample
 
 
 class SaturationGate(Module):
@@ -2247,10 +2227,10 @@ class DynaLM(DynaPretrainedModel):
             loss = losses.flatten() + energy_per_sample.flatten()
             # Reduce the loss according to the correct tokens
             if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
-                loss = losses.sum()
+                loss = loss.sum()
             else:
                 loss = (
-                    losses.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()
+                    loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()
                 )  # type: ignore
 
         return CausalLMOutputWithPast(
