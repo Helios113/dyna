@@ -1478,16 +1478,16 @@ class MoEUTLayer(LayerModule):
         )
         self.input_reinjection = input_reinjection
         if config.enable_early_exit:
-            # self.saturation_detector = torch.nn.Parameter(
-            #     torch.zeros(2, config.d_model)  # both rows = zero weights
-            # )
-            # self.saturation_detector_bias = torch.nn.Parameter(
-            #     torch.tensor([-10.0, 10.0])  # one bias per detector
-            # )
             self.saturation_detector = torch.nn.Parameter(
-                torch.rand(2, config.d_model) 
+                torch.zeros(2, config.d_model)  # both rows = zero weights
             )
-            self.saturation_detector_bias = None
+            self.saturation_detector_bias = torch.nn.Parameter(
+                torch.tensor([-10.0, 10.0])  # one bias per detector
+            )
+            # self.saturation_detector = torch.nn.Parameter(
+            #     torch.rand(2, config.d_model) 
+            # )
+            # self.saturation_detector_bias = None
             
             
 
@@ -1713,6 +1713,7 @@ class DynaFormer(DynaPretrainedModel):
         self.router = Parameter(torch.zeros(self.d_model), requires_grad=False)
         self.tau = Parameter(torch.ones(1), requires_grad=self.enable_early_exit)
         self.gather_stats = False
+        
         match config.execution_mode.value:
             case ExecutionMode.moe.value:
                 self.layers = ModuleList(
@@ -2017,10 +2018,10 @@ class DynaFormer(DynaPretrainedModel):
                             device=energy_per_sample.device,
                             dtype=energy_per_sample.dtype,
                         ).view(1, 1, 2)
-                        energy_per_sample = (saturation_event * tmp).sum(
-                            dim=-1, keepdim=True
-                        )
-                    if continue_mask.sum() == 0:
+                        # energy_per_sample = (saturation_event * tmp).sum(
+                        #     dim=-1, keepdim=True
+                        # )
+                    if continue_mask is not None and continue_mask.sum() == 0:
                         continue_processing = False
 
                 else:
@@ -2076,7 +2077,7 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return x, energy_per_sample
+        return x, energy_per_sample/100
 
 
 # Done
