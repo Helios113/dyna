@@ -1479,8 +1479,6 @@ class MoEUTLayer(LayerModule):
         self.input_reinjection = input_reinjection
         if config.enable_early_exit:
             self.saturation_detector = SaturationGate(config.d_model)
-            
-            
 
     def forward(
         self,
@@ -1550,7 +1548,6 @@ class MoEUTLayer(LayerModule):
 
         if self.saturation_detector is not None:
             saturation_event = self.saturation_detector(ffn_out)
-          
 
         x = self._apply_update_to_residual(
             x,
@@ -1702,7 +1699,7 @@ class DynaFormer(DynaPretrainedModel):
         self.router = Parameter(torch.zeros(self.d_model), requires_grad=False)
         self.tau = Parameter(torch.ones(1), requires_grad=self.enable_early_exit)
         self.gather_stats = False
-        
+
         match config.execution_mode.value:
             case ExecutionMode.moe.value:
                 self.layers = ModuleList(
@@ -1731,7 +1728,7 @@ class DynaFormer(DynaPretrainedModel):
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
         self.repeat_residual = config.repeat_residual
-
+        self.min_loop_layers = self.n_repeats
         # # Initialize parameters
         # self.reset_parameters()
 
@@ -1792,7 +1789,7 @@ class DynaFormer(DynaPretrainedModel):
         """Multiply elements of x at continue_mask positions by saturation_event, leave others unchanged."""
         if continue_mask is None:
             return x * saturation_event
-        
+
         batch_idx, seq_idx = continue_mask.nonzero(as_tuple=True)
 
         elements_per_sample = torch.bincount(
@@ -1852,7 +1849,7 @@ class DynaFormer(DynaPretrainedModel):
             )
         continue_mask[batch_idx, seq_idx] = (
             continue_mask[batch_idx, seq_idx]
-            & saturation_event[batch_idx, local_indices].bool()
+            & saturation_event[batch_idx, local_indices]
         )
         print(
             "continued tokens ",
@@ -1965,10 +1962,17 @@ class DynaFormer(DynaPretrainedModel):
                 if self.enable_early_exit:
                     x = x_out
                     if continue_mask is not None:
-                        
+
                         continue_mask, batch_idx, seq_idx, local_indices = (
                             self._update_continue_mask(
-                                continue_mask, saturation_event
+                                continue_mask,
+                                torch.logical_or(
+                                    saturation_event.bool(),
+                                    (li > (self.min_loop_layers - 1))
+                                    * torch.ones_like(
+                                        saturation_event, dtype=torch.bool
+                                    ),
+                                ),
                             )
                         )
                         energy_per_sample = self._update_energy_mask(
@@ -1987,8 +1991,13 @@ class DynaFormer(DynaPretrainedModel):
                             saturation_event.numel(),
                             flush=True,
                         )
-                        continue_mask = saturation_event.bool()
+                        continue_mask = torch.logical_or(
+                            saturation_event.bool(),
+                            (li > (self.min_loop_layers - 1))
+                            * torch.ones_like(saturation_event, dtype=torch.bool),
+                        )
                         energy_per_sample = saturation_event
+
                     if continue_mask is not None and continue_mask.sum() == 0:
                         continue_processing = False
 
@@ -2045,7 +2054,7 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return x, energy_per_sample/100
+        return x, energy_per_sample / 100
 
 
 class SaturationGate(Module):
@@ -2055,18 +2064,19 @@ class SaturationGate(Module):
 
     def forward(self, x):
         # x: [batch, seq, d_model]
-        z = self.linear(x).squeeze(-1)   # [batch, seq]
-        
+        z = self.linear(x).squeeze(-1)  # [batch, seq]
+
         # Hard gate (forward)
         # if z>0 we continue processing the token, z<0 we have found saturation
         g_hard = (z > 0).float()
-        
+
         # Sigmoid for gradient (backward)
         g_soft = torch.sigmoid(z)
 
         # Straight-through trick
         g = g_hard + (g_soft - g_soft.detach())
         return g
+
 
 @beartype
 class DynaLM(DynaPretrainedModel):

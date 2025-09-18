@@ -21,6 +21,8 @@ entropy_callback:
   log_interval: 100
 residual_magnitude:
   log_interval: 100
+loop_number_callback:
+  log_interval: 100
 # layer_usage_monitor:
 #   log_interval: 20
 # # # activation_monitor_c: {}
