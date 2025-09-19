@@ -23,7 +23,7 @@ model_config:
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
-  enable_early_exit: False
+  enable_early_exit: True
   norm_structure: peri
   rescaling_method: none
   repeat_residual: false

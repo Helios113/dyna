@@ -1754,7 +1754,7 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        return x, energy_per_sample / 100
+        return x, energy_per_sample
 
 
 class SaturationGate(Module):
@@ -1770,7 +1770,7 @@ class SaturationGate(Module):
             self.linear[-1].bias.fill_(init_bias)
 
     def forward(self, x):
-        z = self.linear(x).squeeze(-1)
+        z = self.linear(x.detach()).squeeze(-1)
         g_hard = (z > 0).float()
         g_soft = torch.sigmoid(z)
         g = g_hard + (g_soft - g_soft.detach())
@@ -1943,8 +1943,7 @@ class DynaLM(DynaPretrainedModel):
                 _labels.to(logits.device).view(-1),
                 reduction="none",
             )
-            loss = losses.flatten()
-            # loss = losses.flatten() + energy_per_sample.flatten()
+            loss = losses.flatten() * energy_per_sample.flatten()
             # Reduce the loss according to the correct tokens
             if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
                 loss = loss.sum()
@@ -1953,10 +1952,6 @@ class DynaLM(DynaPretrainedModel):
                     loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()
                 )  # type: ignore
 
-            loss = loss + F.mse_loss(
-                energy_per_sample.mean(),
-                torch.tensor(0.1, device=energy_per_sample.device),
-            )
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
