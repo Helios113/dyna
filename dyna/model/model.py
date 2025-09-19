@@ -241,55 +241,18 @@ class AttentionModule(DynaModule):
         v: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
-        attention_mask: Bool[Tensor, "batch n_heads max_len src_len"],
-        position_mask_trimed: Int[Tensor, "batch max_len"],
+        attention_mask: Bool[Tensor, "batch max_len src_len"],
         position_mask_full: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE."""
         # Apply rotary position encoding
         # Remove debug print that could cause issues
         if self.n_rotate > 0:
-            q, k = self._apply_rope(q, k, position_mask_trimed, position_mask_full)
+            q, k = self._apply_rope(q, k, position_mask_full)
 
-        return F.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
-
-    def _trim_attention_mask(
-        self,
-        seq_len: int,
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-    ) -> tuple[
-        Bool[Tensor, "batch n_heads max_len seq"],
-        Int[Tensor, "batch max_len"],
-    ]:
-        if continue_mask is None:
-            return mask[0].unsqueeze(1).expand(-1, self.n_heads, -1, -1), mask[1]
-        lengths = continue_mask.sum(dim=1)
-        max_len = round_up_to_multiple_of_256(lengths.max())
-
-        attention_mask: Bool[Tensor, "batch n_heads max_len seq"] = torch.zeros(
-            continue_mask.shape[0],
-            self.n_heads,
-            max_len,
-            seq_len,
-            dtype=torch.bool,
-            device=continue_mask.device,
+        return F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attention_mask.unsqueeze(1)
         )
-        position_ids: Int[Tensor, "batch max_len"] = torch.zeros(
-            continue_mask.shape[0],
-            max_len,
-            dtype=torch.int,
-            device=continue_mask.device,
-        )
-
-        for i in range(continue_mask.shape[0]):
-            idx = continue_mask[i].nonzero(as_tuple=False).squeeze(-1)
-            n = idx.numel()
-            if n > 0:
-                attention_mask[i, :, :n] = mask[0][i, idx]
-                position_ids[i, :n] = mask[1][i, idx]
-
-        return (attention_mask, position_ids)
 
     def project_to_torch_order(self, x: torch.Tensor) -> torch.Tensor:
         """Reshape tensor to PyTorch attention format."""
@@ -299,7 +262,6 @@ class AttentionModule(DynaModule):
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
-        position_mask_trimed: Int[Tensor, "batch max_len"],
         position_mask_full: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
@@ -312,13 +274,13 @@ class AttentionModule(DynaModule):
             r_q, nr_q = q[..., : self.n_rotate], q[..., self.n_rotate :]
 
             # Apply RoPE to rotated parts
-            r_q, r_k = self.pe(r_q, r_k, position_mask_trimed, position_mask_full)
+            r_q, r_k = self.pe(r_q, r_k, position_mask_full)
 
             # Concatenate back
             return (torch.cat([r_q, nr_q], dim=-1), torch.cat([r_k, nr_k], dim=-1))
         else:
             # Apply RoPE to entire tensors
-            return self.pe(q, k, position_mask_trimed, position_mask_full)
+            return self.pe(q, k, position_mask_full)
 
 
 class DummyAttention(AttentionModule):
@@ -422,102 +384,13 @@ class LayerModule(Module, ABC):
         self.norm_structure = config.norm_structure
 
     # Done
-    def _check_early_exit(
-        self,
-        x: Float[Tensor, "batch seq d_model"],
-        router: Float[Tensor, "d_model"],
-        cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
-    ) -> tuple[
-        None | Bool[Tensor, "batch seq"], bool, None | Float[Tensor, "batch seq"]
-    ]:
-        """Check if tokens should exit early and create skip mask."""
-        if not self.enable_early_exit:
-            # Return mask that keeps all tokens
-            # continue_mask = torch.ones_like(cum_sum, dtype=torch.bool)
-            return None, True, None
-
-        # Compute exit scores
-        s_exit: Float[Tensor, "batch seq"] = F.sigmoid(F.linear(x, router))
-        cum_sum = cum_sum + s_exit
-
-        # Create skip mask (True = continue processing)
-        continue_mask: Bool[Tensor, "batch seq"] = cum_sum < tau
-
-        # Handle sequence-level early exit
-        last_token_idx = x.shape[1] - 1
-        last_tokens_exit = ~continue_mask[:, last_token_idx]
-
-        # Mark entire sequences as done if last token exits
-        for batch_idx in last_tokens_exit.nonzero(as_tuple=True)[0]:
-            continue_mask[batch_idx, :] = False
-
-        # Check if all sequences are done
-        continue_processing = not torch.all(continue_mask == False)
-
-        return continue_mask, continue_processing, s_exit
-
-    def _trim_sequence(
-        self,
-        x: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-    ) -> tuple[Float[Tensor, "batch max_len d_model"], int]:
-        """Pack sequences for efficient processing."""
-
-        if continue_mask is None:
-            return x, x.shape[-2]
-
-        lengths = continue_mask.sum(dim=1)
-        max_len = round_up_to_multiple_of_256(lengths.max())
-
-        # Initialize output tensors
-        x_trimed: Float[Tensor, "batch max_len d_model"] = torch.zeros(
-            x.shape[0], max_len, x.shape[-1], device=x.device
-        )
-
-        # Get valid positions
-        batch_idx, seq_idx = continue_mask.nonzero(as_tuple=True)
-
-        if batch_idx.numel() > 0:
-
-            # how many elements we have per each sample
-            elements_per_sample = torch.bincount(batch_idx, minlength=x.shape[0])
-
-            # tokens up to each token in batch
-            cumsum_elements_per_sample = torch.cumsum(
-                torch.cat(
-                    [torch.tensor([0], device=x.device), elements_per_sample[:-1]]
-                ),
-                dim=0,
-            )
-
-            # incase there are two sequences in the same sample
-            # we get the local index within the trimmed sequence
-            local_indices = (
-                torch.arange(batch_idx.numel(), device=x.device)
-                - cumsum_elements_per_sample[batch_idx]
-            )
-
-            # valid_mask = local_indices < max_len
-            # print(local_indices)
-            # print(valid_mask)
-
-            # if valid_mask.any():
-            # Pack data efficiently
-            x_trimed[batch_idx, local_indices] = x[batch_idx, seq_idx]
-
-        return x_trimed, max_len
-
-    # Done
     def _apply_pre_norm_attn(
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch max_len d_model"],
         Float[Tensor, "batch seq d_model"],
         Float[Tensor, "batch seq d_model"],
-        int,
     ]:
         if (
             self.norm_structure.value == NormStructure.peri.value
@@ -525,45 +398,33 @@ class LayerModule(Module, ABC):
         ):
             # Peri, Pre
             residual_stream_normed = self.attn_pre(residual_stream)
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream_normed, continue_mask
-            )
-            q_val = residual_stream_trimmed
+            q_val = residual_stream_normed
             k_val = residual_stream_normed
             v_val = residual_stream_normed
 
         elif self.norm_structure.value == NormStructure.post.value:
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream, continue_mask
-            )
-            q_val = residual_stream_trimmed
+            q_val = residual_stream
             k_val = residual_stream
             v_val = residual_stream
 
         elif self.norm_structure.value == NormStructure.moeut.value:
             residual_stream_normed = self.attn_pre(residual_stream)
-            residual_stream_trimmed, max_len = self._trim_sequence(
-                residual_stream_normed, continue_mask
-            )
-            q_val = residual_stream_trimmed
+            q_val = residual_stream_normed
             k_val = residual_stream_normed
             v_val = residual_stream
         else:
             raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
 
-        return q_val, k_val, v_val, max_len
+        return q_val, k_val, v_val
 
     def _apply_update_to_residual(
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
         update_on_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-        cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
+        continue_mask: None | Int[Tensor, "size"],
         layer_index: int,
         norm_to_use: Module,
         e: Optional[Float[Tensor, "batch seq d_model"]] = None,
-        total_layers: int = 1,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
@@ -573,123 +434,116 @@ class LayerModule(Module, ABC):
         match self.rescaling_method.value:
             case RescaleMethod.none.value:
                 if self.enable_early_exit and continue_mask is not None:
-                    residual_stream = torch.scatter_add(residual_stream,1,continue_mask, update)
-
+                    residual_stream = torch.scatter_add(
+                        residual_stream.view(-1),
+                        0,
+                        continue_mask,
+                        update.view(-1)[continue_mask],
+                    ).reshape_as(residual_stream)
                 else:
                     residual_stream = residual_stream + update
-            case (
-                RescaleMethod.cum_avg_prot_emb.value
-                | RescaleMethod.cum_avg_no_prot_emb.value
-            ):
-                if e is not None:
-                    residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    scale_factor = (layer_index - 1) / layer_index
-                    update_factor = (
-                        cum_sum[continue_mask].unsqueeze(1) * tau / layer_index
-                    )
+            # case (
+            #     RescaleMethod.cum_avg_prot_emb.value
+            #     | RescaleMethod.cum_avg_no_prot_emb.value
+            # ):
+            #     if e is not None:
+            #         residual_stream = residual_stream - e
+            #     if self.enable_early_exit:
+            #         scale_factor = (layer_index - 1) / layer_index
+            #         update_factor = (
+            #             cum_sum[continue_mask].unsqueeze(1) * tau / layer_index
+            #         )
 
-                    residual_stream[continue_mask] = (
-                        scale_factor * residual_stream[continue_mask]
-                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
-                        * update_factor
-                    )
-                else:
-                    # Apply to all tokens when early exit is disabled
-                    scale_factor = (layer_index - 1) / layer_index
-                    residual_stream = (
-                        scale_factor * residual_stream + update / layer_index
-                    )
-                if e is not None:
-                    residual_stream = residual_stream + e
-            case (
-                RescaleMethod.sqrt_prot_emb.value | RescaleMethod.sqrt_no_prot_emb.value
-            ):
-                if e is not None:
-                    residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    scale_factor = math.sqrt(layer_index) - 1 / math.sqrt(layer_index)
-                    update_factor = (
-                        cum_sum[continue_mask].unsqueeze(1)
-                        * tau
-                        / math.sqrt(layer_index)
-                    )
+            #         residual_stream[continue_mask] = (
+            #             scale_factor * residual_stream[continue_mask]
+            #             + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+            #             * update_factor
+            #         )
+            #     else:
+            #         # Apply to all tokens when early exit is disabled
+            #         scale_factor = (layer_index - 1) / layer_index
+            #         residual_stream = (
+            #             scale_factor * residual_stream + update / layer_index
+            #         )
+            #     if e is not None:
+            #         residual_stream = residual_stream + e
+            # case (
+            #     RescaleMethod.sqrt_prot_emb.value | RescaleMethod.sqrt_no_prot_emb.value
+            # ):
+            #     if e is not None:
+            #         residual_stream = residual_stream - e
+            #     if self.enable_early_exit:
+            #         scale_factor = math.sqrt(layer_index) - 1 / math.sqrt(layer_index)
+            #         update_factor = (
+            #             cum_sum[continue_mask].unsqueeze(1)
+            #             * tau
+            #             / math.sqrt(layer_index)
+            #         )
 
-                    residual_stream[continue_mask] = (
-                        scale_factor * residual_stream[continue_mask]
-                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
-                        * update_factor
-                    )
-                else:
-                    # Apply to all tokens when early exit is disabled
-                    scale_factor = (math.sqrt(layer_index) - 1) / math.sqrt(layer_index)
-                    residual_stream = scale_factor * residual_stream + update / (
-                        math.sqrt(layer_index)
-                    )
-                if e is not None:
-                    residual_stream = residual_stream + e
-            case RescaleMethod.sqrt_scale_prot_emb.value:
-                residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
-                    residual_stream[continue_mask] = (
-                        residual_stream[continue_mask]
-                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
-                        * update_factor
-                    ) / math.sqrt(2)
-                else:
-                    # Apply to all tokens when early exit is disabled
-                    if layer_index == 2:
-                        residual_stream = residual_stream + update
-                    else:
-                        residual_stream = (residual_stream + update) / (math.sqrt(2))
+            #         residual_stream[continue_mask] = (
+            #             scale_factor * residual_stream[continue_mask]
+            #             + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+            #             * update_factor
+            #         )
+            #     else:
+            #         # Apply to all tokens when early exit is disabled
+            #         scale_factor = (math.sqrt(layer_index) - 1) / math.sqrt(layer_index)
+            #         residual_stream = scale_factor * residual_stream + update / (
+            #             math.sqrt(layer_index)
+            #         )
+            #     if e is not None:
+            #         residual_stream = residual_stream + e
+            # case RescaleMethod.sqrt_scale_prot_emb.value:
+            #     residual_stream = residual_stream - e
+            #     if self.enable_early_exit:
+            #         update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
+            #         residual_stream[continue_mask] = (
+            #             residual_stream[continue_mask]
+            #             + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+            #             * update_factor
+            #         ) / math.sqrt(2)
+            #     else:
+            #         # Apply to all tokens when early exit is disabled
+            #         if layer_index == 2:
+            #             residual_stream = residual_stream + update
+            #         else:
+            #             residual_stream = (residual_stream + update) / (math.sqrt(2))
 
-                residual_stream = residual_stream + e
-            case RescaleMethod.avg_prot_emb.value:
-                residual_stream = residual_stream - e
-                if self.enable_early_exit:
-                    update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
-                    residual_stream[continue_mask] = (
-                        residual_stream[continue_mask] / 2
-                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
-                        * update_factor
-                    )
-                else:
-                    residual_stream = residual_stream / 2 + update
+            #     residual_stream = residual_stream + e
+            # case RescaleMethod.avg_prot_emb.value:
+            #     residual_stream = residual_stream - e
+            #     if self.enable_early_exit:
+            #         update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
+            #         residual_stream[continue_mask] = (
+            #             residual_stream[continue_mask] / 2
+            #             + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+            #             * update_factor
+            #         )
+            #     else:
+            #         residual_stream = residual_stream / 2 + update
 
-                residual_stream = residual_stream + e
+            #     residual_stream = residual_stream + e
         if self.norm_structure.value == NormStructure.post.value:
             residual_stream = norm_to_use(residual_stream)
 
         return residual_stream
 
-    def _apply_pre_norm_ffn(
-        self,
-        residual_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-    ):
-
-        if continue_mask is not None:
-            residual_stream_trimmed, _ = self._trim_sequence(
-                residual_stream, continue_mask
-            )
-        else:
-            residual_stream_trimmed = residual_stream
+    def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
         if (
             self.norm_structure.value == NormStructure.peri.value
             or self.norm_structure.value == NormStructure.pre.value
         ):
             # Peri, Pre
-            residual_stream_normed = self.ffn_pre(residual_stream_trimmed)
+            residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
             ffn_val_2 = residual_stream_normed
         elif self.norm_structure.value == NormStructure.post.value:
-            ffn_val_1 = residual_stream_trimmed
-            ffn_val_2 = residual_stream_trimmed
+            ffn_val_1 = residual_stream
+            ffn_val_2 = residual_stream
         elif self.norm_structure.value == NormStructure.moeut.value:
-            residual_stream_normed = self.ffn_pre(residual_stream_trimmed)
+            residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
-            ffn_val_2 = residual_stream_trimmed
+            ffn_val_2 = residual_stream
         else:
             raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
 
@@ -1251,7 +1105,6 @@ class SwitchHead(AttentionModule):
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        continue_mask: None | Bool[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[
@@ -1272,7 +1125,6 @@ class SwitchHead(AttentionModule):
                 k_src, self.sel_v, self.bias_v
             )
 
-            # Error is here!!!
             o_sel, o_sel_r, o_sel_inedx = self._get_expert_selection(
                 q_src, self.sel_o, self.bias_o
             )
@@ -1299,10 +1151,10 @@ class SwitchHead(AttentionModule):
 
         # Apply dropout and attention
         q = self.dropout(q)
-        attention_mask = self._trim_attention_mask(v.shape[-2], mask, continue_mask)
+        # attention_mask = self._trim_attention_mask(v.shape[-2], mask, continue_mask)
 
         res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-            v, k, q, attention_mask[0], attention_mask[1], mask[1]
+            v, k, q, mask[0], mask[1]
         )
         res = res.transpose(-2, -3)
 
@@ -1311,11 +1163,6 @@ class SwitchHead(AttentionModule):
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
-
-            # Clean up intermediate tensors
-            del o_sel, res
-
-            # Return None instead of storing tensors
 
         else:
             res = res * o_gate[..., None]
@@ -1403,7 +1250,6 @@ class RotaryPosEncoding(Module):
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
-        position_mask_trimed: Int[Tensor, "batch max_len"],
         position_mask_full: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
@@ -1411,7 +1257,7 @@ class RotaryPosEncoding(Module):
     ]:
         """Apply RoPE to query and key tensors."""
         return (
-            self.apply_rot_optimized(q, position_mask_trimed),
+            self.apply_rot_optimized(q, position_mask_full),
             self.apply_rot_optimized(k, position_mask_full),
         )
 
@@ -1450,6 +1296,8 @@ class MoEUTLayer(LayerModule):
         self.input_reinjection = input_reinjection
         if config.enable_early_exit:
             self.saturation_detector = SaturationGate(config.d_model)
+        else:
+            self.saturation_detector = None
 
     def forward(
         self,
@@ -1462,61 +1310,41 @@ class MoEUTLayer(LayerModule):
         tau: Float[Tensor, "1"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         total_layers: int,
-        continue_mask: None | Bool[Tensor, "batch seq"] = None,
+        continue_mask: None | Int[Tensor, "size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
-        Float[Tensor, "batch seq"],
+        Float[Tensor, "batch seq"] | None,
     ]:
         """Forward pass through the layer with configurable behavior."""
-        # continue_mask, continue_processing, s_exit = self._check_early_exit(
-        #     x, router, cum_sum, tau
-        # )
-
-        # if not continue_processing:
-        #     return x, False, 0, s_exit, ((None, None), None)
 
         if self.input_reinjection and reinjection_embeddings is not None:
-            # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
-            # Project back to original d_model dimension
             x = self.input_projection(x)
 
-        # === ATTENTION BLOCK ===
-        q_val, k_val, v_val, max_len = self._apply_pre_norm_attn(x, continue_mask)
+
+        q_val, k_val, v_val = self._apply_pre_norm_attn(x)
 
         att_out, expert_sel_attn = self.attention(
             q_val,
             k_val,
             v_val,
             mask,
-            continue_mask=continue_mask,
         )
-
-        # Clean up attention intermediate tensors immediately
-        del q_val, k_val, v_val
 
         x = self._apply_update_to_residual(
             x,
             att_out,
             continue_mask,
-            cum_sum,
-            tau,
             layer_index,
             self.attn_post,
             e,
-            total_layers,
         )
 
-        # Clean up attention output
-        del att_out
 
-        # === FFN BLOCK ===
-
-        # FFN computation
-        ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x, continue_mask))
+        ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
+        
         saturation_event = None
-
         if self.saturation_detector is not None:
             saturation_event = self.saturation_detector(ffn_out)
 
@@ -1524,16 +1352,10 @@ class MoEUTLayer(LayerModule):
             x,
             ffn_out,
             continue_mask,
-            cum_sum,
-            tau,
             layer_index,
             self.ffn_post,
             e,
-            total_layers,
         )
-
-        # Clean up FFN output and other intermediate tensors
-        del ffn_out, continue_mask
 
         return (x, (expert_sel_attn, expert_sel_ffn), saturation_event)
 
@@ -1748,103 +1570,9 @@ class DynaFormer(DynaPretrainedModel):
                 reg_loss = reg_loss + self.reg_entropy * layer.get_reg_loss()
         return reg_loss
 
-    def _multiply_residual(
-        self,
-        x: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-        saturation_event: Float[Tensor, "batch trimmed_seq"]
-    ) -> Float[Tensor, "batch seq d_model"]:
-        """Multiply elements of x at continue_mask positions by saturation_event, leave others unchanged."""
-        if continue_mask is None:
-            return x * saturation_event
-
-        batch_idx, seq_idx = continue_mask.nonzero(as_tuple=True)
-
-        elements_per_sample = torch.bincount(
-            batch_idx, minlength=continue_mask.shape[0]
-        )
-        cumsum_elements_per_sample = torch.cumsum(
-            torch.cat(
-                [
-                    torch.tensor([0], device=continue_mask.device),
-                    elements_per_sample[:-1],
-                ]
-            ),
-            dim=0,
-        )
-
-        local_indices = (
-            torch.arange(batch_idx.numel(), device=continue_mask.device)
-            - cumsum_elements_per_sample[batch_idx]
-        )
-
-        x[batch_idx, seq_idx] = x[batch_idx, seq_idx] * saturation_event[batch_idx, local_indices].unsqueeze(1)
-        
-        return x
-
-    def _update_continue_mask(
-        self,
-        continue_mask: torch.Tensor,  # Bool[Tensor, "batch seq"]
-        saturation_event: torch.Tensor,  # Float[Tensor, "batch trimmed_seq"],
-        batch_idx: Int[Tensor, "elem"] | None = None,
-        seq_idx: Int[Tensor, "elem"] | None = None,
-        local_indices: Int[Tensor, "elem1"] | None = None,
-    ) -> tuple[
-        Bool[Tensor, "batch seq"],
-        Int[Tensor, "elem"],
-        Int[Tensor, "elem"],
-        Int[Tensor, "elem1"],
-    ]:
-        if batch_idx is None:
-            batch_idx, seq_idx = continue_mask.nonzero(as_tuple=True)
-
-            elements_per_sample = torch.bincount(
-                batch_idx, minlength=continue_mask.shape[0]
-            )
-            cumsum_elements_per_sample = torch.cumsum(
-                torch.cat(
-                    [
-                        torch.tensor([0], device=continue_mask.device),
-                        elements_per_sample[:-1],
-                    ]
-                ),
-                dim=0,
-            )
-
-            local_indices = (
-                torch.arange(batch_idx.numel(), device=continue_mask.device)
-                - cumsum_elements_per_sample[batch_idx]
-            )
-        continue_mask[batch_idx, seq_idx] = (
-            continue_mask[batch_idx, seq_idx]
-            & saturation_event[batch_idx, local_indices]
-        )
-        print(
-            "continued tokens ",
-            continue_mask.sum().item(),
-            "/",
-            continue_mask.numel(),
-            flush=True,
-        )
-        return continue_mask, batch_idx, seq_idx, local_indices
-
-    def _update_energy_mask(
-        self,
-        energy_per_sample: Float[Tensor, "batch seq"],
-        continue_mask: None | Bool[Tensor, "batch seq"],
-        saturation_event: Float[Tensor, "batch trimmed_seq"],
-        batch_idx: Int[Tensor, "elem"] | None = None,
-        seq_idx: Int[Tensor, "elem"] | None = None,
-        local_indices: Int[Tensor, "elem1"] | None = None,
-    ) -> Float[Tensor, "batch seq"]:
-        if continue_mask is None:
-            return energy_per_sample + saturation_event
-
-        energy_per_sample[batch_idx, seq_idx] = (
-            energy_per_sample[batch_idx, seq_idx]
-            + saturation_event[batch_idx, local_indices]
-        )
-        return energy_per_sample
+    def mask_to_scatter_index(self, mask: torch.Tensor):
+        idexes = torch.nonzero(mask.view(-1), as_tuple=True)[0]
+        return idexes
 
     def forward(
         self,
@@ -1927,59 +1655,52 @@ class DynaFormer(DynaPretrainedModel):
                 )
                 # Clean up intermediate variables immediately
                 # del seq_lengths, s_exit, expert_sel
-                if self.enable_early_exit:
+                if self.enable_early_exit and idx == 1:
                     x = x_out
                     if continue_mask is not None:
-                        
-                        
-                        continue_mask, batch_idx, seq_idx, local_indices = (
-                            self._update_continue_mask(
-                                continue_mask,
-                                saturation_event.bool(),
-                                # torch.logical_or(
-                                #     saturation_event.bool(),
-                                #     (li < (self.min_loop_layers))
-                                #     * torch.ones_like(
-                                #         saturation_event, dtype=torch.bool
-                                #     ),
-                                # ),
-                            )
-                        )
-                        energy_per_sample = self._update_energy_mask(
-                            energy_per_sample,
+                        energy_per_sample = torch.scatter_add(
+                            energy_per_sample.view(-1),
+                            0,
                             continue_mask,
-                            saturation_event,
-                            batch_idx,
-                            seq_idx,
-                            local_indices,
-                        )
-                        x = self._multiply_residual(
-                            x, continue_mask, saturation_event
-                        )
+                            saturation_event.view(-1)[continue_mask],
+                        ).reshape(energy_per_sample.shape)
+                        # saturation_event changes
+                        # But I am only intested in the union of the current and the previous
+                        saturation_event_tmp = torch.scatter(
+                            torch.zeros_like(saturation_event).view(-1),
+                            0,
+                            continue_mask,
+                            saturation_event.view(-1)[continue_mask],
+                        ).reshape(saturation_event.shape)
+                        continue_mask = self.mask_to_scatter_index(saturation_event_tmp)
+                        x = torch.scatter_reduce(
+                            x.view(-1),
+                            0,
+                            continue_mask,
+                            saturation_event.view(-1)[continue_mask],
+                            reduce="prod",
+                        ).reshape(x.shape)
                     else:
-                        continue_mask = saturation_event.bool()
                         energy_per_sample = saturation_event
-                        
-                        # continue_mask = torch.logical_or(
-                        #     saturation_event.bool(),
-                        #     (li < (self.min_loop_layers))
-                        #     * torch.ones_like(saturation_event, dtype=torch.bool),
-                        # )
-                        x = self._multiply_residual(
-                            x, continue_mask, saturation_event
-                        )
-                        print(
-                            "continued tokens 1",
-                            continue_mask.sum().item(),
-                            "/",
-                            continue_mask.numel(),
-                            flush=True,
-                        )
-                        
-                    
-                    if continue_mask is not None and continue_mask.sum() == 0:
-                        continue_processing = False
+                        continue_mask = self.mask_to_scatter_index(saturation_event)
 
+                        x = torch.scatter_reduce(
+                            x.view(-1),
+                            0,
+                            continue_mask,
+                            saturation_event.view(-1)[continue_mask],
+                            reduce="prod",
+                        ).reshape(x.shape)
+                    print(
+                        f"continued tokens after layer {layer_index-2}",
+                        continue_mask.numel(),
+                        "/",
+                        x.shape[0] * x.shape[1],
+                        flush=True,
+                    )
+
+                    if continue_mask is not None and continue_mask.numel() == 0:
+                        continue_processing = False
                 else:
                     x = x_out
                 # make continue_processing just be conditioned on the last token
@@ -1987,7 +1708,7 @@ class DynaFormer(DynaPretrainedModel):
                     break
                 if self.gather_stats:
                     self._latent_vectors[-1].append(
-                        self._temp_lm_head(x[:, -1, :]).detach().clone().cpu()
+                        self._temp_lm_head(x[:, -1, :]).detach().cpu()
                     )
                     if expert_sel[0] is not None:
                         self._expert_sel[-1].append(expert_sel)
@@ -2033,27 +1754,25 @@ class DynaFormer(DynaPretrainedModel):
         if self.collect_reg_loss:
             reg_loss = self._collect_regularization_loss()
 
-        print("final energy", energy_per_sample.requires_grad)
-        return x, energy_per_sample
+        return x, energy_per_sample / 100
 
 
 class SaturationGate(Module):
-    def __init__(self, d_model):
+    def __init__(self, d_model, init_bias=2.0):
         super().__init__()
-        self.linear = torch.nn.Linear(d_model, 1, bias=False)
+        self.linear = torch.nn.Sequential(
+            torch.nn.Linear(d_model, d_model // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_model // 2, 1, bias=True),  # Enable bias
+        )
+        # Initialize with positive bias to encourage continuation
+        with torch.no_grad():
+            self.linear[-1].bias.fill_(init_bias)
 
     def forward(self, x):
-        # x: [batch, seq, d_model]
-        z = self.linear(x).squeeze(-1)  # [batch, seq]
-
-        # Hard gate (forward)
-        # if z>0 we continue processing the token, z<0 we have found saturation
+        z = self.linear(x).squeeze(-1)
         g_hard = (z > 0).float()
-
-        # Sigmoid for gradient (backward)
         g_soft = torch.sigmoid(z)
-
-        # Straight-through trick
         g = g_hard + (g_soft - g_soft.detach())
         return g
 
@@ -2224,7 +1943,8 @@ class DynaLM(DynaPretrainedModel):
                 _labels.to(logits.device).view(-1),
                 reduction="none",
             )
-            loss = losses.flatten() + energy_per_sample.flatten()
+            loss = losses.flatten()
+            # loss = losses.flatten() + energy_per_sample.flatten()
             # Reduce the loss according to the correct tokens
             if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
                 loss = loss.sum()
@@ -2233,6 +1953,10 @@ class DynaLM(DynaPretrainedModel):
                     loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()
                 )  # type: ignore
 
+            loss = loss + F.mse_loss(
+                energy_per_sample.mean(),
+                torch.tensor(0.1, device=energy_per_sample.device),
+            )
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,

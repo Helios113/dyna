@@ -23,7 +23,7 @@ model_config:
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: False
-  enable_early_exit: True
+  enable_early_exit: False
   norm_structure: peri
   rescaling_method: none
   repeat_residual: false
@@ -32,7 +32,7 @@ train:
   max_duration: "3171ba"
   warmup: "634ba"
   cooldown: "634ba"
-  device_train_batch_size: 256
+  device_train_batch_size: 1024
 
 trainer_config:
   run_name: "moe_basline"
