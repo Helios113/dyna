@@ -27,6 +27,7 @@ dependencies = [
     "pysnooper>=1.2.3",
     "pyrefly>=0.34.0",
     "ruff>=0.7.0",
+    "pre-commit>=4.3.0",
 ]
 
 # [build-system]
