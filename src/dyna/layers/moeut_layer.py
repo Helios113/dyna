@@ -1,3 +1,13 @@
+from dyna.modules.layer_module import LayerModule
+from dyna.config import DynaConfig
+from dyna.attention.switch_head import SwitchHead
+from dyna.transition.sigma_moe import SigmaMoE
+import torch
+
+from jaxtyping import Float, Int, Bool
+from torch import Tensor
+
+from dyna.modules.saturation_gate import SaturationGate
 
 class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
@@ -55,6 +65,7 @@ class MoEUTLayer(LayerModule):
         """Forward pass through the layer with configurable behavior."""
 
         if self.input_reinjection and reinjection_embeddings is not None:
+            assert self.input_projection is not None
             x = torch.cat((x, reinjection_embeddings), dim=-1)
             x = self.input_projection(x)
 

@@ -1,4 +1,4 @@
-from dyna.modules.model_config import NormStructure, RescaleMethod, ExecutionMode
+from dyna.config.enums import NormStructure, RescaleMethod, ExecutionMode
 
 CROSS_ENTROPY_IGNORE_INDEX = -100
 LATENT_RECURSION_METHODS = [

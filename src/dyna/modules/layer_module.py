@@ -1,3 +1,33 @@
+import math
+import atexit
+from collections.abc import Callable
+from typing import Optional
+import torch
+import torch.nn.functional as F
+from torch.nn.attention import sdpa_kernel, SDPBackend
+from composer.models import HuggingFaceModel
+from torch.nn.modules.normalization import RMSNorm
+from llmfoundry.utils.builders import build_metric
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig
+from transformers.modeling_outputs import (
+    CausalLMOutputWithPast,
+)
+from torch.nn import Module, ModuleList, Parameter
+from beartype import beartype
+import math
+
+# from composer.callbacks
+# Add jaxtyping imports
+from jaxtyping import Float, Int, Bool
+from torch import Tensor
+from ..attention.attention_module import AttentionModule
+
+# Constants
+from abc import ABC, abstractmethod
+from dyna.config import DynaConfig
+from dyna.config.enums import NormStructure, RescaleMethod
+from dyna.modules.dyna_module import DynaModule
+
 
 @beartype
 class LayerModule(Module, ABC):
@@ -13,15 +43,15 @@ class LayerModule(Module, ABC):
         self.ffn = ffn_module
         self.input_projection = input_projection
         # Layer normalization - configurable type
-        # norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
-        
-        self.attn_pre = DynamicTanh(config.d_model, alpha_init_value=0.8, channels_last=True)
-        self.attn_post = DynamicTanh(config.d_model, alpha_init_value=0.8, channels_last=True)
+        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
+
+        self.attn_pre = RMSNorm(config.d_model)
+        self.attn_post = RMSNorm(config.d_model)
         self.attn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
-        self.ffn_pre = DynamicTanh(config.d_model, alpha_init_value=0.2, channels_last=True)
-        self.ffn_post = DynamicTanh(config.d_model, alpha_init_value=0.2, channels_last=True)
+        self.ffn_pre = RMSNorm(config.d_model)
+        self.ffn_post = RMSNorm(config.d_model)
         self.ffn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
