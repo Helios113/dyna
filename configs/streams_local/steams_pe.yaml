@@ -1,0 +1,80 @@
+python_edu_client_0:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_0
+  split: train
+  proportion: 0.10
+python_edu_client_1:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_1
+  split: train
+  proportion: 0.10
+python_edu_client_2:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_2
+  split: train
+  proportion: 0.10
+python_edu_client_3:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_3
+  split: train
+  proportion: 0.10
+python_edu_client_4:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_4
+  split: train
+  proportion: 0.10
+python_edu_client_5:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_5
+  split: train
+  proportion: 0.10
+python_edu_client_6:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_6
+  split: train
+  proportion: 0.10
+python_edu_client_7:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_7
+  split: train
+  proportion: 0.10
+python_edu_client_8:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_8
+  split: train
+  proportion: 0.10
+python_edu_client_9:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_9
+  split: train
+  proportion: 0.10
+python_edu_client_10:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_10
+  split: train
+  proportion: 0.10
+python_edu_client_11:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_11
+  split: train
+  proportion: 0.10
+python_edu_client_12:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_12
+  split: train
+  proportion: 0.10
+python_edu_client_13:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_13
+  split: train
+  proportion: 0.10
+python_edu_client_14:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_14
+  split: train
+  proportion: 0.10
+python_edu_client_15:
+  remote: null
+  local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/python_edu/client_15
+  split: train
+  proportion: 0.10

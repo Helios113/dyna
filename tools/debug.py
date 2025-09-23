@@ -4,7 +4,7 @@ import profiles
 import random
 import numpy as np
 from transformers import AutoTokenizer
-from dyna.model.model_config import ModelConfig, TrainerConfig
+from model.modules.model_config import ModelConfig, TrainerConfig
 from model.model import ComposerMoEUT, MoEUTConfig
 from composer import Trainer
 from streaming import StreamingDataset

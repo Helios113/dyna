@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J run
+#SBATCH -J install_flash_attention
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=40
 # 20 cpus per gpu
@@ -9,7 +9,7 @@
 
 #! specify node
 #SBATCH -w ruapehu
-#SBATCH --output=tests_new/%x.%j.ans
+#SBATCH --output=slurm_outputs/%x.%j.ans
 
 # Run the training script
 export CXX=g++

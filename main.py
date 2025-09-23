@@ -1,5 +1,4 @@
 import os
-import random
 from transformers import AutoTokenizer
 from composer.loggers import WandBLogger
 from dyna.model.model import ComposerDynaModel, DynaConfig
@@ -19,19 +18,19 @@ from dyna.utils.utils import (
 )
 from composer.utils import dist
 from beartype import beartype
-from torch.profiler import profile, ProfilerActivity, record_function
-from torch.profiler import schedule
-import torch
-from composer.utils import FSDPConfig
 from composer.utils import reproducibility
-GLOBAL_SEED = 42
+
 reproducibility.configure_deterministic_mode()
+
+
 def trace_handler(p):
     p.export_chrome_trace(
         "/nfs-share/pa511/code_bases/dyna_project/dyna/torch_traces_sel/trace_new"
         + str(p.step_num)
         + ".json"
     )
+
+
 from composer.algorithms import GradientClipping
 from composer.trainer import Trainer
 
@@ -39,42 +38,37 @@ from streaming.base.util import clean_stale_shared_memory
 
 import torch.distributed as dist
 
+
 def safe_clean_stale_shared_memory():
     # only rank 0 (main process) initializes
     if not dist.is_initialized() or dist.get_rank() == 0:
         return clean_stale_shared_memory()
 
+
 @hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
 @beartype
 def main(cfg: DictConfig):
-    reproducibility.seed_all(GLOBAL_SEED)
-    
     safe_clean_stale_shared_memory()
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
-    hydra_workdir = hydra.utils.get_original_cwd()
-    id = random.randint(0, 1000000)
-    torch.autograd.set_detect_anomaly(True)
-    tmpdir = os.path.join(hydra_workdir, f"dyna_tmp_{id}")
-    print(f"Setting TMPDIR to {tmpdir}", flush=True)
-    # check if the directory exists, and create it if not
-    while os.path.exists(tmpdir):
-        id = random.randint(0, 1000000)
-        tmpdir = os.path.join(hydra_workdir, f"dyna_tmp_{id}")
-    os.mkdir(tmpdir)
-    os.environ["TMPDIR"] = tmpdir
-    run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config)
-    cfg.trainer_config.save_filename = run_name+"-ba{batch}.pt"
-    wandb_logger = WandBLogger(project="dyna", log_artifacts=False, name=run_name, init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True)})
-    # We don't need a tokenizer becuase all of our data is pre-tokenized.
+    
+    unique = os.getenv("TMPDIR").split("_")[-1]
+    run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config, unique)
+    cfg.trainer_config.save_filename = run_name + "-ba{batch}.pt"
+    wandb_logger = WandBLogger(
+        project="dyna",
+        log_artifacts=False,
+        name=run_name,
+        init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True), "id":unique},
+    )
+
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     # Instead of passing the DictConfig directly, unpack it as kwargs
     conf = DynaConfig(**cfg.model_config)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
-    
-    
+
     train_dataloader = get_data_loader(
         cfg.data_config,
         tokenizer=tokenizer,
@@ -87,14 +81,10 @@ def main(cfg: DictConfig):
 
     loggers = [wandb_logger]
     callbacks = get_callbacks(cfg.callbacks)
-    
-    composer_trace_dir = "composer_profiler"
-    torch_trace_dir = "torch_traces_new"
-    
-    clipping_type = cfg.optimizer_config.clipping_type 
+
+    clipping_type = cfg.optimizer_config.clipping_type
     gc = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
-    # initialize_dist()
-    # prepare_fsdp_module(model,optimizer, FSDPConfig(**cfg.get('fsdp_config', {})))
+
     trainer = Trainer(
         model=model,
         train_dataloader=train_dataloader,
@@ -102,13 +92,11 @@ def main(cfg: DictConfig):
         callbacks=callbacks,
         optimizers=optimizer,
         schedulers=scheduler,
-        parallelism_config= {"fsdp_config": cfg.get("fsdp_config", {})},
+        parallelism_config={"fsdp_config": cfg.get("fsdp_config", {})},
         loggers=loggers,
         algorithms=[gc],
         **cfg.trainer_config,
     )
-    # dist.barrier()
-    
 
     trainer.fit()
 

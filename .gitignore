@@ -25,3 +25,4 @@ logs/
 *.zip
 dyna_tmp*
 local_data/
+dyna_*

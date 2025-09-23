@@ -25,14 +25,28 @@ dependencies = [
     "jupyter>=1.1.1",
     "torchtune>=0.6.1",
     "pysnooper>=1.2.3",
+    "pyrefly>=0.34.0",
 ]
 
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+# [build-system]
+# requires = ["setuptools>=61"]
+# build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["dyna"]
+# [tool.setuptools.packages.find]
+# where = ["dyna"]
+
+[tool.uv.sources]
+mosaicml = { git = "https://github.com/Helios113/composer.git", branch = "local" }
+llm-foundry = { git = "https://github.com/Helios113/llm-foundry.git", branch = "local" }
+
 
 [tool.uv]
 no-build-isolation-package = ["flash-attn"]
+
+[tool.pyrefly]
+project-includes = ["**/*"]
+project-excludes = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/*venv/**/*",
+]
