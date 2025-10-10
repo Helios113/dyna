@@ -6,14 +6,14 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from dyna.attention import BasicAttn
-from dyna.config import ModelConfig
+from dyna.config import DynaConfig
 from dyna.modules import LayerModule
 from dyna.transition import BasicFFN
 
 
 @beartype
 class SimpleLayer(LayerModule):
-    def __init__(self, config: ModelConfig, input_reinjection: bool = False):
+    def __init__(self, config: DynaConfig, input_reinjection: bool = False):
         """Initialize SimpleLayer with configurable parameters."""
         super().__init__(
             config,

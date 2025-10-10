@@ -13,18 +13,17 @@ from torch import Tensor
 from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
 
-from dyna.config import ModelConfig, NormStructure, RescaleMethod
-from dyna.modules import DynaModule
+from dyna.config import DynaConfig, NormStructure, RescaleMethod
+from .dyna_module import DynaModule
 
-if TYPE_CHECKING:
-    from dyna.attention.attention_module import AttentionModule
+from .attention_module import AttentionModule
 
 
 @beartype
 class LayerModule(Module, ABC):
     def __init__(
         self,
-        config: ModelConfig,
+        config: DynaConfig,
         attention_module: AttentionModule,
         ffn_module: DynaModule,
         input_projection: Module | None = None,

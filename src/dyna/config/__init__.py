@@ -1,10 +1,10 @@
-from dyna.config.dataset_config import DataConfig, DatasetConfig
-from dyna.config.enums import ExecutionMode, NormStructure, RescaleMethod
-from dyna.config.fsdp_config import FSDPConfig
-from dyna.config.model_config import ModelConfig
-from dyna.config.scheduler_config import SchedulerConfig
-from dyna.config.trainer_config import TrainerConfig
-
+from .dataset_config import DataConfig, DatasetConfig
+from .enums import ExecutionMode, NormStructure, RescaleMethod
+from .fsdp_config import FSDPConfig
+from .model_config import ModelConfig
+from .scheduler_config import SchedulerConfig
+from .trainer_config import TrainerConfig
+from .dyna_config import DynaConfig
 CROSS_ENTROPY_IGNORE_INDEX = -100
 LATENT_RECURSION_METHODS = [
     ExecutionMode.geiping_std,
@@ -45,4 +45,12 @@ __all__ = [
     "FSDPConfig",
     "TrainerConfig",
     "SchedulerConfig",
+    "DynaConfig"
 ]
+
+"""
+Config submodule for Dyna project.
+In here all configuration dataclasses and constants are defined and imported.
+This does not include language model configurations as defined by huggingface transformers.
+Those are to be defined in the model submodule.
+"""

@@ -7,7 +7,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from dyna.attention.attention_module import entropy_reg
+from dyna.modules.attention_module import entropy_reg
 from dyna.cvmm.cvmm import cvmm
 from dyna.cvmm.cvmm_sel import cvmm_prepare_sel2
 from dyna.modules.dyna_module import DynaModule

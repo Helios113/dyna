@@ -1,5 +1,4 @@
 import torch
-from beartype import beartype
 from composer.models.huggingface import HuggingFaceModel
 
 # from composer.callbacks
@@ -17,17 +16,27 @@ from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
     DEFAULT_CAUSAL_LM_TRAIN_METRICS,
     PROT_EMB_RESCALING_METHODS,
-    ModelConfig,
 )
+# Import directly from specific modules to avoid circular imports
+
+print("Importing 1", flush=True)
 from dyna.model.transformer import DynaFormer
-from dyna.modules import LayerModule
+print("Importing 2", flush=True)
 
 from dyna.model.base import DynaPretrainedModel
+print("Importing 3", flush=True)
+
+from dyna.modules import LayerModule
+print("Importing 4", flush=True)
+
+from dyna.config import DynaConfig
+print("Importing 5", flush=True)
+
 
 class DynaLM(DynaPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
-    def __init__(self, config: ModelConfig, eos_token_id: int):
+    def __init__(self, config: DynaConfig, eos_token_id: int):
         super().__init__(config)
 
         # Core transformer
@@ -208,15 +217,12 @@ class DynaLM(DynaPretrainedModel):
         )
         return isinstance(module, LayerModule)
 
-
-# Done
-@beartype
 class ComposerDynaModel(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
 
     def __init__(
         self,
-        config: ModelConfig,
+        config: DynaConfig,
         tokenizer: PreTrainedTokenizerBase,
     ):
         # Setup distributed cleanup

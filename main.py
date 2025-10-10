@@ -12,7 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 from streaming.base.util import clean_stale_shared_memory
 from transformers import AutoTokenizer
 
-from dyna.config import ModelConfig
+from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import (
     build_full_concrete_config,
@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     # Instead of passing the DictConfig directly, unpack it as kwargs
-    conf = ModelConfig(**cfg.model_config)
+    conf = DynaConfig(**cfg.model_config)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
 
     train_dataloader = get_data_loader(

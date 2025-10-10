@@ -7,7 +7,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from dyna.attention import AttentionModule
+from dyna.modules import AttentionModule
 from dyna.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 
 

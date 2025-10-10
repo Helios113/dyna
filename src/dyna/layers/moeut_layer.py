@@ -3,17 +3,24 @@ from __future__ import annotations
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+print("Importing MoEUTLayer1", flush=True)
 
 from dyna.attention import SwitchHead
-from dyna.config import ModelConfig
+print("Importing MoEUTLayer2", flush=True)
+
 from dyna.modules import LayerModule, SaturationGate
+print("Importing MoEUTLayer3", flush=True)
+
 from dyna.transition import SigmaMoE
+print("Importing MoEUTLayer4", flush=True)
 
-
+# Import directly from base module to avoid circular imports
+from dyna.config import DynaConfig
+print("Importing MoEUTLayer5", flush=True)
 class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
 
-    def __init__(self, config: ModelConfig, input_reinjection: bool = False):
+    def __init__(self, config: DynaConfig, input_reinjection: bool = False):
         """Initialize MoEUTLayer with configurable parameters."""
         super().__init__(
             config=config,

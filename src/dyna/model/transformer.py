@@ -9,19 +9,22 @@ from torch.nn.modules.normalization import RMSNorm
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
     LATENT_RECURSION_METHODS,
-    ModelConfig,
+    GEIPING_METHODS,
 )
 from dyna.config.enums import ExecutionMode
-from dyna.layers.moeut_layer import MoEUTLayer
-from dyna.layers.simple_layer import SimpleLayer
-from dyna.model.base import DynaPretrainedModel
-from dyna.modules import DynaModule
+
+print("Importing 10", flush=True)
+from dyna.layers import MoEUTLayer, SimpleLayer
+print("Importing 11", flush=True)
+
+from dyna.model.base import DynaPretrainedModel, DynaConfig
+from dyna.modules import DynaModule, AttentionModule
 
 
 class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
     """MoEUT transformer model with configurable behavior."""
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: DynaConfig):
         super().__init__(config)
 
         self.reg_entropy = config.reg_entropy

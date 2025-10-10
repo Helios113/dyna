@@ -7,6 +7,7 @@ from dyna.config.enums import (
 )
 
 
+
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
