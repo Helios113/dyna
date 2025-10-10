@@ -1,18 +1,17 @@
+from io import BytesIO
+from typing import Any
+
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn.functional as F
-from typing import Any, Dict
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from io import BytesIO
-from matplotlib.ticker import ScalarFormatter
+
 
 class ShannonEntropyCallback(Callback):
-    """
-    Callback to compute and log Shannon entropy of language model predictions.
+    """Callback to compute and log Shannon entropy of language model predictions.
 
     Computes H(p) = -sum(p(x_i) * log(p(x_i))) for each position in the sequence,
     then averages across the batch and logs to wandb. Also tracks per-layer entropy.
@@ -20,13 +19,12 @@ class ShannonEntropyCallback(Callback):
 
     def __init__(
         self,
-        log_interval: str = "100ba",
+        log_interval: str | int = "100ba",
         epsilon: float = 1e-3,
         figsize: tuple[int, int] = (12, 8),
-        log_key: str = "shannon_entropy"
+        log_key: str = "shannon_entropy",
     ):
-        """
-        Initialize the Shannon entropy callback.
+        """Initialize the Shannon entropy callback.
 
         Args:
             log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
@@ -40,7 +38,11 @@ class ShannonEntropyCallback(Callback):
             if isinstance(log_interval, str)
             else Time(log_interval, TimeUnit.BATCH)
         )
-        self.epsilon = torch.tensor(epsilon,dtype=torch.float16) if torch.cuda.is_available() else epsilon
+        self.epsilon = (
+            torch.tensor(epsilon, dtype=torch.float16)
+            if torch.cuda.is_available()
+            else epsilon
+        )
         self.last_batch_logged = -1
         self.figsize = figsize
         self.log_key = log_key  # Initialize log_key
@@ -62,8 +64,7 @@ class ShannonEntropyCallback(Callback):
         return False
 
     def _compute_shannon_entropy(self, logits: torch.Tensor) -> torch.Tensor:
-        """
-        Compute Shannon entropy from logits.
+        """Compute Shannon entropy from logits.
 
         Args:
             logits: Model logits of shape [batch_size, seq_len, vocab_size]
@@ -84,35 +85,35 @@ class ShannonEntropyCallback(Callback):
             return entropy
 
     def batch_end(self, state: State, logger: Logger) -> None:
-        """
-        Called at the end of each batch to compute and log entropy.
-        """
-        if  not self._should_log(state):
+        """Called at the end of each batch to compute and log entropy."""
+        if not self._should_log(state):
             return
-        
+
         metrics_dict = {}
         step = str(state.timestamp.batch)
         batch_latentes = state.model.model.transformer._latent_vectors
         batch_entropy = []
-        
+
         # Keep everything on GPU
         data_proc = []
         for elem in batch_latentes:
-            for i, sample in enumerate(elem):                
+            for i, sample in enumerate(elem):
                 if i == len(data_proc):
                     data_proc.append(sample)
-                    
+
                 else:
-                    data_proc[i] = torch.cat((data_proc[i],sample))
-        
+                    data_proc[i] = torch.cat((data_proc[i], sample))
+
         for elem in data_proc:
             entropy = self._compute_shannon_entropy(elem)
             batch_entropy.append(entropy)
-            
+
         if batch_entropy:
             metrics_dict["metrics/shanon_entropy"] = batch_entropy[-1].mean().item()
             try:
-                metrics_dict["entropy/shanon_entropy"] = self._fig_to_wandb_image(self._create_entropy_plot(batch_entropy, step))
+                metrics_dict["entropy/shanon_entropy"] = self._fig_to_wandb_image(
+                    self._create_entropy_plot(batch_entropy, step)
+                )
             except Exception as e:
                 print(f"Error creating entropy plot: {e}, skipping plot logging.")
 
@@ -122,32 +123,34 @@ class ShannonEntropyCallback(Callback):
         self.last_batch_logged = state.timestamp.batch
         state.model.model.transformer._latent_vectors = []
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """Return callback state for checkpointing."""
         return {
             "last_batch_logged": self.last_batch_logged,
             "log_key": self.log_key,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load callback state from checkpoint."""
         self.last_batch_logged = state_dict.get("last_batch_logged", -1)
         self.log_key = state_dict.get("log_key", self.log_key)
+
     def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
         buf.seek(0)
-        
+
         # Create wandb image from PIL Image
         from PIL import Image
+
         pil_img = Image.open(buf)
         img = wandb.Image(pil_img)
         plt.close(fig)
         return img
+
     def _create_entropy_plot(self, data: list[torch.Tensor], step) -> plt.Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
-
         if not data:
             # Create empty plot if no data
             fig, ax = plt.subplots(figsize=self.figsize)
@@ -157,25 +160,26 @@ class ShannonEntropyCallback(Callback):
         # Only move to CPU when necessary for plotting, keep computation on GPU
         means = [d.mean().cpu().item() for d in data]
         stds = [d.std().cpu().item() for d in data]
-        maxs = [mean+std for mean, std in zip(means, stds)]
-        mins = [mean-std for mean, std in zip(means, stds)]
+        maxs = [mean + std for mean, std in zip(means, stds, strict=False)]
+        mins = [mean - std for mean, std in zip(means, stds, strict=False)]
         # x = np.arange(len(means))
         fig, ax = plt.subplots(figsize=self.figsize)
         # Plot mean line
-        ax.plot(means, color='blue', label='Mean Entropy')
-        ax.ticklabel_format(style='plain', axis='both') 
+        ax.plot(means, color="blue", label="Mean Entropy")
+        ax.ticklabel_format(style="plain", axis="both")
         # Fill ±1 std area
-        ax.fill_between(range(len(mins)), mins, maxs, color='blue', alpha=0.1, label='±1 Std Dev')
+        ax.fill_between(
+            range(len(mins)), mins, maxs, color="blue", alpha=0.1, label="±1 Std Dev"
+        )
         # plt.ylim(min(means)*0.9, max(means)*1.1)  # Adjust as neededs
         # Axis and formatting
         ax.set_title(f"Entropy Trend at step {step}", fontsize=14)
         ax.set_xlabel("Index", fontsize=12)
         ax.set_ylabel("Entropy", fontsize=12)
-        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.grid(True, linestyle="--", alpha=0.5)
         ax.legend()
 
         sns.despine()
         fig.tight_layout()
 
         return fig
-

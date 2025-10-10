@@ -55,7 +55,6 @@ class MoEUTLayer(LayerModule):
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
         router: Float[Tensor, d_model],
         cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, 1],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         total_layers: int,
         continue_mask: None | Int[Tensor, size] = None,

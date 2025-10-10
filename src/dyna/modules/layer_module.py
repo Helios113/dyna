@@ -98,7 +98,6 @@ class LayerModule(Module, ABC):
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         cum_sum: Float[Tensor, "batch seq"] | None = None,
-        tau: Float[Tensor, 1] | None = None,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
@@ -231,7 +230,6 @@ class LayerModule(Module, ABC):
         e: Float[Tensor, "batch seq d_model"],
         router: Float[Tensor, d_model],
         cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, 1],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
