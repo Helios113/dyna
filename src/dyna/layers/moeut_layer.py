@@ -3,20 +3,20 @@ from __future__ import annotations
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-print("Importing MoEUTLayer1", flush=True)
+
 
 from dyna.attention import SwitchHead
-print("Importing MoEUTLayer2", flush=True)
+
 
 from dyna.modules import LayerModule, SaturationGate
-print("Importing MoEUTLayer3", flush=True)
+
 
 from dyna.transition import SigmaMoE
-print("Importing MoEUTLayer4", flush=True)
 
-# Import directly from base module to avoid circular imports
+
 from dyna.config import DynaConfig
-print("Importing MoEUTLayer5", flush=True)
+
+
 class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
 
@@ -60,11 +60,8 @@ class MoEUTLayer(LayerModule):
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        router: Float[Tensor, d_model],
-        cum_sum: Float[Tensor, "batch seq"],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
-        total_layers: int,
-        continue_mask: None | Int[Tensor, size] = None,
+        continue_mask: None | Int[Tensor, "size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,

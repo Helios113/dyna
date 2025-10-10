@@ -18,8 +18,33 @@ from dyna.layers import MoEUTLayer, SimpleLayer
 print("Importing 11", flush=True)
 
 from dyna.model.base import DynaPretrainedModel, DynaConfig
-from dyna.modules import DynaModule, AttentionModule
+from dyna.modules import DynaModule, AttentionModule, LayerModule
+from collections.abc import Iterator
+from typing import Generic, TypeVar, overload
 
+from torch import nn
+
+T = TypeVar("T", bound=nn.Module)
+
+
+class TypedModuleList(Generic[T], nn.ModuleList):
+    def __iter__(self) -> Iterator[T]:
+        return super().__iter__()  # type: ignore[no-any-return]
+
+    def append(self, module: T) -> "TypedModuleList[T]":  # type: ignore[override]
+        return super().append(module)  # type: ignore[return-value]
+
+    @overload
+    def __getitem__(self, idx: slice) -> "TypedModuleList[T]": ...
+
+    @overload
+    def __getitem__(self, idx: int) -> T: ...
+
+    def __getitem__(self, idx):  # type: ignore[no-untyped-def]
+        return super().__getitem__(idx)
+
+    def __setitem__(self, idx: int, module: T) -> None:  # type: ignore[override]
+        super().__setitem__(idx, module)
 
 class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
     """MoEUT transformer model with configurable behavior."""
@@ -39,6 +64,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         self.router = Parameter(torch.zeros(self.d_model), requires_grad=False)
         self.tau = Parameter(torch.ones(1), requires_grad=self.enable_early_exit)
         self.gather_stats = False
+        self.layers: ModuleList[LayerModule]
         match config.execution_mode.value:
             case ExecutionMode.moe.value:
                 self.layers = ModuleList(
@@ -186,27 +212,26 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         energy_per_sample = torch.zeros(
             x.shape[0], x.shape[1], 1, device=x.device, dtype=x.dtype
         )
-
+        
         for li in range(self.n_repeats):
             if self.repeat_residual and li > 0:
                 x = x + residual_embeddings
             for idx, layer in enumerate(self.layers):
+                
                 # Calculate correct layer index based on execution mode
                 if self.execution_mode.value in LATENT_RECURSION_METHODS:
                     layer_index = 2 + (li * self.n_layers) + idx + 2
                 else:
                     # Standard: current_position_in_repeated_layers + 2
                     layer_index = (li * self.n_layers) + idx + 2
+                assert isinstance(layer, LayerModule)
+
                 x_out, expert_sel, saturation_event = layer(
                     x=x,
                     layer_index=layer_index,
                     e=e,
                     reinjection_embeddings=reinjection_embeddings,
-                    router=self.router,
-                    cum_sum=cum_sum,
-                    tau=self.tau,
                     mask=mask,
-                    total_layers=self.n_layers * self.repeats,
                     continue_mask=continue_mask,
                 )
 

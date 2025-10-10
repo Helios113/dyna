@@ -7,6 +7,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from . import DynaModule
+from typing import final
 
 
 def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
@@ -33,7 +34,6 @@ class AttentionModule(DynaModule):
         n_heads: int,
         d_head: int,
         base: int = 10000,
-        seq_dim: int = 1,
     ) -> None:
         """Base attention module with RoPE (Rotary Position Encoding) support.
 
@@ -59,7 +59,7 @@ class AttentionModule(DynaModule):
         self.seq_len_cached = 0
         self.cos_cached = None
         self.sin_cached = None
-        self.seq_dim = torch.tensor(seq_dim)
+        self.seq_dim: int = 2
 
         self.n_heads = n_heads
         self.d_head = d_head
@@ -69,7 +69,7 @@ class AttentionModule(DynaModule):
         v: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
-        attention_mask: Bool[Tensor, "batch n_heads seq seq"],
+        attention_mask: Bool[Tensor, "batch seq seq"],
         position_mask: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
@@ -104,11 +104,11 @@ class AttentionModule(DynaModule):
 
     def apply_rot_optimized(
         self,
-        x: torch.Tensor,  # [batch, n_heads, seq, d_head]
-        positions: torch.Tensor,  # [batch, seq]
+        x: Float[Tensor, "batch n_heads seq d_head"],
+        positions: Int[Tensor, "batch seq"],
     ) -> torch.Tensor:
         """Optimized rotary position encoding application."""
-        sin, cos = self.get_sincos_positions(positions, x)
+        sin, cos = self.get_sincos_positions(x, positions)
 
         # Get sequence length once
         seq_len = x.shape[self.seq_dim]
@@ -118,6 +118,11 @@ class AttentionModule(DynaModule):
         cos = cos[..., :seq_len, :]
 
         # Apply rotation in one line using the optimized rotate_half
+        print("Applying optimized RoPE")
+        print(
+            f"x shape: {x.shape}, sin shape: {sin.shape}, cos shape: {cos.shape}",
+            flush=True,
+        )
         return x * cos + self.rotate_half_optimized(x) * sin
 
     def rotate_half_optimized(self, x: torch.Tensor) -> torch.Tensor:
@@ -128,24 +133,28 @@ class AttentionModule(DynaModule):
 
     def get_sincos_positions(
         self,
+        x: Float[Tensor, "batch n_heads seq d_head"],
         positions: Int[Tensor, "batch seq"],
-        q: Float[Tensor, "batch n_heads seq d_head"],
     ) -> tuple[
-        Float[Tensor, "batch 1 seq d_head"], Float[Tensor, "batch 1 seq d_head"]
+        Float[Tensor, "batch n_heads seq d_head"],
+        Float[Tensor, "batch n_heads seq d_head"],
     ]:
         """Get sin/cos values for specific positions."""
-        seq_len = q.shape[self.seq_dim]
+        seq_len = x.shape[self.seq_dim]
 
         # Check if we can reuse cached values
         if (
             self.seq_len_cached < seq_len
             or self.cos_cached is None
             or self.sin_cached is None
-            or self.cos_cached.device != q.device
+            or self.cos_cached.device != x.device
         ):
             # Create position indices for the maximum sequence length we might need
             max_pos = positions.max().item() + 1
-            pos_idx = torch.arange(max_pos, device=q.device)
+            print("max_pos:", max_pos, flush=True)
+
+            pos_idx = torch.arange(max_pos, device=x.device)
+            print("pos_idx:", pos_idx, flush=True)
 
             # Compute frequencies
             freqs = torch.einsum("i,j->ij", pos_idx, self.inv_freq)
@@ -161,11 +170,11 @@ class AttentionModule(DynaModule):
         sin_vals = self.sin_cached[positions]  # [batch, seq, d_head]
 
         # Reshape to match expected output format
-        tgt_shape = [1] * q.ndim
-        tgt_shape[0] = q.shape[0]
+        tgt_shape = [1] * (x.ndim)
+        tgt_shape[0] = x.shape[0]
         tgt_shape[1] = 1
-        tgt_shape[self.seq_dim] = q.shape[self.seq_dim]
-        tgt_shape[-1] = q.shape[-1]
+        tgt_shape[self.seq_dim] = x.shape[self.seq_dim]
+        tgt_shape[-1] = x.shape[-1]
 
         return sin_vals.view(*tgt_shape), cos_vals.view(*tgt_shape)
 
