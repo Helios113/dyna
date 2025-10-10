@@ -14,7 +14,7 @@ from dyna.config import (
 from dyna.config.enums import ExecutionMode
 from dyna.layers.moeut_layer import MoEUTLayer
 from dyna.layers.simple_layer import SimpleLayer
-from dyna.model.model import DynaPretrainedModel
+from dyna.model.base import DynaPretrainedModel
 from dyna.modules import DynaModule
 
 

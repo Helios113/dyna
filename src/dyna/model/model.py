@@ -12,8 +12,7 @@ from transformers import PreTrainedTokenizerBase
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from transformers.modeling_utils import PreTrainedModel
-
+from llmfoundry.utils.builders import build_metric
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
     DEFAULT_CAUSAL_LM_TRAIN_METRICS,
@@ -23,17 +22,7 @@ from dyna.config import (
 from dyna.model.transformer import DynaFormer
 from dyna.modules import LayerModule
 
-
-class DynaPretrainedModel(PreTrainedModel):
-    """Base class for Dyna pretrained models."""
-
-    config_class = ModelConfig  # type: ignore[reportGeneralTypeIssues]
-    base_model_prefix: str = "Dyna"
-    is_parallelizable: bool = False
-    main_input_name: str = "input_ids"
-    load_tf_weights = None
-    _no_split_modules = [LayerModule]  # type: ignore[reportGeneralTypeIssues]
-
+from dyna.model.base import DynaPretrainedModel
 
 class DynaLM(DynaPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
@@ -231,7 +220,6 @@ class ComposerDynaModel(HuggingFaceModel):
         tokenizer: PreTrainedTokenizerBase,
     ):
         # Setup distributed cleanup
-        setup_distributed_cleanup()
 
         model = DynaLM(config, tokenizer.eos_token_id)
         # Configuration
@@ -268,7 +256,7 @@ class ComposerDynaModel(HuggingFaceModel):
         logits = outputs.logits
         _labels = torch.roll(labels, shifts=-1)
         _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-        loss = F.cross_entropy(
+        loss = torch.nn.functional.cross_entropy(
             logits.view(-1, logits.size(-1)),
             _labels.to(logits.device).view(-1),
         )
