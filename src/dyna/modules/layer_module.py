@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
 
-from dyna.config import DynaConfig, NormStructure, RescaleMethod
+from dyna.config import ModelConfig, NormStructure, RescaleMethod
 from dyna.modules import DynaModule
 
 if TYPE_CHECKING:
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 class LayerModule(Module, ABC):
     def __init__(
         self,
-        config: DynaConfig,
-        attention_module: "AttentionModule",
+        config: ModelConfig,
+        attention_module: AttentionModule,
         ffn_module: DynaModule,
         input_projection: Module | None = None,
     ):
@@ -93,12 +93,12 @@ class LayerModule(Module, ABC):
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
         update_on_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Int[Tensor, "size"],
+        continue_mask: None | Int[Tensor, size],
         layer_index: int,
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         cum_sum: Float[Tensor, "batch seq"] | None = None,
-        tau: Float[Tensor, "1"] | None = None,
+        tau: Float[Tensor, 1] | None = None,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
@@ -229,9 +229,9 @@ class LayerModule(Module, ABC):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: Float[Tensor, "batch seq d_model"],
-        router: Float[Tensor, "d_model"],
+        router: Float[Tensor, d_model],
         cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
+        tau: Float[Tensor, 1],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],

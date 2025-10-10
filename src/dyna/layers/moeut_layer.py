@@ -5,7 +5,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from dyna.attention import SwitchHead
-from dyna.config import DynaConfig
+from dyna.config import ModelConfig
 from dyna.modules import LayerModule, SaturationGate
 from dyna.transition import SigmaMoE
 
@@ -13,7 +13,7 @@ from dyna.transition import SigmaMoE
 class MoEUTLayer(LayerModule):
     """Single layer of the MoEUT model with configurable behavior."""
 
-    def __init__(self, config: DynaConfig, input_reinjection: bool = False):
+    def __init__(self, config: ModelConfig, input_reinjection: bool = False):
         """Initialize MoEUTLayer with configurable parameters."""
         super().__init__(
             config=config,
@@ -53,12 +53,12 @@ class MoEUTLayer(LayerModule):
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        router: Float[Tensor, "d_model"],
+        router: Float[Tensor, d_model],
         cum_sum: Float[Tensor, "batch seq"],
-        tau: Float[Tensor, "1"],
+        tau: Float[Tensor, 1],
         mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
         total_layers: int,
-        continue_mask: None | Int[Tensor, "size"] = None,
+        continue_mask: None | Int[Tensor, size] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,

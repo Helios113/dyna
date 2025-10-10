@@ -5,11 +5,11 @@ from typing import Any
 import torch
 from torch import nn
 
-from dyna.config import DynaConfig
+from dyna.config import ModelConfig
 
 
 class ComposerDynaModel(nn.Module):
-    def __init__(self, config: DynaConfig, tokenizer: Any | None = None):
+    def __init__(self, config: ModelConfig, tokenizer: Any | None = None):
         """Initialize ComposerDynaModel with config and optional tokenizer."""
         super().__init__()
         self.config = config

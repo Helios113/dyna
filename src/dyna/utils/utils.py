@@ -148,7 +148,7 @@ def load_and_concat_yamls(directory):
 
 
 def get_data_loader(
-    cfg: dict,
+    cfg: DictConfig,
     tokenizer: PreTrainedTokenizerBase,
     device_train_batch_size: int,
 ) -> DataSpec:
