@@ -1,24 +1,26 @@
 import os
-from transformers import AutoTokenizer
-from composer.loggers import WandBLogger
-from dyna.model.model import ComposerDynaModel, DynaConfig
-from composer import Trainer
-from composer.utils import get_device
+
 import hydra
-from omegaconf import DictConfig, OmegaConf
+import torch.distributed as dist
+from beartype import beartype
+from composer import Trainer
+from composer.algorithms import GradientClipping
+from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW
-from composer.profiler import JSONTraceHandler, cyclic_schedule
-from composer.profiler.profiler import Profiler
-from dyna.utils.utils import (
-    make_wandb_run_name,
+from composer.utils import reproducibility
+from omegaconf import DictConfig, OmegaConf
+from streaming.base.util import clean_stale_shared_memory
+from transformers import AutoTokenizer
+
+from dyna.config import DynaConfig
+from dyna.model import ComposerDynaModel
+from dyna.utils import (
+    build_full_concrete_config,
     get_callbacks,
     get_data_loader,
-    build_full_concrete_config,
     get_scheduler,
+    make_wandb_run_name,
 )
-from composer.utils import dist
-from beartype import beartype
-from composer.utils import reproducibility
 
 reproducibility.configure_deterministic_mode()
 
@@ -31,27 +33,19 @@ def trace_handler(p):
     )
 
 
-from composer.algorithms import GradientClipping
-from composer.trainer import Trainer
-
-from streaming.base.util import clean_stale_shared_memory
-
-import torch.distributed as dist
-
-
 def safe_clean_stale_shared_memory():
     # only rank 0 (main process) initializes
     if not dist.is_initialized() or dist.get_rank() == 0:
         return clean_stale_shared_memory()
 
 
-@hydra.main(version_base=None, config_path="configuration", config_name="MoA_moeut")
+@hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
 @beartype
 def main(cfg: DictConfig):
     safe_clean_stale_shared_memory()
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
-    
+
     unique = os.getenv("TMPDIR").split("_")[-1]
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config, unique)
     cfg.trainer_config.save_filename = run_name + "-ba{batch}.pt"
@@ -59,7 +53,7 @@ def main(cfg: DictConfig):
         project="dyna",
         log_artifacts=False,
         name=run_name,
-        init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True), "id":unique},
+        init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True), "id": unique},
     )
 
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")

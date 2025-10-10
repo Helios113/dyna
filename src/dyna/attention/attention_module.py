@@ -1,21 +1,30 @@
-import torch
-from ..modules.dyna_module import DynaModule
-from jaxtyping import Float, Int, Bool
-from torch import Tensor
+from __future__ import annotations
+
 import math
+
+import torch
+from jaxtyping import Bool, Float, Int
+from torch import Tensor
+
+from dyna.modules import DynaModule
+
 
 def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
     """Compute log of mean along specified dimension."""
     return x.logsumexp(dim) - math.log(x.shape[dim])
 
-def entropy_l(l: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
+
+def entropy_l(log_probs: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
     """Compute entropy from log probabilities."""
-    return -(l * l.exp()).sum(-1)
+    return -(log_probs * log_probs.exp()).sum(-1)
+
+
 def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tensor, ""]:
     """Compute entropy regularization term."""
     sel = torch.nn.functional.log_softmax(sel, dim=-1)
     sel = log_mean(sel, dim)
     return -entropy_l(sel).mean()
+
 
 class AttentionModule(DynaModule):
     def __init__(
@@ -26,17 +35,20 @@ class AttentionModule(DynaModule):
         base: int = 10000,
         seq_dim: int = 1,
     ) -> None:
-        """
-        Base attention module with RoPE (Rotary Position Encoding) support.
+        """Base attention module with RoPE (Rotary Position Encoding) support.
 
-        This module provides core attention functionality with optimized rotary position encoding,
-        including sin/cos caching for improved performance. It serves as a base class for
-        attention implementations.
+        This module provides core attention functionality with optimized rotary
+        position encoding, including sin/cos caching for improved performance.
+        It serves as a base class for attention implementations.
 
         Args:
             d_model: Model dimension for computing rotary frequencies.
-            base: Base value for rotary position encoding frequency computation (default: 10000).
-            seq_dim: Dimension index representing the sequence length in tensors (default: 1).
+            n_heads: Number of attention heads.
+            d_head: Dimension of each attention head.
+            base: Base value for rotary position encoding frequency computation
+                (default: 10000).
+            seq_dim: Dimension index representing the sequence length in tensors
+                (default: 1).
         """
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         # Compute inverse frequencies
@@ -60,18 +72,22 @@ class AttentionModule(DynaModule):
         attention_mask: Bool[Tensor, "batch n_heads seq seq"],
         position_mask: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
-        """Compute attention with RoPE for constant length q k v tensors, with multiple sequences per sample in the batch.
-        FlashAttention requires q, k, v to be padded to the same length, so we use cu_seqlens to indicate the start of each sequence.
+        """Compute attention with RoPE for constant length q k v tensors.
+
+        Computes attention with multiple sequences per sample in the batch.
+        FlashAttention requires q, k, v to be padded to the same length, so we
+        use cu_seqlens to indicate the start of each sequence.
+
         Args:
             v: Value tensor of shape (batch, n_heads, seq, d_head).
             k: Key tensor of shape (batch, n_heads, seq, d_head).
             q: Query tensor of shape (batch, n_heads, seq, d_head).
-            cu_seqlens: Cumulative sequence lengths for FlashAttention of shape (batch+1).
-            max_seqlen: Maximum sequence length in the batch.
-            position_mask_full: Position indices for RoPE of shape (batch, seq).
+            attention_mask: Attention mask tensor.
+            position_mask: Position indices for RoPE of shape (batch, seq).
 
+        Returns:
+            Attention output tensor of shape (batch, n_heads, seq, d_head).
         """
-
         # Apply rotary position encoding
         # Remove debug print that could cause issues
 
@@ -92,7 +108,6 @@ class AttentionModule(DynaModule):
         positions: torch.Tensor,  # [batch, seq]
     ) -> torch.Tensor:
         """Optimized rotary position encoding application."""
-
         sin, cos = self.get_sincos_positions(positions, x)
 
         # Get sequence length once
@@ -128,7 +143,6 @@ class AttentionModule(DynaModule):
             or self.sin_cached is None
             or self.cos_cached.device != q.device
         ):
-
             # Create position indices for the maximum sequence length we might need
             max_pos = positions.max().item() + 1
             pos_idx = torch.arange(max_pos, device=q.device)
@@ -164,7 +178,6 @@ class AttentionModule(DynaModule):
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
     ]:
-
         return (
             self.apply_rot_optimized(q, position_mask_full),
             self.apply_rot_optimized(k, position_mask_full),

@@ -1,28 +1,19 @@
-import math
 import atexit
-from collections.abc import Callable
-from typing import Optional
+
 import torch
-import torch.nn.functional as F
-from torch.nn.attention import sdpa_kernel, SDPBackend
-from composer.models import HuggingFaceModel
-from torch.nn.modules.normalization import RMSNorm
-from llmfoundry.utils.builders import build_metric
-from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig
+from beartype import beartype
+
+# from composer.callbacks
+# Add jaxtyping imports
+from jaxtyping import Float, Int
+from torch import Tensor
+from torch.nn import Module
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from torch.nn import Module, ModuleList, Parameter
-from model.modules.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
-from beartype import beartype
-import math
-from model.modules.dtanh import DynamicTanh
-# from composer.callbacks
-# Add jaxtyping imports
-from jaxtyping import Float, Int, Bool
-from torch import Tensor
-from ..attention.attention_module import AttentionModule
+
 # Constants
+CROSS_ENTROPY_IGNORE_INDEX = -100
 
 
 def cleanup_distributed():
@@ -79,12 +70,6 @@ def round_up_to_multiple_of_256(n: torch.Tensor) -> int:
     return int(((n - 1) // 256 + 1) * 256)
 
 
-
-
-
-
-
-
 # class LayerScaledIdentityFn(torch.autograd.Function):
 #     @staticmethod
 #     def forward(ctx, input, layer_idx: int, total_layers: int):
@@ -118,16 +103,3 @@ class LayerScaledIdentityFn(torch.autograd.Function):
 
 def layer_scaled_identity(x, total_layers: int):
     return LayerScaledIdentityFn.apply(x, total_layers)
-
-
-
-
-
-
-
-
-
-@beartype
-
-
-

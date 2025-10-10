@@ -1,5 +1,12 @@
+from __future__ import annotations
+
+import torch
+from torch.nn import Module
+
+
 class SaturationGate(Module):
     def __init__(self, d_model, init_bias=2.0):
+        """Initialize SaturationGate with configurable parameters."""
         super().__init__()
         self.linear = torch.nn.Sequential(
             torch.nn.Linear(d_model, d_model // 2),
@@ -16,4 +23,3 @@ class SaturationGate(Module):
         g_soft = torch.sigmoid(z)
         g = g_hard + (g_soft - g_soft.detach())
         return g
-

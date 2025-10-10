@@ -1,10 +1,14 @@
-from typing import Callable
-from .attention_module import AttentionModule
-import torch
-import math
+from __future__ import annotations
 
-from jaxtyping import Float, Int, Bool
+import math
+from collections.abc import Callable
+
+import torch
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
+
+from dyna.attention import AttentionModule
+
 
 class BasicAttn(AttentionModule):
     def __init__(
@@ -16,12 +20,16 @@ class BasicAttn(AttentionModule):
         rotate_fraction: float = 1.0,
         rope_base: int = 10000,
     ):
+        """Initialize BasicAttn with configurable parameters."""
         super().__init__(d_model, n_heads, d_head, rope_base)
         # Model configuration
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
-        identity_pytorch: Callable[[torch.Tensor], torch.Tensor] = lambda x: x
+        
+        def identity_pytorch(x: torch.Tensor) -> torch.Tensor:
+            return x
+            
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else identity_pytorch
 
         # Query and Key projections (shared)
@@ -32,7 +40,7 @@ class BasicAttn(AttentionModule):
 
         # RoPE configuration
         self.n_rotate = int(rotate_fraction * self.d_head)
-       
+
         # # Attention scale
         # self.register_buffer(
         #     "scale",
@@ -52,7 +60,10 @@ class BasicAttn(AttentionModule):
             )
 
     def get_reg_loss(self) -> torch.Tensor:
-        """Return zero for regularization loss since BasicAttn doesn't use expert routing."""
+        """Return zero for regularization loss.
+
+        BasicAttn doesn't use expert routing, so no regularization loss.
+        """
         return torch.tensor(0.0, device=self.q.weight.device)
 
     def forward(
@@ -66,7 +77,6 @@ class BasicAttn(AttentionModule):
         tuple[None, None],
     ]:
         """Forward pass through the attention layer."""
-
         q: Float[Tensor, "batch seq n_heads*d_head"] = self.q(q_src)
         k: Float[Tensor, "batch seq n_heads*d_head"] = self.k(k_src)
         v: Float[Tensor, "batch seq n_heads*d_head"] = self.v(v_src)

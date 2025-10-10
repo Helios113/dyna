@@ -1,11 +1,14 @@
-from typing import Callable
-from .attention_module import AttentionModule
-import torch
-import math
+from __future__ import annotations
 
-from jaxtyping import Float, Int, Bool
+import math
+from collections.abc import Callable
+
+import torch
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
-from dyna.cvmm.cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
+
+from dyna.attention import AttentionModule
+from dyna.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
 
 
 class SwitchHead(AttentionModule):
@@ -24,12 +27,16 @@ class SwitchHead(AttentionModule):
         rotate_fraction: float = 1,
         rope_base: int = 10000,
     ):
+        """Initialize SwitchHead with expert routing configuration."""
         super().__init__(d_model, n_heads, d_head, rope_base)
         # Model configuration
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
-        identity_pytorch: Callable[[torch.Tensor], torch.Tensor] = lambda x: x
+        
+        def identity_pytorch(x: torch.Tensor) -> torch.Tensor:
+            return x
+            
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else identity_pytorch
 
         # Expert configuration
@@ -122,7 +129,7 @@ class SwitchHead(AttentionModule):
         """Renormalize rows while preserving standard deviation."""
         with torch.no_grad():
             std_t = x.std(dim=-1, keepdim=True)
-            x.div_(x.norm(dim=-1, keepdim=True)) # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+            x.div_(x.norm(dim=-1, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
             x.mul_(std_t / x.std())
 
     # def get_reg_loss(self) -> Float[Tensor, "dim"]:
@@ -131,7 +138,8 @@ class SwitchHead(AttentionModule):
     #     if self.sel_hist:
     #         for i in range(len(self.sel_hist[0])):
     #             loss = loss + entropy_reg(
-    #                 torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
+    #                 torch.stack([l[i] for l in self.sel_hist], dim=-3)
+    #                 .flatten(-4, -3),
     #                 -3,
     #             )
     #     # Clear the history to prevent memory accumulation
@@ -142,10 +150,10 @@ class SwitchHead(AttentionModule):
         self,
         input_tensor: Float[Tensor, "batch seq d_model"],
         weight: Float[Tensor, "n_heads_x_experts d_model"],
-        bias: Float[Tensor, "n_experts"] | None = None,
+        bias: Float[Tensor, "n_experts_attn"] | None = None,
     ) -> tuple[
         CVMMSel,
-        Float[Tensor, "batch seq n_heads n_experts"],
+        Float[Tensor, "batch seq n_heads n_experts_attn"],
         Int[Tensor, "batch seq n_heads k_experts"],
     ]:
         """Get expert selection indices and weights."""
@@ -187,7 +195,6 @@ class SwitchHead(AttentionModule):
                 ([1] * (sel_index.dim() - 1)), -1
             ).expand(*shared_shape)
 
-            
             sel_index = torch.cat([sel_index, expert_shared_expanded], dim=-1)
 
         # Update bias for load balancing
@@ -246,19 +253,25 @@ class SwitchHead(AttentionModule):
                 k_src, self.sel_v, self.bias_v
             )
 
-            o_sel, o_sel_r, o_sel_inedx = self._get_expert_selection( # pyright: ignore[reportUnusedVariable]
+            o_sel, o_sel_r, o_sel_inedx = self._get_expert_selection(  # pyright: ignore[reportUnusedVariable]
                 q_src, self.sel_o, self.bias_o
             )
             # Commented for mem reduction
             # if self.training:
             #     self.sel_hist.append((o_sel_r, v_sel_r))
-            v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
+            v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
+                v_src, v_sel, self.v
+            ).transpose(-2, -3)
 
             # Clean up intermediate tensors
             del v_sel_r, v_sel
             # Project to attention format
-            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(q)
-            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(k)
+            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
+                q
+            )
+            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
+                k
+            )
 
             # Apply dropout and attention
             q = self.dropout(q)
@@ -278,8 +291,12 @@ class SwitchHead(AttentionModule):
 
             v = torch.einsum("bsd,ndh->bsnh", v_src, self.v)
             v = self.project_to_torch_order(v.reshape(v.shape[0], v.shape[1], -1))
-            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(q)
-            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(k)
+            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
+                q
+            )
+            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
+                k
+            )
 
             # Apply dropout and attention
             q = self.dropout(q)
@@ -289,7 +306,6 @@ class SwitchHead(AttentionModule):
                 v, k, q, mask[0], mask[1]
             )
             res = res.transpose(-2, -3)
-
 
             res = res * o_gate[..., None]
 

@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class NormStructure(str, Enum):
     peri = "peri"
     pre = "pre"
@@ -15,7 +16,7 @@ class RescaleMethod(str, Enum):
     sqrt_no_prot_emb = "sqrt_no_prot_emb"
     sqrt_scale_prot_emb = "sqrt_scale_prot_emb"
     avg_prot_emb = "avg_prot_emb"
-    
+
 
 class ExecutionMode(str, Enum):
     moe = "moe"

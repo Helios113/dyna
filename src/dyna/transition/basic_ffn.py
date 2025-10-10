@@ -1,7 +1,12 @@
-from typing import Callable
-from dyna.modules.dyna_module import DynaModule
-import torch
+from __future__ import annotations
+
 import math
+from collections.abc import Callable
+
+import torch
+
+from dyna.modules import DynaModule
+
 
 class BasicFFN(DynaModule):
     def __init__(
@@ -10,7 +15,8 @@ class BasicFFN(DynaModule):
         d_expert_ffn: int,
         activation: Callable[[torch.Tensor], torch.Tensor] = torch.nn.functional.gelu,
     ):
-        super().__init__() # pyright: ignore[reportUnknownMemberType]
+        """Initialize BasicFFN with configurable parameters."""
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.d_model = d_model
         self.d_expert_ffn = d_expert_ffn
         self.activation = activation
@@ -36,5 +42,8 @@ class BasicFFN(DynaModule):
             torch.nn.init.zeros_(self.projection_down.bias)
 
     def get_reg_loss(self) -> torch.Tensor:
-        """Return zero for regularization loss since BasicFFN doesn't use expert routing."""
+        """Return zero for regularization loss.
+
+        BasicFFN doesn't use expert routing, so no regularization loss.
+        """
         return torch.tensor(0.0, device=self.projection_up.weight.device)

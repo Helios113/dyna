@@ -1,14 +1,5 @@
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Iterable
-import torch
-from torch.distributed.checkpoint.planner import LoadPlanner
-from torch.distributed.checkpoint.planner import SavePlanner
-from .enums import (
-    NormStructure,
-    RescaleMethod,
-    ExecutionMode,
-)
+from dataclasses import dataclass
+
 
 @dataclass
 class SchedulerConfig:
@@ -19,4 +10,3 @@ class SchedulerConfig:
     alpha_f: float = 0.0
     scale_warmup: bool = False
     scale_cooldown: bool = False
-

@@ -1,12 +1,17 @@
-import math
-from typing import Callable
-from dyna.modules.dyna_module import DynaModule
-from dyna.attention.attention_module import entropy_reg
+from __future__ import annotations
 
-from jaxtyping import Float, Int
+import math
+from collections.abc import Callable
+
 import torch
+from jaxtyping import Float, Int
 from torch import Tensor
-from dyna.cvmm.cvmm import cvmm, cvmm_prepare_sel2
+
+from dyna.attention.attention_module import entropy_reg
+from dyna.cvmm.cvmm import cvmm
+from dyna.cvmm.cvmm_sel import cvmm_prepare_sel2
+from dyna.modules.dyna_module import DynaModule
+
 
 class SigmaMoE(DynaModule):
     """Sigma Mixture of Experts layer for feed-forward networks."""
@@ -21,6 +26,7 @@ class SigmaMoE(DynaModule):
         activation: Callable[[torch.Tensor], torch.Tensor] = torch.nn.functional.gelu,
         dropout_expert: float = 0.0,
     ):
+        """Initialize SigmaMoE with configurable parameters."""
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.d_model = d_model
         self.n_experts_ffn = n_experts_ffn
@@ -30,25 +36,31 @@ class SigmaMoE(DynaModule):
         self.k_ffn = k_ffn
         self.activation = activation
         self.dropout_expert = dropout_expert
-        self.bias_ffn = torch.nn.Parameter(torch.zeros(n_experts_ffn), requires_grad=False) if self.n_expert_routed_ffn > 0 else None
+        self.bias_ffn = (
+            torch.nn.Parameter(torch.zeros(n_experts_ffn), requires_grad=False)
+            if self.n_expert_routed_ffn > 0
+            else None
+        )
         # Bias tracking for load balancing
         self.bias_update_lr = 0.001
 
         # Expert parameters
-        self.keys:torch.Tensor = torch.nn.Parameter(
+        self.keys: torch.Tensor = torch.nn.Parameter(
             torch.empty(self.n_experts_ffn, self.d_model, self.d_expert_ffn)
         )
-        self.values:torch.Tensor = torch.nn.Parameter(
+        self.values: torch.Tensor = torch.nn.Parameter(
             torch.empty(self.n_experts_ffn, self.d_expert_ffn, self.d_model)
         )
-        self.expert_sel:torch.Tensor = torch.nn.Parameter(torch.empty(self.n_experts_ffn, self.d_model))
+        self.expert_sel: torch.Tensor = torch.nn.Parameter(
+            torch.empty(self.n_experts_ffn, self.d_model)
+        )
 
         # Register shared expert indices
         self.expert_shared = torch.nn.Parameter(
             torch.arange(
-            n_experts_ffn - self.n_expert_shared_ffn,
-            n_experts_ffn,
-            dtype=torch.long,
+                n_experts_ffn - self.n_expert_shared_ffn,
+                n_experts_ffn,
+                dtype=torch.long,
             ),
             requires_grad=False,
         )
@@ -79,7 +91,6 @@ class SigmaMoE(DynaModule):
         Float[Tensor, "batch seq k_experts"], Int[Tensor, "batch seq k_experts"]
     ]:
         """Compute expert selection scores and indices."""
-
         if self.n_experts_ffn == 1:
             return torch.ones(
                 (selection_input.shape[0], selection_input.shape[1], 1),
@@ -101,8 +112,12 @@ class SigmaMoE(DynaModule):
             mask = torch.rand_like(affinity) < self.dropout_expert
             affinity.masked_fill_(mask, float("-inf"))
 
-        bias_term = self.bias_ffn[: self.n_expert_routed_ffn] if self.bias_ffn is not None else None
-        
+        bias_term = (
+            self.bias_ffn[: self.n_expert_routed_ffn]
+            if self.bias_ffn is not None
+            else None
+        )
+
         # Select top-k routed experts, but ensure k doesn't exceed available experts
         assert self.k_ffn < self.n_expert_routed_ffn
         _, selection_index = torch.topk(
@@ -153,10 +168,10 @@ class SigmaMoE(DynaModule):
         selection_input: Float[Tensor, "batch seq d_model"],
     ) -> tuple[Float[Tensor, "batch seq d_model"], Int[Tensor, "batch seq k_experts"]]:
         """Forward pass through the MoE layer."""
-
         # Get expert selection
         affinity, selection_index = self._compute_expert_selection(selection_input)
-        # self.selection_history_s_moe.append(affinity.clone().detach())  # Detach to avoid storing gradients
+        # self.selection_history_s_moe.append(affinity.clone().detach())
+        # Detach to avoid storing gradients
 
         # Prepare selection indices for CVMM operations
         selection_indices = cvmm_prepare_sel2(selection_index.int())
@@ -192,4 +207,3 @@ class SigmaMoE(DynaModule):
         # Clear the history to prevent memory accumulation
         self.selection_history_s_moe.clear()
         return loss
-

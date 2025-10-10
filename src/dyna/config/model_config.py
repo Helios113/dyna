@@ -1,15 +1,12 @@
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Iterable
-import torch
-from torch.distributed.checkpoint.planner import LoadPlanner
-from torch.distributed.checkpoint.planner import SavePlanner
-from .enums import (
+from dataclasses import dataclass
+
+from dyna.config.enums import (
+    ExecutionMode,
     NormStructure,
     RescaleMethod,
-    ExecutionMode,
 )
-    
+
+
 @dataclass
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
@@ -42,7 +39,4 @@ class ModelConfig:
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False
-    perfiery_size: int = 2 
-
-
-
+    perfiery_size: int = 2

@@ -1,8 +1,20 @@
+from __future__ import annotations
+
+import torch
+from beartype import beartype
+from jaxtyping import Bool, Float, Int
+from torch import Tensor
+
+from dyna.attention import BasicAttn
+from dyna.config import DynaConfig
+from dyna.modules import LayerModule
+from dyna.transition import BasicFFN
+
 
 @beartype
 class SimpleLayer(LayerModule):
     def __init__(self, config: DynaConfig, input_reinjection: bool = False):
-
+        """Initialize SimpleLayer with configurable parameters."""
         super().__init__(
             config,
             BasicAttn(
@@ -41,7 +53,6 @@ class SimpleLayer(LayerModule):
         Float[Tensor, "batch seq"] | None,
     ]:
         """Forward pass through the layer with configurable behavior."""
-
         if self.input_reinjection and reinjection_embeddings is not None:
             # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
@@ -72,4 +83,3 @@ class SimpleLayer(LayerModule):
         )
 
         return (x, (expert_sel_attn, expert_sel_ffn), None)
-

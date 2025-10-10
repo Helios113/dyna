@@ -1,32 +1,23 @@
-import math
-import atexit
-from collections.abc import Callable
-from typing import Optional
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
 import torch
-import torch.nn.functional as F
-from torch.nn.attention import sdpa_kernel, SDPBackend
-from composer.models import HuggingFaceModel
-from torch.nn.modules.normalization import RMSNorm
-from llmfoundry.utils.builders import build_metric
-from transformers import PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig
-from transformers.modeling_outputs import (
-    CausalLMOutputWithPast,
-)
-from torch.nn import Module, ModuleList, Parameter
 from beartype import beartype
-import math
 
 # from composer.callbacks
 # Add jaxtyping imports
-from jaxtyping import Float, Int, Bool
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
-from ..attention.attention_module import AttentionModule
+from torch.nn import Module
+from torch.nn.modules.normalization import RMSNorm
 
-# Constants
-from abc import ABC, abstractmethod
-from dyna.config import DynaConfig
-from dyna.config.enums import NormStructure, RescaleMethod
-from dyna.modules.dyna_module import DynaModule
+from dyna.config import DynaConfig, NormStructure, RescaleMethod
+from dyna.modules import DynaModule
+
+if TYPE_CHECKING:
+    from dyna.attention.attention_module import AttentionModule
 
 
 @beartype
@@ -34,16 +25,17 @@ class LayerModule(Module, ABC):
     def __init__(
         self,
         config: DynaConfig,
-        attention_module: AttentionModule,
+        attention_module: "AttentionModule",
         ffn_module: DynaModule,
         input_projection: Module | None = None,
     ):
+        """Initialize LayerModule with configurable components."""
         super().__init__()
         self.attention = attention_module
         self.ffn = ffn_module
         self.input_projection = input_projection
         # Layer normalization - configurable type
-        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
+        # norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
 
         self.attn_pre = RMSNorm(config.d_model)
         self.attn_post = RMSNorm(config.d_model)
@@ -104,7 +96,9 @@ class LayerModule(Module, ABC):
         continue_mask: None | Int[Tensor, "size"],
         layer_index: int,
         norm_to_use: Module,
-        e: Optional[Float[Tensor, "batch seq d_model"]] = None,
+        e: Float[Tensor, "batch seq d_model"] | None = None,
+        cum_sum: Float[Tensor, "batch seq"] | None = None,
+        tau: Float[Tensor, "1"] | None = None,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
         if self.norm_structure.value == NormStructure.peri.value:
@@ -128,7 +122,7 @@ class LayerModule(Module, ABC):
             ):
                 if e is not None:
                     residual_stream = residual_stream - e
-                if self.enable_early_exit:
+                if self.enable_early_exit and cum_sum is not None and tau is not None:
                     scale_factor = (layer_index - 1) / layer_index
                     update_factor = (
                         cum_sum[continue_mask].unsqueeze(1) * tau / layer_index
