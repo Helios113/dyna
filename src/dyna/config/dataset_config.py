@@ -1,9 +1,5 @@
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Iterable
-import torch
-from torch.distributed.checkpoint.planner import LoadPlanner
-from torch.distributed.checkpoint.planner import SavePlanner
+
 
 @dataclass
 class DatasetConfig:
@@ -33,6 +29,7 @@ class DatasetConfig:
     stream_name: str = "stream"
     stream_config: dict | None = None
     max_seq_len: int | None = 1024
+
 
 @dataclass
 class DataConfig:

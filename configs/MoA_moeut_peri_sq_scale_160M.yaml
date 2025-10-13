@@ -64,7 +64,7 @@ data_config:
   num_workers: 24
   pin_memory: false
 
-  
+
 
 trainer_config:
   run_name: "rescale"

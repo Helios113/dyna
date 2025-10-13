@@ -6,7 +6,6 @@ We have although slightly modified the code to fit our needs:
  - linting errors
  - support to FSDP
  - additional optimized configurations for our models
-
 """
 
 # ruff: noqa: N803, N806, E731, ANN001
@@ -32,7 +31,6 @@ def is_cvmm_available() -> bool:
     -------
     bool
         True when CUDA is available.
-
     """
     return bool(torch.cuda.is_available())
 
@@ -52,7 +50,6 @@ def _safe_autotune(  # pyright: ignore[reportUnusedFunction]
     Callable[[T], T]
         A decorator that applies triton.autotune when available; otherwise
         returns the function unchanged.
-
     """
 
     def _decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -71,7 +68,6 @@ def _safe_jit(fn: Callable[..., Any]) -> Callable[..., Any]:  # pyright: ignore[
     -------
     Callable[..., Any]
         The jitted function when possible, else the original function.
-
     """
     try:
         return triton.jit(fn)  # type: ignore[no-any-return]
@@ -118,7 +114,6 @@ def cvmm_kernel(  # noqa: PLR0913, PLR0914, PLR0917, PLR0915
     """Kernel for computing the matmul C = A x B.
 
     A has shape (M, K), B has shape (K, N) and C has shape (M, N).
-
     """
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
@@ -517,7 +512,6 @@ def cvmm(
     -------
     torch.Tensor
         The output tensor.
-
     """
     if not isinstance(sel, CVMMSel):
         sel = cvmm_prepare_sel(sel)

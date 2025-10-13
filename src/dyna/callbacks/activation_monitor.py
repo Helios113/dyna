@@ -1,13 +1,14 @@
 import warnings
+from collections.abc import Sequence
 from functools import partial
-from typing import Any, Optional, Sequence, Union
+from typing import Any
 
 import torch
-
+from composer.callbacks.activation_monitor import compute_kurtosis
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 from composer.loggers.wandb_logger import WandBLogger
-from composer.callbacks.activation_monitor import compute_kurtosis
+
 
 class ActivationMonitor(Callback):
     """Logs stats of activation inputs and outputs.
@@ -83,8 +84,8 @@ class ActivationMonitor(Callback):
 
     def __init__(
         self,
-        interval: Union[int, str, Time] = '25ba',
-        ignore_module_types: Optional[list[str]] = None,
+        interval: int | str | Time = "25ba",
+        ignore_module_types: list[str] | None = None,
         only_log_wandb: bool = True,
     ):
         self.ignore_module_types = ignore_module_types
@@ -95,19 +96,21 @@ class ActivationMonitor(Callback):
         # Check that the interval timestring is parsable and convert into time object
         self.interval = Time.from_input(interval, TimeUnit.BATCH)
 
-        if self.interval.unit == TimeUnit.BATCH and self.interval < Time.from_timestring('10ba'):
+        if (
+            self.interval.unit == TimeUnit.BATCH
+            and self.interval < Time.from_timestring("10ba")
+        ):
             warnings.warn(
-                f'Currently the ActivationMonitor`s interval is set to {self.interval} '
-                f'which is below our recommended value of 10ba. We recommend you raise '
-                f'the interval to at least 10ba, as the activation monitor adds extra overhead '
-                f'and decreases throughput.',
+                f"Currently the ActivationMonitor`s interval is set to {self.interval} "
+                f"which is below our recommended value of 10ba. We recommend you raise "
+                f"the interval to at least 10ba, as the activation monitor adds extra overhead "
+                f"and decreases throughput.",
             )
 
         # Verify that the interval has supported units
         if self.interval.unit not in [TimeUnit.BATCH, TimeUnit.EPOCH]:
             raise ValueError(
-                f'Invalid time unit for parameter interval: '
-                f'{self.interval.unit}',
+                f"Invalid time unit for parameter interval: {self.interval.unit}",
             )
 
         self.last_train_time_value_logged = -1
@@ -116,7 +119,10 @@ class ActivationMonitor(Callback):
     def before_forward(self, state: State, logger: Logger):
         current_time_value = state.timestamp.get(self.interval.unit).value
 
-        if current_time_value % self.interval.value == 0 and current_time_value != self.last_train_time_value_logged:
+        if (
+            current_time_value % self.interval.value == 0
+            and current_time_value != self.last_train_time_value_logged
+        ):
             if not self.module_names:
                 self.create_module_names(state.model)
 
@@ -125,7 +131,10 @@ class ActivationMonitor(Callback):
     def after_forward(self, state: State, logger: Logger):
         current_time_value = state.timestamp.get(self.interval.unit).value
 
-        if current_time_value % self.interval.value == 0 and current_time_value != self.last_train_time_value_logged:
+        if (
+            current_time_value % self.interval.value == 0
+            and current_time_value != self.last_train_time_value_logged
+        ):
             self.last_train_time_value_logged = current_time_value
             self.remove_forward_hooks()
 
@@ -139,19 +148,25 @@ class ActivationMonitor(Callback):
         # Resetting handles we track
         self.handles = []
 
-    def register_forward_hook(self, model: torch.nn.Module, logger: Logger, step: Optional[int]):
+    def register_forward_hook(
+        self, model: torch.nn.Module, logger: Logger, step: int | None
+    ):
         model.apply(partial(self._register_forward_hook, logger, step))
 
-    def _register_forward_hook(self, logger: Logger, step: Optional[int], module: torch.nn.Module):
-        self.handles.append(module.register_forward_hook(partial(self.forward_hook, logger, step)))
+    def _register_forward_hook(
+        self, logger: Logger, step: int | None, module: torch.nn.Module
+    ):
+        self.handles.append(
+            module.register_forward_hook(partial(self.forward_hook, logger, step))
+        )
 
     def forward_hook(
         self,
         logger: Logger,
-        step: Optional[int],
+        step: int | None,
         module: torch.nn.Module,
-        input: Optional[Sequence],
-        output: Optional[Sequence],
+        input: Sequence | None,
+        output: Sequence | None,
     ):
         module_name = self.module_names[module]
 
@@ -166,21 +181,31 @@ class ActivationMonitor(Callback):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics(metrics, module_name, f'_input.{i}', output[val])  # type: ignore
+                    self.recursively_add_metrics(
+                        metrics, module_name, f"_input.{i}", output[val]
+                    )  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, f'_input.{i}', val)
+                    self.recursively_add_metrics(
+                        metrics, module_name, f"_input.{i}", val
+                    )
 
         if output is not None:
             for i, val in enumerate(output):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', output[val])  # type: ignore
+                    self.recursively_add_metrics(
+                        metrics, module_name, f"_output.{i}", output[val]
+                    )  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
+                    self.recursively_add_metrics(
+                        metrics, module_name, f"_output.{i}", val
+                    )
 
         if self.only_log_wandb:
-            wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
+            wandb_loggers = [
+                ld for ld in logger.destinations if isinstance(ld, WandBLogger)
+            ]
             if len(wandb_loggers):
                 for wandb_logger in wandb_loggers:
                     wandb_logger.log_metrics(metrics, step)
@@ -191,14 +216,16 @@ class ActivationMonitor(Callback):
         else:
             logger.log_metrics(metrics)
 
-    def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, values: Any):
+    def recursively_add_metrics(
+        self, metrics: dict, name: str, suffix: str, values: Any
+    ):
         # Becuase of the recursive diving, we need this call to prevent infinite recursion.
         if isinstance(values, str):
             return
         # Keep recursively diving if the value is a sequence
         if isinstance(values, Sequence):
             for i, value in enumerate(values):
-                self.recursively_add_metrics(metrics, f'{name}_{i}', suffix, value)
+                self.recursively_add_metrics(metrics, f"{name}_{i}", suffix, value)
             return
         else:
             self.add_metrics(metrics, name, suffix, values)
@@ -209,20 +236,25 @@ class ActivationMonitor(Callback):
             return
         if not isinstance(value, torch.Tensor):
             warnings.warn(
-                f'Value passed to ActivationMonitor is not a torch.Tensor, '
-                f'skipping.',
+                "Value passed to ActivationMonitor is not a torch.Tensor, skipping.",
             )
             return
         if value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
             # Keep operations on GPU and only extract scalar values at the end
-            metrics[f'activations/l2_norm/{name}{suffix}'] = torch.linalg.vector_norm(value, dim=-1).mean().item()
-            metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
-            metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
+            metrics[f"activations/l2_norm/{name}{suffix}"] = (
+                torch.linalg.vector_norm(value, dim=-1).mean().item()
+            )
+            metrics[f"activations/average/{name}{suffix}"] = value.mean().item()
+            metrics[f"activations/kurtosis/{name}{suffix}"] = compute_kurtosis(
+                value
+            ).item()
 
             # Because we call max with `dim=-1` we need to call .values to get the actual values
-            metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
+            metrics[f"activations/max/{name}{suffix}"] = (
+                value.max(dim=-1).values.mean().item()
+            )
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}

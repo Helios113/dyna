@@ -1,21 +1,16 @@
-import logging
-from typing import TYPE_CHECKING
-
+from composer.core import State, Time
 from composer.optim.scheduler import (
     ComposerScheduler,
-    _convert_time,
-    _raise_if_warmup_and_max_incompatible,
-    _raise_if_max_duration_exceeds_t_max,
     LinearScheduler,
-    CosineAnnealingScheduler,
-    _cosine_anneal,
+    _convert_time,
+    _raise_if_max_duration_exceeds_t_max,
+    _raise_if_warmup_and_max_incompatible,
 )
-from composer.core import State, Time
 
 
 def _lin_cooldown(t: Time, t_max: Time, alpha_i=1.0, alpha_f=0.0):
-    """
-    Linear cooldown function that drives the factor from alpha_i to alpha_f (zero by default).
+    """Linear cooldown function that drives the factor from alpha_i to alpha_f (zero by
+    default).
 
     Args:
         t: Current time elapsed in the cooldown phase
@@ -54,9 +49,9 @@ class WarmupStableLinearDecay(ComposerScheduler):
         )
 
     def __call__(self, state: State, ssr: float = 1.0):
-        assert state.max_duration is not None, (
-            "max_duration should be set whenever schedulers are invoked"
-        )
+        assert (
+            state.max_duration is not None
+        ), "max_duration should be set whenever schedulers are invoked"
         t_warmup = _convert_time(self.t_warmup, state)
         t_cooldown = _convert_time(self.t_cooldown, state)
         t_max = _convert_time(self.t_max, state, ssr=ssr)

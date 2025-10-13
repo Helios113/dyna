@@ -1,7 +1,9 @@
+from transformers.modeling_utils import PreTrainedModel
+
+from dyna.config import DynaConfig
 from dyna.modules import LayerModule
 
-from transformers.modeling_utils import PreTrainedModel
-from dyna.config import DynaConfig
+
 class DynaPretrainedModel(PreTrainedModel):
     """Base class for Dyna pretrained models."""
 

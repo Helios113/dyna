@@ -19,7 +19,7 @@ model_config:
   norm_structure: "peri"
   rescaling_method: "cum_avg_prot_emb"
 
-  
+
 train:
   max_duration: "746ba"
   warmup: "150ba"
@@ -64,7 +64,7 @@ data_config:
   num_workers: 24
   pin_memory: false
 
-  
+
 
 trainer_config:
   run_name: "fp16"

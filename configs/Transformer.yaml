@@ -32,7 +32,7 @@ model_config:
 #     cum_avg_no_prot_emb = 2
 #     sqrt_prot_emb = 3
 #     sqrt_no_prot_emb = 4
-    
+
 train:
   max_duration: "20ba"
   warmup: "150ba"
@@ -75,7 +75,7 @@ data_config:
   num_workers: 8
   pin_memory: true
 
-  
+
 
 trainer_config:
   run_name: "fp16"

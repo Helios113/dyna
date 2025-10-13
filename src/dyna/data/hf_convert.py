@@ -145,9 +145,7 @@ def convert_dataset_hf_from_args(
     """A wrapper for convert_dataset_hf that parses arguments."""
     os.environ["WORLD_SIZE"] = "1"
 
-    parsed_tokenizer_kwargs = (
-        json.loads(tokenizer_kwargs) if tokenizer_kwargs else {}
-    )
+    parsed_tokenizer_kwargs = json.loads(tokenizer_kwargs) if tokenizer_kwargs else {}
 
     if (
         os.path.isdir(out_root)

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from dyna.modules import AttentionModule
 from dyna.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
+from dyna.modules import AttentionModule
 
 
 class SwitchHead(AttentionModule):
@@ -33,10 +32,10 @@ class SwitchHead(AttentionModule):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
-        
+
         def identity_pytorch(x: torch.Tensor) -> torch.Tensor:
             return x
-            
+
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else identity_pytorch
 
         # Expert configuration
@@ -150,7 +149,7 @@ class SwitchHead(AttentionModule):
         self,
         input_tensor: Float[Tensor, "batch seq d_model"],
         weight: Float[Tensor, "n_heads_x_experts d_model"],
-        bias: Float[Tensor, "n_experts_attn"] | None = None,
+        bias: Float[Tensor, " n_experts_attn"] | None = None,
     ) -> tuple[
         CVMMSel,
         Float[Tensor, "batch seq n_heads n_experts_attn"],
@@ -275,7 +274,6 @@ class SwitchHead(AttentionModule):
 
             # Apply dropout and attention
             q = self.dropout(q)
-            # attention_mask = self._trim_attention_mask(v.shape[-2], mask, continue_mask)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
                 v, k, q, mask[0], mask[1]
@@ -300,7 +298,6 @@ class SwitchHead(AttentionModule):
 
             # Apply dropout and attention
             q = self.dropout(q)
-            # attention_mask = self._trim_attention_mask(v.shape[-2], mask, continue_mask)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
                 v, k, q, mask[0], mask[1]

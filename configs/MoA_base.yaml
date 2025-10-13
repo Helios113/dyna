@@ -30,7 +30,7 @@ model_config:
 #     cum_avg_no_prot_emb = 2
 #     sqrt_prot_emb = 3
 #     sqrt_no_prot_emb = 4
-    
+
 train:
   max_duration: "746ba"
   warmup: "150ba"

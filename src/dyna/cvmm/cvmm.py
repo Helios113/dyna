@@ -172,6 +172,7 @@ def cvmm_kernel(
     GROUP_SIZE_M: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
+
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
     # -----------------------------------------------------------
@@ -474,6 +475,7 @@ def cvmm_backward_kernel3(
     K_BLOCKS: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
+
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
     # -----------------------------------------------------------
@@ -619,6 +621,7 @@ if version.parse(torch.__version__) >= version.parse("2.2.0"):
     )
     lib_decorator = torch.library.impl("mylib::cvmm_triton", "default")
 else:
+
     def lib_decorator(x):
         return x
 
@@ -703,7 +706,7 @@ if version.parse(torch.__version__) >= version.parse("2.2.0"):
 else:
     cvmm_triton_call = cvmm_triton
 
-# torch.library.define("mylib::cvmm_triton_backward", 
+# torch.library.define("mylib::cvmm_triton_backward",
 #     "(Tensor x, Tensor sel_index, Tensor sel, Tensor grads, int n_experts, "
 #     "ScalarType key_dtype, bool op_float16, Tensor out_index) -> Tensor")
 
@@ -726,11 +729,13 @@ def cvmm_triton_backward(
     M, _ = x.shape
     K, N = grads.shape
     out = torch.zeros((n_experts, M, N), device=x.device, dtype=key_dtype)
+
     def grid(META):
         return (
             triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
             triton.cdiv(K, META["BLOCK_SIZE_K"] * META["K_BLOCKS"]),
         )
+
     out_index_is_none = False
     if out_index.numel() == 1 and out_index == -1:
         out_index_is_none = True

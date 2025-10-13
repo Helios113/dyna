@@ -35,7 +35,7 @@ model_config:
 #     cum_avg_no_prot_emb = 2
 #     sqrt_prot_emb = 3
 #     sqrt_no_prot_emb = 4
-    
+
 train:
   max_duration: "3171ba"
   warmup: "634ba"
@@ -52,4 +52,3 @@ trainer_config:
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "100ba"
-

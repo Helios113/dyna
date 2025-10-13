@@ -1,16 +1,16 @@
 import logging
 from typing import TYPE_CHECKING
 
+from composer.core import State, Time
 from composer.optim.scheduler import (
     ComposerScheduler,
-    _convert_time,
-    _raise_if_warmup_and_max_incompatible,
-    _raise_if_max_duration_exceeds_t_max,
-    LinearScheduler,
     CosineAnnealingScheduler,
+    LinearScheduler,
+    _convert_time,
     _cosine_anneal,
+    _raise_if_max_duration_exceeds_t_max,
+    _raise_if_warmup_and_max_incompatible,
 )
-from composer.core import State, Time
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -82,4 +82,3 @@ class ConstantWithLinWarmupAndCosCooldown(ComposerScheduler):
             )
         else:
             return self.alpha_f
-

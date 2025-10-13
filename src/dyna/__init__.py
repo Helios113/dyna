@@ -13,8 +13,6 @@ __author__ = "Preslav Aleksandorv"
 
 from jaxtyping import install_import_hook
 
-install_import_hook("dyna", "beartype.beartype")
-
 from dyna import (
     attention,
     callbacks,
@@ -28,7 +26,7 @@ from dyna import (
     utils,
 )
 
-# Apply jaxtyping to all modules in this package
+install_import_hook("dyna", "beartype.beartype")
 
 
 __all__ = [

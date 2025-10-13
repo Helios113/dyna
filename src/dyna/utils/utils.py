@@ -129,7 +129,8 @@ def get_callbacks(cfg: DictConfig) -> list[Callback]:
 
 
 def load_and_concat_yamls(directory):
-    """Reads all YAML files in a directory, loads them, and merges them into a single dict.
+    """Reads all YAML files in a directory, loads them, and merges them into a single
+    dict.
 
     Returns an OmegaConf DictConfig.
     """
@@ -169,7 +170,8 @@ def get_scheduler(cfg: DictConfig) -> ComposerScheduler:
 
 
 def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
-    """Traverse every key in the config (recursively, regardless of path) and add its value to a flat dictionary.
+    """Traverse every key in the config (recursively, regardless of path) and add its
+    value to a flat dictionary.
 
     If a key is seen again, check if the value matches all previous values; if not, raise ValueError.
     Allows duplicate keys for those listed in `exceptions` (full path or key).
@@ -209,7 +211,8 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
 
 
 def build_full_concrete_config(cfg):
-    """Constructs and merges all configs (model, trainer, data) and returns a single config dict."""
+    """Constructs and merges all configs (model, trainer, data) and returns a single
+    config dict."""
     OmegaConf.resolve(cfg)
     # Model Config
     model_schema = OmegaConf.structured(ModelConfig)
@@ -259,7 +262,7 @@ def build_full_concrete_config(cfg):
 
 
 def visualize_attention_mask(mask, max_display=2048, index=0):
-    """Helper function to visualize the attention mask"""
+    """Helper function to visualize the attention mask."""
     import matplotlib.pyplot as plt
 
     # Only show first max_display tokens for readability
@@ -281,7 +284,7 @@ def visualize_attention_mask(mask, max_display=2048, index=0):
 
 
 def visualize_position_mask(mask, index=0):
-    """Helper function to visualize the attention mask"""
+    """Helper function to visualize the attention mask."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 10))

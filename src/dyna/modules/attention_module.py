@@ -7,7 +7,6 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from . import DynaModule
-from typing import final
 
 
 def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:

@@ -10,8 +10,11 @@ from composer.loggers import Logger
 
 
 class ExpertSelectionCallback(Callback):
-    """Callback to visualize expert selection patterns for both attention and FFN layers.
-    Creates heatmaps showing which experts are selected across different layers and time steps.
+    """Callback to visualize expert selection patterns for both attention and FFN
+    layers.
+
+    Creates heatmaps showing which experts are selected across different layers and time
+    steps.
     """
 
     def __init__(
@@ -123,7 +126,8 @@ class ExpertSelectionCallback(Callback):
         self,
         selection_data: torch.Tensor,
     ) -> plt.Figure:
-        """Create a heatmap showing expert selection patterns and a heatmap for mean expert selection."""
+        """Create a heatmap showing expert selection patterns and a heatmap for mean
+        expert selection."""
         # Keep computation on GPU until final conversion
         heatmap_data_gpu = selection_data.clone()
         mean_probs_gpu = selection_data.mean(dim=0)

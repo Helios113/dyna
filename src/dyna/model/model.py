@@ -4,6 +4,7 @@ from composer.models.huggingface import HuggingFaceModel
 # from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Bool, Float, Int
+from llmfoundry.utils.builders import build_metric
 from torch import Tensor
 from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
@@ -11,18 +12,18 @@ from transformers import PreTrainedTokenizerBase
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from llmfoundry.utils.builders import build_metric
+
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
     DEFAULT_CAUSAL_LM_TRAIN_METRICS,
     PROT_EMB_RESCALING_METHODS,
+    DynaConfig,
 )
+from dyna.model.base import DynaPretrainedModel
 
 # Import directly from specific modules to avoid circular imports
 from dyna.model.transformer import DynaFormer
-from dyna.model.base import DynaPretrainedModel
 from dyna.modules import LayerModule
-from dyna.config import DynaConfig
 
 
 class DynaLM(DynaPretrainedModel):

@@ -45,9 +45,7 @@ def build_hf_dataset(
                 tok_error_msg += (
                     "Concatenating with this tokenizer will result in sequences being "
                 )
-                tok_error_msg += (
-                    "attached without a separating token. Please use another tokenizer, "
-                )
+                tok_error_msg += "attached without a separating token. Please use another tokenizer, "
                 tok_error_msg += (
                     "such as facebook/opt-125m, or specify EOS/BOS text with e.g. "
                 )
@@ -71,7 +69,10 @@ def build_dataloader(
 ) -> DataLoader:
     if num_workers is None:
         # Multiple workers is only supported on linux machines
-        if "linux" in platform.platform().lower() or "macos" in platform.platform().lower():
+        if (
+            "linux" in platform.platform().lower()
+            or "macos" in platform.platform().lower()
+        ):
             num_workers = max(1, psutil.cpu_count())
         else:
             num_workers = 0

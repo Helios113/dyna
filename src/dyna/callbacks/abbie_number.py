@@ -10,6 +10,13 @@ class AbbieNumberCallback(Callback):
         number: int = 6,
         log_key: str = "abbie_number",
     ):
+        """Initialize the AbbieNumberCallback.
+
+        Args:
+            log_interval (str | int): The interval at which to log the abbie number.
+            number (int): The maximum number to generate.
+            log_key (str): The key to use when logging the abbie number.
+        """
         self.log_interval = (
             Time.from_timestring(log_interval)
             if isinstance(log_interval, str)

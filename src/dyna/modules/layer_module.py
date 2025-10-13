@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
 import torch
 from beartype import beartype
@@ -14,9 +13,9 @@ from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
 
 from dyna.config import DynaConfig, NormStructure, RescaleMethod
-from .dyna_module import DynaModule
 
 from .attention_module import AttentionModule
+from .dyna_module import DynaModule
 
 
 @beartype
@@ -92,7 +91,7 @@ class LayerModule(Module, ABC):
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
         update_on_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Int[Tensor, "size"],
+        continue_mask: None | Int[Tensor, size],
         layer_index: int,
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,

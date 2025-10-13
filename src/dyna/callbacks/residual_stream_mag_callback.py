@@ -12,8 +12,8 @@ from composer.loggers import Logger
 class ResidualMagnitudeCallback(Callback):
     """Callback to compute and log Shannon entropy of language model predictions.
 
-    Computes H(p) = -sum(p(x_i) * log(p(x_i))) for each position in the sequence,
-    then averages across the batch and logs to wandb. Also tracks per-layer entropy.
+    Computes H(p) = -sum(p(x_i) * log(p(x_i))) for each position in the sequence, then
+    averages across the batch and logs to wandb. Also tracks per-layer entropy.
     """
 
     def __init__(

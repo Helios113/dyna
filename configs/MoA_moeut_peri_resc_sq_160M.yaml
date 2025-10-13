@@ -31,7 +31,7 @@ model_config:
 #     cum_avg_no_prot_emb = 2
 #     sqrt_prot_emb = 3
 #     sqrt_no_prot_emb = 4
-    
+
 train:
   max_duration: "3171ba"
   warmup: "634ba"
@@ -74,7 +74,7 @@ data_config:
   num_workers: 24
   pin_memory: false
 
-  
+
 trainer_config:
   run_name: "dyna"
   max_duration: ${train.max_duration}

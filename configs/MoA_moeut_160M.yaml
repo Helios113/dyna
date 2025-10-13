@@ -43,5 +43,3 @@ trainer_config:
   device: "gpu"
   save_folder: "s3://loop-llm/dyna/"
   save_interval: "1000ba"
-
-

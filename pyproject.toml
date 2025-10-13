@@ -28,6 +28,7 @@ dependencies = [
     "pyrefly>=0.34.0",
     "ruff>=0.7.0",
     "pre-commit>=4.3.0",
+    "docformatter>=1.7.7",
 ]
 
 [build-system]
@@ -45,18 +46,12 @@ where = ["src"]
 [tool.uv]
 # no-build-isolation-package = ["flash-attn"]  # Commented out since flash-attn is disabled
 
-[tool.pyrefly]
-project-includes = ["**/*"]
-project-excludes = [
-    "**/node_modules",
-    "**/__pycache__",
-    "**/*venv/**/*",
-]
 
 [tool.ruff]
 line-length = 88
 target-version = "py312"
 src = ["src"]
+
 
 [tool.ruff.lint]
 select = [
@@ -81,7 +76,10 @@ ignore = [
     "D103", # Missing docstring in public function
     "D104", # Missing docstring in public package
     "D105", # Missing docstring in magic method
+    "F722", # Forward references which in fact are jaxtyping annotations
 ]
+
+fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
@@ -99,12 +97,4 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
-
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-ignore_missing_imports = true
-strict = true
-show_error_codes = true
+docstring-code-format = true

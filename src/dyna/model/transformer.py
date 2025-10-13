@@ -1,24 +1,22 @@
 import math
+from collections.abc import Iterator
+from typing import Generic, TypeVar, overload
 
 import torch
 from jaxtyping import Bool, Float, Int
-from torch import Tensor
+from torch import Tensor, nn
 from torch.nn import ModuleList, Parameter
 from torch.nn.modules.normalization import RMSNorm
 
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
-    LATENT_RECURSION_METHODS,
     GEIPING_METHODS,
+    LATENT_RECURSION_METHODS,
 )
 from dyna.config.enums import ExecutionMode
 from dyna.layers import MoEUTLayer, SimpleLayer
-from dyna.model.base import DynaPretrainedModel, DynaConfig
-from dyna.modules import DynaModule, AttentionModule, LayerModule
-from collections.abc import Iterator
-from typing import Generic, TypeVar, overload
-
-from torch import nn
+from dyna.model.base import DynaConfig, DynaPretrainedModel
+from dyna.modules import AttentionModule, DynaModule, LayerModule
 
 T = TypeVar("T", bound=nn.Module)
 
@@ -71,9 +69,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                 self.layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
-            case (
-                ExecutionMode.geiping_std.value
-            ):  # Geiping et al getting rid of the head and tail lists
+            case ExecutionMode.geiping_std.value:  # Geiping et al getting rid of the head and tail lists
                 self.head = ModuleList(
                     [SimpleLayer(config) for _ in range(self.perfiery_size)]
                 )
