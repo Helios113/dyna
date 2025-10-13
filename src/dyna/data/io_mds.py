@@ -12,7 +12,7 @@ def generate_samples(
     """Generator over samples of a dataloader.
 
     Args:
-       loader (DataLoader): A dataloader emitting batches like {key: [sample0_bytes, sample1_bytes, sample2_bytes, ...]}
+       loader (DataLoader): A dataloader emitting batches
        truncate_num_samples (Optional[int]): An optional # of samples to stop at.
 
     Yields:

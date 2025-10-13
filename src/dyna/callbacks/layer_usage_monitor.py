@@ -1,4 +1,5 @@
 from io import BytesIO
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,7 +8,10 @@ import torch
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+from matplotlib.figure import Figure
 from matplotlib.ticker import ScalarFormatter
+
+from dyna.model import DynaLM
 
 
 class LayerUsageMonitor(Callback):
@@ -57,12 +61,13 @@ class LayerUsageMonitor(Callback):
 
     def batch_end(self, state: State, logger: Logger) -> None:
         """Log layer usage information at the end of each batch."""
+        model = cast(DynaLM, state.model.model)
         if not state.model.training or not self._should_log(state):
             # Always clear to avoid memory leak, even if not logging
-            state.model.model.transformer._seq_len = []
+            model.transformer._seq_len = []
             return
 
-        transformer = state.model.model.transformer
+        transformer = model.transformer
         seq_len = transformer._seq_len
         _tau = 0
         # _tau = transformer.tau.item()
@@ -77,9 +82,9 @@ class LayerUsageMonitor(Callback):
             for i, sample in enumerate(elem):
                 # Ensure sample stays on GPU as tensor
                 if not isinstance(sample, torch.Tensor):
-                    sample = torch.tensor(sample, device=state.model.device)
+                    sample = torch.tensor(sample, device=str(state.model.device))
                 elif sample.device != state.model.device:
-                    sample = sample.to(state.model.device)
+                    sample = sample.to(str(state.model.device))
 
                 if i == len(seq_lens):
                     seq_lens.append(sample.clone())
@@ -106,7 +111,7 @@ class LayerUsageMonitor(Callback):
         # Always clear after use to avoid memory leak
         transformer._seq_len = []
 
-    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+    def _fig_to_wandb_image(self, fig: Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -120,7 +125,7 @@ class LayerUsageMonitor(Callback):
         plt.close(fig)
         return img
 
-    def _create_entropy_plot(self, data: list[torch.Tensor]) -> plt.Figure:
+    def _create_entropy_plot(self, data: list[torch.Tensor]) -> Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
         # Only move to CPU when necessary for plotting, keep computation on GPU
         if not data:

@@ -1,3 +1,5 @@
+from typing import cast
+
 import torch
 from composer.models.huggingface import HuggingFaceModel
 
@@ -8,10 +10,10 @@ from llmfoundry.utils.builders import build_metric
 from torch import Tensor
 from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
-from transformers import PreTrainedTokenizerBase
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
@@ -30,6 +32,13 @@ class DynaLM(DynaPretrainedModel):
     """MoEUT Language Model with embedding and output layers."""
 
     def __init__(self, config: DynaConfig, eos_token_id: int):
+        """Initialize DynaLM model.
+
+        Args:
+            config (DynaConfig): Configuration object.
+            eos_token_id (int): End-of-sentence token ID.
+        """
+        # write docstring 88chars
         super().__init__(config)
 
         # Core transformer
@@ -44,8 +53,7 @@ class DynaLM(DynaPretrainedModel):
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
 
-        self.lm_head._fsdp_wrap = True
-
+        self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
         # Output normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
@@ -55,6 +63,7 @@ class DynaLM(DynaPretrainedModel):
         # Initialize parameters
         self.sample_iterations = config.sample_iterations
         # Provide LM head to transformer for entropy computation
+
         self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
 
     @torch.no_grad
@@ -114,11 +123,8 @@ class DynaLM(DynaPretrainedModel):
         batch_size, _, seq_len, _ = attention_mask.shape
         device = attention_mask.device
 
-        # Create a range tensor for positions [0, 1, 2, ..., seq_len-1]
         pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
 
-        # Create upper triangular mask including diagonal: [[True], [True, True], [True, True, True], ...]
-        # This represents which positions each token can attend to
         causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)  # [seq, seq]
 
         # Expand to batch dimension
@@ -131,8 +137,6 @@ class DynaLM(DynaPretrainedModel):
             attention_mask.squeeze(1) & causal_indices
         )  # [batch, seq, seq]
 
-        # Sum along the last dimension to get count of valid positions each token can attend to
-        # Subtract 1 to make it 0-indexed
         position_mask = valid_positions.sum(dim=-1) - 1
         return position_mask
 
@@ -220,14 +224,19 @@ class DynaLM(DynaPretrainedModel):
 class ComposerDynaModel(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
 
+    model: DynaLM
+
     def __init__(
         self,
         config: DynaConfig,
-        tokenizer: PreTrainedTokenizerBase,
+        tokenizer: PreTrainedTokenizer,
     ):
-        # Setup distributed cleanup
+        """Initialize the ComposerDynaModel.
 
-        model = DynaLM(config, tokenizer.eos_token_id)
+        Args:
+            config (DynaConfig): Configuration for the model.
+            tokenizer (PreTrainedTokenizerBase): Tokenizer for the model.
+        """
         # Configuration
         self.vocab_size = config.vocab_size
         self.shift_labels = config.shift_labels
@@ -238,11 +247,11 @@ class ComposerDynaModel(HuggingFaceModel):
         ]
 
         super().__init__(
-            model=model,
+            model=DynaLM(config, cast(int, tokenizer.eos_token_id)),
             tokenizer=tokenizer,
             use_logits=True,
             metrics=train_metrics,
-            eval_metrics={},
+            eval_metrics=None,
             shift_labels=config.shift_labels,
             allow_embedding_resizing=True,
         )
@@ -259,17 +268,11 @@ class ComposerDynaModel(HuggingFaceModel):
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
         labels = batch["labels"]
-        logits = outputs.logits
+        logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
         _labels = torch.roll(labels, shifts=-1)
         _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
         loss = torch.nn.functional.cross_entropy(
             logits.view(-1, logits.size(-1)),
             _labels.to(logits.device).view(-1),
         )
-        # loss = compute_loss_from_logits(
-        #     outputs,
-        #     True,
-        #     batch["labels"],
-        #     self.loss_fn,
-        # )
         return loss

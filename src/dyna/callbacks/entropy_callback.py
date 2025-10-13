@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,6 +7,9 @@ import torch
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+from matplotlib.figure import Figure
+
+from dyna.model import DynaLM
 
 
 class ShannonEntropyCallback(Callback):
@@ -89,7 +92,8 @@ class ShannonEntropyCallback(Callback):
 
         metrics_dict = {}
         step = str(state.timestamp.batch)
-        batch_latentes = state.model.model.transformer._latent_vectors
+        model: DynaLM = cast(DynaLM, state.model.model)
+        batch_latentes = model.transformer._latent_vectors
         batch_entropy = []
 
         # Keep everything on GPU
@@ -119,7 +123,7 @@ class ShannonEntropyCallback(Callback):
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
-        state.model.model.transformer._latent_vectors = []
+        model.transformer._latent_vectors = []
 
     def state_dict(self) -> dict[str, Any]:
         """Return callback state for checkpointing."""
@@ -133,7 +137,7 @@ class ShannonEntropyCallback(Callback):
         self.last_batch_logged = state_dict.get("last_batch_logged", -1)
         self.log_key = state_dict.get("log_key", self.log_key)
 
-    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+    def _fig_to_wandb_image(self, fig: Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -147,7 +151,7 @@ class ShannonEntropyCallback(Callback):
         plt.close(fig)
         return img
 
-    def _create_entropy_plot(self, data: list[torch.Tensor], step) -> plt.Figure:
+    def _create_entropy_plot(self, data: list[torch.Tensor], step) -> Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
         if not data:
             # Create empty plot if no data

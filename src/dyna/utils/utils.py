@@ -13,7 +13,7 @@ from composer.core import Callback
 from composer.optim.scheduler import ComposerScheduler
 from llmfoundry.utils.builders import build_callback, build_dataloader, build_scheduler
 from omegaconf import DictConfig, OmegaConf
-from transformers import PreTrainedTokenizerBase
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from dyna.config import (
     DataConfig,
@@ -156,7 +156,7 @@ def get_data_loader(
 ) -> DataSpec:
     os.environ["S3_ENDPOINT_URL"] = "http://128.232.115.19:9000"
     train_loader = build_dataloader(
-        OmegaConf.to_container(cfg),
+        cast(dict[str, object], OmegaConf.to_container(cfg)),
         tokenizer,
         device_train_batch_size,
     )
@@ -166,15 +166,21 @@ def get_data_loader(
 def get_scheduler(cfg: DictConfig) -> ComposerScheduler:
     scheduler_name = cfg.name
     del cfg.name
-    scheduler = build_scheduler(name=scheduler_name, scheduler_config=cfg)
+    scheduler = build_scheduler(
+        name=scheduler_name,
+        scheduler_config=cast(dict[str, object], OmegaConf.to_container(cfg)),
+    )
     return scheduler
 
 
 def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
-    """Traverse every key in the config (recursively, regardless of path) and add its
+    """Traverse every key in the config.
+
+    (recursively, regardless of path) and add its
     value to a flat dictionary.
 
-    If a key is seen again, check if the value matches all previous values; if not, raise ValueError.
+    If a key is seen again, check if the value matches all previous values; if not,
+    raise ValueError.
     Allows duplicate keys for those listed in `exceptions` (full path or key).
     Prints the full path of the key and the previous path when a conflict is found.
     """
@@ -183,7 +189,7 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
     if exceptions is None:
         exceptions = ["remote", "local", "dataset.split", "proportion"]
     if isinstance(cfg, dict) or hasattr(cfg, "keys"):
-        for k in cfg.keys():
+        for k in cfg:
             v = cfg[k]
             full_path = f"{path}.{k}" if path else k
             excepted = (k in exceptions) or (full_path in exceptions)
@@ -193,7 +199,8 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
                     if prev_val != v:
                         print(f"Conflict at: {full_path} and {prev_path}")
                         raise ValueError(
-                            f"Duplicate key '{k}' with different values: {prev_val} (at {prev_path}) vs {v} (at {full_path})"
+                            f"""Duplicate key '{k}' with different values: {prev_val}
+                            (at {prev_path}) vs {v} (at {full_path})"""
                         )
                 else:
                     value_map[k] = (v, full_path)
@@ -229,7 +236,9 @@ def build_full_concrete_config(cfg: DictConfig):
     data_schema = OmegaConf.structured(DataConfig)
     data_config = OmegaConf.merge(data_schema, cfg.data_config)
     streams_configs = load_and_concat_yamls(data_config.path)
-    del data_config.path
+
+    del data_config.path  # pyright: ignore[reportAttributeAccessIssue]
+
     data_config.dataset.streams = streams_configs
 
     scheduler_schema = OmegaConf.structured(SchedulerConfig)

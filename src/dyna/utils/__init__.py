@@ -6,8 +6,6 @@ from dyna.utils.utils import (
     get_data_loader,
     get_scheduler,
     make_wandb_run_name,
-    visualize_attention_mask,
-    visualize_position_mask,
 )
 
 __all__ = [
@@ -18,6 +16,4 @@ __all__ = [
     "get_scheduler",
     "check_duplicate_keys",
     "build_full_concrete_config",
-    "visualize_attention_mask",
-    "visualize_position_mask",
 ]

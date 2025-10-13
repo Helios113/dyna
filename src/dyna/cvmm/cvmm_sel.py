@@ -9,8 +9,8 @@ import torch
 class CVMMSel:
     raw_sel: torch.Tensor
     sel: torch.Tensor
-    sel_index: torch.Tensor
-    out_index: torch.Tensor
+    sel_index: torch.Tensor | None
+    out_index: torch.Tensor | None
     reduction_weight: torch.Tensor | None = None
 
     def clone(self) -> CVMMSel:

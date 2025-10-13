@@ -78,8 +78,3 @@ class TrainerConfig:
 
     # compile config for PyTorch 2.0 or higher
     compile_config: dict | None = None
-    # Python logging
-    python_log_level: str | None = None
-
-    # compile config for PyTorch 2.0 or higher
-    compile_config: dict | None = None

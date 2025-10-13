@@ -11,6 +11,7 @@ from composer.utils import reproducibility
 from omegaconf import DictConfig, OmegaConf
 from streaming.base.util import clean_stale_shared_memory
 from transformers import AutoTokenizer
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
@@ -57,7 +58,9 @@ def main(cfg: DictConfig):
         init_kwargs={"config": OmegaConf.to_container(cfg, resolve=True), "id": unique},
     )
 
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
+    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(
+        "HuggingFaceTB/SmolLM2-1.7B"
+    )
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     # Instead of passing the DictConfig directly, unpack it as kwargs

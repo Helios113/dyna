@@ -1,4 +1,3 @@
-import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 
@@ -42,7 +41,7 @@ class AbbieNumberCallback(Callback):
         if not self._should_log(state):
             return
 
-        number = torch.randint(1, self.number + 1, (1,)).item()
-        print(f"Setting new abbie number: {number}", flush=True)
-        state.model.model.transformer.repeats = number
-        logger.log_metrics({self.log_key: number})
+        # number = torch.randint(1, self.number + 1, (1,)).item()
+        # print(f"Setting new abbie number: {number}", flush=True)
+        # state.model.model.transformer.repeats = number
+        # logger.log_metrics({self.log_key: number})

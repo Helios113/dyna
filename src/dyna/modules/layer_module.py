@@ -119,7 +119,11 @@ class LayerModule(Module, ABC):
             ):
                 if e is not None:
                     residual_stream = residual_stream - e
-                if self.enable_early_exit and cum_sum is not None:
+                if (
+                    self.enable_early_exit
+                    and cum_sum is not None
+                    and continue_mask is not None
+                ):
                     scale_factor = (layer_index - 1) / layer_index
                     update_factor = cum_sum[continue_mask].unsqueeze(1) / layer_index
 

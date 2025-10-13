@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,6 +7,9 @@ import torch
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+from matplotlib.figure import Figure
+
+from dyna.model import DynaLM
 
 
 class ExpertSelectionCallback(Callback):
@@ -123,7 +126,7 @@ class ExpertSelectionCallback(Callback):
     def _create_expert_heatmap(
         self,
         selection_data: torch.Tensor,
-    ) -> plt.Figure:
+    ) -> tuple[Figure, torch.Tensor]:
         """Create expert heatmap.
 
         Create a heatmap showing expert selection patterns and a heatmap for mean
@@ -168,8 +171,8 @@ class ExpertSelectionCallback(Callback):
             cbar=True,
             vmin=common_vmin,
             vmax=common_vmax,
-            xticklabels=[f"Expert {i}" for i in range(heatmap_data.shape[1])],
-            yticklabels=[f"Layer {i}" for i in range(heatmap_data.shape[0])],
+            xticklabels=[f"Expert {i}" for i in range(heatmap_data.shape[1])],  # pyright: ignore[reportArgumentType]
+            yticklabels=[f"Layer {i}" for i in range(heatmap_data.shape[0])],  # pyright: ignore[reportArgumentType]
             fmt=".3f",
         )
         ax1.set_title("Expert Selection by Layer")
@@ -189,7 +192,7 @@ class ExpertSelectionCallback(Callback):
         return fig, load_balance
 
     # Plot the expert selections
-    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+    def _fig_to_wandb_image(self, fig: Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -288,7 +291,8 @@ class ExpertSelectionCallback(Callback):
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
-        state.model.model.transformer._expert_sel = []
+        model: DynaLM = cast(DynaLM, state.model.model)
+        model.transformer._expert_sel = []
 
     def state_dict(self) -> dict[str, Any]:
         """Return callback state for checkpointing."""

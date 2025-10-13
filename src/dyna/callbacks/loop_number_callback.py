@@ -1,7 +1,10 @@
 import math
+from typing import cast
 
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+
+from dyna.model import DynaLM
 
 
 class LoopNumberCallback(Callback):
@@ -31,7 +34,7 @@ class LoopNumberCallback(Callback):
             lower_bound (int): Lower bound for loop number. Default: 2
             warm_up (float): Warm-up duration as a fraction of total training duration.
             Default: 0.2
-            cool_down (float): Cool-down duration as a fraction of total training duration.
+            cool_down (float): CD duration as a fraction of total training duration.
             Default: 0.2
             log_key (str): Key for logging. Default: "loop_number"
         """
@@ -75,10 +78,9 @@ class LoopNumberCallback(Callback):
             + self.upper_bound
             - g * float(state.timestamp.batch)
         )
-        state.model.model.transformer.min_loop_layers = math.floor(
+        model: DynaLM = cast(DynaLM, state.model.model)
+        model.transformer.min_loop_layers = math.floor(
             max(self.lower_bound, min(self.upper_bound, slope))
         )
-        metrics_dict["metrics/" + self.log_key] = (
-            state.model.model.transformer.min_loop_layers
-        )
+        metrics_dict["metrics/" + self.log_key] = model.transformer.min_loop_layers
         logger.log_metrics(metrics_dict)

@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,6 +7,9 @@ import torch
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+from matplotlib.figure import Figure
+
+from dyna.model import DynaLM
 
 
 class ResidualMagnitudeCallback(Callback):
@@ -59,7 +62,8 @@ class ResidualMagnitudeCallback(Callback):
 
         metrics_dict = {}
         step = str(state.timestamp.batch)
-        tmp = state.model.model.transformer._residual_magnitudes
+        model: DynaLM = cast(DynaLM, state.model.model)
+        tmp = model.transformer._residual_magnitudes
         residual_magnitudes = []
         for elem in tmp:
             for i, sample in enumerate(elem):
@@ -79,7 +83,7 @@ class ResidualMagnitudeCallback(Callback):
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
-        state.model.model.transformer._residual_magnitudes = []
+        model.transformer._residual_magnitudes = []
 
     def state_dict(self) -> dict[str, Any]:
         """Return callback state for checkpointing."""
@@ -92,7 +96,7 @@ class ResidualMagnitudeCallback(Callback):
         """Load callback state from checkpoint."""
         self.last_batch_logged = state_dict.get("last_batch_logged", -1)
 
-    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+    def _fig_to_wandb_image(self, fig: Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -106,7 +110,7 @@ class ResidualMagnitudeCallback(Callback):
         plt.close(fig)
         return img
 
-    def _create_magnitude_plot(self, data: list[torch.Tensor], step) -> plt.Figure:
+    def _create_magnitude_plot(self, data: list[torch.Tensor], step) -> Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
         if not data:
             # Create empty plot if no data

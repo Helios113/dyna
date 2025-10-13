@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-from beartype import beartype
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
@@ -11,7 +10,6 @@ from dyna.modules import LayerModule
 from dyna.transition import BasicFFN
 
 
-@beartype
 class SimpleLayer(LayerModule):
     def __init__(self, config: DynaConfig, input_reinjection: bool = False):
         """Initialize SimpleLayer with configurable parameters."""
@@ -50,6 +48,7 @@ class SimpleLayer(LayerModule):
     ]:
         """Forward pass through the layer with configurable behavior."""
         if self.input_reinjection and reinjection_embeddings is not None:
+            assert self.input_projection is not None, "Input projection must be defined"
             # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
             # Project back to original d_model dimension

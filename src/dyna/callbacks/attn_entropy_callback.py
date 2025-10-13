@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,6 +8,9 @@ import torch
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+from matplotlib.figure import Figure
+
+from dyna.model import DynaLM
 
 
 class AttnShannonEntropyCallback(Callback):
@@ -62,15 +65,15 @@ class AttnShannonEntropyCallback(Callback):
 
     def _compute_shannon_entropy(
         self, logits: torch.Tensor, lm_head: torch.nn.Module
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute Shannon entropy from logits.
 
         Args:
             logits: Model logits of shape [batch_size, seq_len, vocab_size]
+            lm_head: Head for entropy calc
 
         Returns:
             entropy: Average entropy across batch and sequence, scalar tensor
-            lm_head: Head for entropy calc
         """
         # Convert logits to probabilities
         with torch.no_grad():
@@ -97,8 +100,9 @@ class AttnShannonEntropyCallback(Callback):
             return
 
         metrics_dict = {}
-
-        batch_latentes = state.model.model.transformer._latent_vectors
+        model: DynaLM = cast(DynaLM, state.model.model)
+        batch_latentes = model.transformer._latent_vectors
+        tmp_lm_head: torch.nn.Module = cast(torch.nn.Module, model.transformer._lm_head)
         batch_entropy = []
         batch_last_token_entrp = []
 
@@ -108,9 +112,9 @@ class AttnShannonEntropyCallback(Callback):
             for i, sample in enumerate(elem):
                 # Ensure tensors stay on GPU
                 if not isinstance(sample, torch.Tensor):
-                    sample = torch.tensor(sample, device=state.model.device)
+                    sample = torch.tensor(sample, device=cast(str, state.model.device))
                 elif sample.device != state.model.device:
-                    sample = sample.to(state.model.device)
+                    sample = sample.to(cast(str, state.model.device))
 
                 if i == len(data_proc):
                     data_proc.append(sample)
@@ -119,9 +123,7 @@ class AttnShannonEntropyCallback(Callback):
             break
 
         for elem in data_proc:
-            entropy, last_token_entrp = self._compute_shannon_entropy(
-                elem, state.model.model.transformer._temp_lm_head
-            )
+            entropy, last_token_entrp = self._compute_shannon_entropy(elem, tmp_lm_head)
             batch_entropy.append(entropy)
             batch_last_token_entrp.append(last_token_entrp)
 
@@ -152,7 +154,7 @@ class AttnShannonEntropyCallback(Callback):
 
         # Update last logged batch
         self.last_batch_logged = state.timestamp.batch
-        state.model.model.transformer._latent_vectors = []
+        model.transformer._latent_vectors = []
 
     def state_dict(self) -> dict[str, Any]:
         """Return callback state for checkpointing."""
@@ -170,7 +172,7 @@ class AttnShannonEntropyCallback(Callback):
         self.epsilon = state_dict.get("epsilon", self.epsilon)
         self.total_blocks_so_far = state_dict.get("total_blocks_so_far", 0)
 
-    def _fig_to_wandb_image(self, fig: plt.Figure) -> wandb.Image:
+    def _fig_to_wandb_image(self, fig: Figure) -> wandb.Image:
         """Convert matplotlib figure to wandb Image."""
         buf = BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
@@ -184,7 +186,7 @@ class AttnShannonEntropyCallback(Callback):
         plt.close(fig)
         return img
 
-    def _create_entropy_plot(self, data: list[torch.Tensor]) -> plt.Figure:
+    def _create_entropy_plot(self, data: list[torch.Tensor]) -> Figure:
         """Plot mean and ±1 std of a list of entropy tensors using seaborn."""
         if not data:
             # Create empty plot if no data

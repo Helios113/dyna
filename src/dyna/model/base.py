@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from transformers.modeling_utils import PreTrainedModel
 
 from dyna.config import DynaConfig
@@ -12,4 +14,4 @@ class DynaPretrainedModel(PreTrainedModel):
     is_parallelizable: bool = False
     main_input_name: str = "input_ids"
     load_tf_weights = None
-    _no_split_modules = [LayerModule]  # type: ignore[reportGeneralTypeIssues]
+    _no_split_modules = ClassVar[LayerModule]  # type: ignore[reportGeneralTypeIssues]

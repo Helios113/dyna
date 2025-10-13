@@ -133,7 +133,8 @@ class SigmaMoE(DynaModule):
 
         # Add shared experts
         if self.n_expert_shared_ffn > 0:
-            shape_expert_shared = selection_index.shape[:-1] + (
+            shape_expert_shared = (
+                *selection_index.shape[:-1],
                 self.n_expert_shared_ffn,
             )
             expert_shared_expanded = self.expert_shared.view(

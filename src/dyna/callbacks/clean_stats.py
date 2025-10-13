@@ -1,6 +1,10 @@
+from typing import cast
+
 import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
+
+from dyna.model.transformer import DynaFormer
 
 
 class CleanMetrics(Callback):
@@ -14,6 +18,12 @@ class CleanMetrics(Callback):
         self,
         interval: str | int = "1ba",
     ):
+        """Initialize the CleanMetrics callback.
+
+        Args:
+            interval (str | int, optional): The interval at which to compute and log.
+                Defaults to "1ba".
+        """
         super().__init__()
         self.interval = (
             Time.from_timestring(interval)
@@ -21,11 +31,11 @@ class CleanMetrics(Callback):
             else Time(interval, TimeUnit.BATCH)
         )
 
-    def find_transformer_module(self, module: torch.nn.Module):
+    def find_transformer_module(self, module: torch.nn.Module) -> DynaFormer | None:
         # Recursively search for a child named 'transformer'
         for name, child in module.named_children():
             if name == "transformer":
-                return child
+                return cast(DynaFormer, child)
             result = self.find_transformer_module(child)
             if result is not None:
                 return result
@@ -33,7 +43,7 @@ class CleanMetrics(Callback):
 
     def batch_start(self, state: State, logger: Logger) -> None:
         transformer = self.find_transformer_module(state.model)
-
+        assert transformer is not None, "Transformer module not found"
         if (
             state.timestamp.get(self.interval.unit) + Time.from_timestring("1ba")
         ) % self.interval.value == 0:

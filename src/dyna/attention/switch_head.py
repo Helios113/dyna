@@ -133,19 +133,18 @@ class SwitchHead(AttentionModule):
             x.div_(x.norm(dim=-1, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
             x.mul_(std_t / x.std())
 
-    # def get_reg_loss(self) -> Float[Tensor, "dim"]:
-    #     """Get regularization loss from selection history."""
-    #     loss = torch.tensor(0.0, device=next(self.parameters()).device)
-    #     if self.sel_hist:
-    #         for i in range(len(self.sel_hist[0])):
-    #             loss = loss + entropy_reg(
-    #                 torch.stack([l[i] for l in self.sel_hist], dim=-3)
-    #                 .flatten(-4, -3),
-    #                 -3,
-    #             )
-    #     # Clear the history to prevent memory accumulation
-    #     self.sel_hist.clear()
-    #     return loss
+    def get_reg_loss(self) -> Float[Tensor, " dim"]:
+        """Get regularization loss from selection history."""
+        loss = torch.tensor(0.0, device=next(self.parameters()).device)
+        # if self.sel_hist:
+        #     for i in range(len(self.sel_hist[0])):
+        #         loss = loss + entropy_reg(
+        #            torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
+        #             -3,
+        #         )
+        # # Clear the history to prevent memory accumulation
+        # self.sel_hist.clear()
+        return loss
 
     def _get_expert_selection(
         self,
@@ -244,8 +243,8 @@ class SwitchHead(AttentionModule):
     ]:
         """Forward pass through the attention layer."""
         # Apply scaling to queries and keys
-        q: Float[Tensor, "batch seq d_model"] = self.q(q_src)
-        k: Float[Tensor, "batch seq d_model"] = self.k(k_src)
+        q_val: Float[Tensor, "batch seq d_model"] = self.q(q_src)
+        k_val: Float[Tensor, "batch seq d_model"] = self.k(k_src)
         v_sel_index = None
         o_sel_inedx = None
 
@@ -261,28 +260,34 @@ class SwitchHead(AttentionModule):
             # Commented for mem reduction
             # if self.training:
             #     self.sel_hist.append((o_sel_r, v_sel_r))
-            v: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
+            v_val: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
                 v_src, v_sel, self.v
             ).transpose(-2, -3)
 
             # Clean up intermediate tensors
             del v_sel_r, v_sel
             # Project to attention format
-            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
-                q
+            q_val_o: Float[Tensor, "batch n_heads seq d_head"] = (  # pyright: ignore[reportRedeclaration]
+                self.project_to_torch_order(q_val)
             )
-            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
-                k
+            del q_val
+            k_val_o: Float[Tensor, "batch n_heads seq d_head"] = (  # pyright: ignore[reportRedeclaration]
+                self.project_to_torch_order(k_val)
             )
+            del k_val
 
             # Apply dropout and attention
-            q = self.dropout(q)
+            q_val_o = self.dropout(q_val_o)
 
-            res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-                v, k, q, mask[0], mask[1]
+            res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(  # pyright: ignore[reportRedeclaration]
+                v_val, k_val_o, q_val_o, mask[0], mask[1]
             )
             res = res.transpose(-2, -3)
+
+            assert o_sel.out_index is not None
+            assert o_sel.reduction_weight is not None
             o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
+            assert o_sel.reduction_weight is not None
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)
         else:
@@ -290,20 +295,23 @@ class SwitchHead(AttentionModule):
                 torch.nn.functional.linear(q_src, self.sel_o)
             )
 
-            v = torch.einsum("bsd,ndh->bsnh", v_src, self.v)
-            v = self.project_to_torch_order(v.reshape(v.shape[0], v.shape[1], -1))
-            q: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
-                q
+            v_val = torch.einsum("bsd,ndh->bsnh", v_src, self.v)
+            v_val_o = self.project_to_torch_order(
+                v_val.reshape(v_val.shape[0], v_val.shape[1], -1)
             )
-            k: Float[Tensor, "batch n_heads seq d_head"] = self.project_to_torch_order(
-                k
+            q_val_o: Float[Tensor, "batch n_heads seq d_head"] = (
+                self.project_to_torch_order(q_val)
+            )
+            del q_val
+            k_val_o: Float[Tensor, "batch n_heads seq d_head"] = (
+                self.project_to_torch_order(k_val)
             )
 
             # Apply dropout and attention
-            q = self.dropout(q)
+            q_val_o = self.dropout(q_val_o)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-                v, k, q, mask[0], mask[1]
+                v_val_o, k_val_o, q_val_o, mask[0], mask[1]
             )
             res = res.transpose(-2, -3)
 

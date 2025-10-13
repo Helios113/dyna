@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 
 import torch
 from jaxtyping import Bool, Float, Int
@@ -27,7 +28,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
             config (DynaConfig): Configuration object for the model.
         """
         super().__init__(config)
-
+        self._temp_lm_head: Callable[[torch.Tensor], torch.Tensor] | None = None
         self.reg_entropy = config.reg_entropy
         self.perfiery_size = config.perfiery_size
         self.reg_entropy_attn = config.reg_entropy_attn
@@ -40,7 +41,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         self.router = Parameter(torch.zeros(self.d_model), requires_grad=False)
         self.tau = Parameter(torch.ones(1), requires_grad=self.enable_early_exit)
         self.gather_stats = False
-        self.layers: ModuleList[LayerModule]
+        self.layers: ModuleList
         match config.execution_mode.value:
             case ExecutionMode.moe.value:
                 self.layers = ModuleList(
@@ -50,7 +51,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                 self.layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
-            case ExecutionMode.geiping_std.value:  # Geiping et al getting rid of the head and tail lists
+            case ExecutionMode.geiping_std.value:
                 self.head = ModuleList(
                     [SimpleLayer(config) for _ in range(self.perfiery_size)]
                 )
@@ -85,8 +86,6 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         self.repeat_residual = config.repeat_residual
         self.min_loop_layers = self.n_repeats
         self.repeats = config.n_repeats
-        # # Initialize parameters
-        # self.reset_parameters()
 
     @torch.no_grad
     def reset_parameters(self) -> None:
@@ -108,13 +107,11 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         for layer in self.modules():
             if isinstance(layer, DynaModule):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, RMSNorm | torch.nn.LayerNorm):
-                if hasattr(layer, "reset_parameters"):
-                    layer.reset_parameters()
-                else:
-                    # For standard LayerNorm
-                    torch.nn.init.ones_(layer.weight)
-                    torch.nn.init.zeros_(layer.bias)
+            elif isinstance(layer, RMSNorm):
+                layer.reset_parameters()
+            elif isinstance(layer, torch.nn.LayerNorm):
+                torch.nn.init.ones_(layer.weight)
+                torch.nn.init.zeros_(layer.bias)
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.collect_reg_loss:
@@ -173,6 +170,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                     continue_mask=continue_mask,
                 )
                 if self.gather_stats:
+                    assert isinstance(self._temp_lm_head, torch.nn.Module)
                     self._latent_vectors[-1].append(
                         self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
                     )
@@ -190,7 +188,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         )
 
         for li in range(self.n_repeats):
-            if self.repeat_residual and li > 0:
+            if self.repeat_residual and li > 0 and residual_embeddings is not None:
                 x = x + residual_embeddings
             for idx, layer in enumerate(self.layers):
                 # Calculate correct layer index based on execution mode
@@ -262,6 +260,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                 if not continue_processing:
                     break
                 if self.gather_stats:
+                    assert isinstance(self._temp_lm_head, torch.nn.Module)
                     self._latent_vectors[-1].append(
                         self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
                     )
@@ -292,6 +291,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                     continue_mask=continue_mask,
                 )
                 if self.gather_stats:
+                    assert isinstance(self._temp_lm_head, torch.nn.Module)
                     self._latent_vectors[-1].append(
                         self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
                     )

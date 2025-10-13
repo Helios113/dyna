@@ -27,5 +27,3 @@ repos:
       rev: v1.13.0
       hooks:
           - id: basedpyright
-
-exclude: '^(tools/|\.venv/)'
