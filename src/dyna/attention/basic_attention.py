@@ -26,10 +26,10 @@ class BasicAttn(AttentionModule):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
-        
+
         def identity_pytorch(x: torch.Tensor) -> torch.Tensor:
             return x
-            
+
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else identity_pytorch
 
         # Query and Key projections (shared)
@@ -71,7 +71,7 @@ class BasicAttn(AttentionModule):
         q_src: Float[Tensor, "batch seq d_model"],
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[None, None],

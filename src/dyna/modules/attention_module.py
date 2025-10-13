@@ -47,12 +47,10 @@ class AttentionModule(DynaModule):
             d_head: Dimension of each attention head.
             base: Base value for rotary position encoding frequency computation
                 (default: 10000).
-            seq_dim: Dimension index representing the sequence length in tensors
-                (default: 1).
         """
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         # Compute inverse frequencies
-        inv_freq = 1.0 / (base ** (torch.arange(0, d_model, 2).float() / d_model))
+        inv_freq = 1.0 / (base ** (torch.arange(0, d_head, 2).float() / d_head))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # Cache for efficiency
@@ -69,7 +67,7 @@ class AttentionModule(DynaModule):
         v: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
-        attention_mask: Bool[Tensor, "batch seq seq"],
+        attention_mask: Bool[Tensor, "batch 1 seq seq"],
         position_mask: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
@@ -94,6 +92,7 @@ class AttentionModule(DynaModule):
         q, k = self._apply_rope(q, k, position_mask)
 
         # Explicitly remove scaling, as we scale in the body in the transformer
+        # TODO: return scaling
         return torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=attention_mask, dropout_p=0.0, scale=1.0
         )
@@ -102,11 +101,11 @@ class AttentionModule(DynaModule):
         """Reshape tensor to PyTorch attention format."""
         return x.view(*x.shape[:-1], self.n_heads, self.d_head).transpose(-2, -3)
 
-    def apply_rot_optimized(
+    def apply_rot(
         self,
         x: Float[Tensor, "batch n_heads seq d_head"],
         positions: Int[Tensor, "batch seq"],
-    ) -> torch.Tensor:
+    ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Optimized rotary position encoding application."""
         sin, cos = self.get_sincos_positions(x, positions)
 
@@ -116,13 +115,6 @@ class AttentionModule(DynaModule):
         # Use slice instead of narrow (more readable, same performance)
         sin = sin[..., :seq_len, :]
         cos = cos[..., :seq_len, :]
-
-        # Apply rotation in one line using the optimized rotate_half
-        print("Applying optimized RoPE")
-        print(
-            f"x shape: {x.shape}, sin shape: {sin.shape}, cos shape: {cos.shape}",
-            flush=True,
-        )
         return x * cos + self.rotate_half_optimized(x) * sin
 
     def rotate_half_optimized(self, x: torch.Tensor) -> torch.Tensor:
@@ -131,13 +123,14 @@ class AttentionModule(DynaModule):
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=x1.ndim - 1)
 
+    # TODO: Disable F722
     def get_sincos_positions(
         self,
         x: Float[Tensor, "batch n_heads seq d_head"],
         positions: Int[Tensor, "batch seq"],
     ) -> tuple[
-        Float[Tensor, "batch n_heads seq d_head"],
-        Float[Tensor, "batch n_heads seq d_head"],
+        Float[Tensor, "batch 1 seq d_head"],
+        Float[Tensor, "batch 1 seq d_head"],
     ]:
         """Get sin/cos values for specific positions."""
         seq_len = x.shape[self.seq_dim]
@@ -151,13 +144,12 @@ class AttentionModule(DynaModule):
         ):
             # Create position indices for the maximum sequence length we might need
             max_pos = positions.max().item() + 1
-            print("max_pos:", max_pos, flush=True)
-
             pos_idx = torch.arange(max_pos, device=x.device)
-            print("pos_idx:", pos_idx, flush=True)
 
             # Compute frequencies
-            freqs = torch.einsum("i,j->ij", pos_idx, self.inv_freq)
+            freqs: Float[Tensor, "max_pos max_pos"] = torch.einsum(
+                "i,j->ij", pos_idx, self.inv_freq
+            )
             emb = torch.cat((freqs, freqs), dim=-1)
 
             # Cache sin/cos for future use
@@ -188,8 +180,8 @@ class AttentionModule(DynaModule):
         Float[Tensor, "batch n_heads seq d_head"],
     ]:
         return (
-            self.apply_rot_optimized(q, position_mask_full),
-            self.apply_rot_optimized(k, position_mask_full),
+            self.apply_rot(q, position_mask_full),
+            self.apply_rot(k, position_mask_full),
         )
 
 

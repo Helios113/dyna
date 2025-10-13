@@ -8,7 +8,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
-
+ulimit -n 4096
 unique_name=$(mktemp -d dyna_XXXXXX)
 echo "Created temp dir $unique_name"
 export TMPDIR=$unique_name

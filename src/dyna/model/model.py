@@ -17,20 +17,12 @@ from dyna.config import (
     DEFAULT_CAUSAL_LM_TRAIN_METRICS,
     PROT_EMB_RESCALING_METHODS,
 )
+
 # Import directly from specific modules to avoid circular imports
-
-print("Importing 1", flush=True)
 from dyna.model.transformer import DynaFormer
-print("Importing 2", flush=True)
-
 from dyna.model.base import DynaPretrainedModel
-print("Importing 3", flush=True)
-
 from dyna.modules import LayerModule
-print("Importing 4", flush=True)
-
 from dyna.config import DynaConfig
-print("Importing 5", flush=True)
 
 
 class DynaLM(DynaPretrainedModel):
@@ -73,8 +65,8 @@ class DynaLM(DynaPretrainedModel):
 
     def _generate_causal_mask(
         self,
-        input_ids: Tensor,  # [batch, seq]
-    ) -> Tensor:  # [batch, seq, seq]
+        input_ids: Int[Tensor, "batch seq"],
+    ) -> Bool[Tensor, "batch 1 seq seq"]:
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
 
@@ -112,13 +104,13 @@ class DynaLM(DynaPretrainedModel):
         # Apply masks efficiently
         final_mask = base_causal[None, :, :] & same_seq_mask
 
-        return final_mask
+        return final_mask.unsqueeze(1)
 
     def _generate_source_len_mask(
-        self, attention_mask: Bool[Tensor, "batch seq seq"]
+        self, attention_mask: Bool[Tensor, "batch 1 seq seq"]
     ) -> Int[Tensor, "batch seq"]:
         """Generate source length mask with position indices for each sequence."""
-        batch_size, seq_len, _ = attention_mask.shape
+        batch_size, _, seq_len, _ = attention_mask.shape
         device = attention_mask.device
 
         # Create a range tensor for positions [0, 1, 2, ..., seq_len-1]
@@ -134,12 +126,13 @@ class DynaLM(DynaPretrainedModel):
         )  # [batch, seq, seq]
 
         # Apply the attention mask to get valid positions
-        valid_positions = attention_mask & causal_indices  # [batch, seq, seq]
+        valid_positions = (
+            attention_mask.squeeze(1) & causal_indices
+        )  # [batch, seq, seq]
 
         # Sum along the last dimension to get count of valid positions each token can attend to
         # Subtract 1 to make it 0-indexed
-        position_mask = valid_positions.sum(dim=-1) - 1  # [batch, seq]
-
+        position_mask = valid_positions.sum(dim=-1) - 1
         return position_mask
 
     def forward(
@@ -160,11 +153,17 @@ class DynaLM(DynaPretrainedModel):
         # Get embeddings
         if input_ids is not None:
             x = self.embedding(input_ids)
-            # print("Expected: embedding, true:",x.grad_fn)
             if attention_mask is None:
                 attention_mask = self._generate_causal_mask(input_ids)
+                # first unit test -- make sure that attention masking is correct
+                # create an artificial input with known eos positions
+                # save output somehow -- compare with future runs
+
             if src_len_mask is None:
                 src_len_mask = self._generate_source_len_mask(attention_mask)
+                # is a list of position ids -- one dim goes up and restarts
+                # second unit test
+
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
 
@@ -178,12 +177,11 @@ class DynaLM(DynaPretrainedModel):
 
         # Apply output projection
         logits = self.lm_head(self.out_norm(x))
-        # print("Expected: lm_head, true:",logits)
         loss = None
         if labels is not None:
             _labels = torch.roll(labels, shifts=-1)
             _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-            losses = F.cross_entropy(
+            losses = torch.nn.functional.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 _labels.to(logits.device).view(-1),
                 reduction="none",
@@ -216,6 +214,7 @@ class DynaLM(DynaPretrainedModel):
             flush=True,
         )
         return isinstance(module, LayerModule)
+
 
 class ComposerDynaModel(HuggingFaceModel):
     """Composer-compatible MoEUT model wrapper."""
@@ -250,6 +249,9 @@ class ComposerDynaModel(HuggingFaceModel):
         self.model.reset_parameters()
 
     def forward(self, batch) -> CausalLMOutputWithPast:
+        # input_ids -- list of integers, 0 is special it means an end of sequence token.
+
+        1, 2, 162, 123, 2, 4, 32, 213, 1, 0, 123238318763148671, 000000000000 - 1024
         return self.model(
             input_ids=batch.get("input_ids", None),
             labels=batch.get("labels", None),

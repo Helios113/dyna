@@ -227,7 +227,7 @@ class LayerModule(Module, ABC):
         x: Float[Tensor, "batch seq d_model"],
         layer_index: int,
         e: Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         bool,

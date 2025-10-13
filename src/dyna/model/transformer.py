@@ -12,11 +12,7 @@ from dyna.config import (
     GEIPING_METHODS,
 )
 from dyna.config.enums import ExecutionMode
-
-print("Importing 10", flush=True)
 from dyna.layers import MoEUTLayer, SimpleLayer
-print("Importing 11", flush=True)
-
 from dyna.model.base import DynaPretrainedModel, DynaConfig
 from dyna.modules import DynaModule, AttentionModule, LayerModule
 from collections.abc import Iterator
@@ -46,6 +42,7 @@ class TypedModuleList(Generic[T], nn.ModuleList):
     def __setitem__(self, idx: int, module: T) -> None:  # type: ignore[override]
         super().__setitem__(idx, module)
 
+
 class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
     """MoEUT transformer model with configurable behavior."""
 
@@ -74,7 +71,9 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                 self.layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
-            case ExecutionMode.geiping_std.value:  # Geiping et al getting rid of the head and tail lists
+            case (
+                ExecutionMode.geiping_std.value
+            ):  # Geiping et al getting rid of the head and tail lists
                 self.head = ModuleList(
                     [SimpleLayer(config) for _ in range(self.perfiery_size)]
                 )
@@ -165,7 +164,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         self,
         x: Float[Tensor, "batch seq d_model"],
         e: Float[Tensor, "batch seq d_model"] | None,
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
         input_ids: Int[Tensor, "batch seq"] | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], torch.Tensor]:
         if input_ids is not None:
@@ -212,12 +211,11 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         energy_per_sample = torch.zeros(
             x.shape[0], x.shape[1], 1, device=x.device, dtype=x.dtype
         )
-        
+
         for li in range(self.n_repeats):
             if self.repeat_residual and li > 0:
                 x = x + residual_embeddings
             for idx, layer in enumerate(self.layers):
-                
                 # Calculate correct layer index based on execution mode
                 if self.execution_mode.value in LATENT_RECURSION_METHODS:
                     layer_index = 2 + (li * self.n_layers) + idx + 2
@@ -272,7 +270,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                             reduce="prod",
                         ).reshape(x.shape)
                     print(
-                        f"continued tokens after layer {layer_index-2}",
+                        f"continued tokens after layer {layer_index - 2}",
                         continue_mask.numel(),
                         "/",
                         x.shape[0] * x.shape[1],
