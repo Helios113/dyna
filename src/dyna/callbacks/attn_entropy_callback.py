@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-import torch.nn.functional as F
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
@@ -27,8 +26,12 @@ class AttnShannonEntropyCallback(Callback):
         """Initialize the Shannon entropy callback.
 
         Args:
-            log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
-                          "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
+            log_interval: Logging frequency specified as a time string
+            (e.g.,
+            "100ba" for every 100 batches,
+            "1ep" for every epoch,
+            "10sp" for every 10 steps).
+            Default: "100ba"
             epsilon: Small value to add for numerical stability. Default: 1e-10
             figsize: Figure size for entropy plots. Default: (12, 8)
         """
@@ -67,10 +70,11 @@ class AttnShannonEntropyCallback(Callback):
 
         Returns:
             entropy: Average entropy across batch and sequence, scalar tensor
+            lm_head: Head for entropy calc
         """
         # Convert logits to probabilities
         with torch.no_grad():
-            probs = F.softmax(lm_head(logits), dim=-1).detach().cpu()
+            probs = torch.nn.functional.softmax(lm_head(logits), dim=-1).detach().cpu()
 
             # Add epsilon for numerical stability
             probs = probs + self.epsilon

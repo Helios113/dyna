@@ -150,7 +150,8 @@ def cvmm_kernel(
     N,
     K,
     # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+    # element in a particular dimension.
+    # E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
     stride_am,
     stride_ak,
@@ -287,7 +288,8 @@ def cvmm_kernel(
             num_stages=4,
             num_warps=4,
         ),
-        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 16,
+        # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
         triton.Config(
             {
                 "BLOCK_SIZE_M": 64,
@@ -321,7 +323,8 @@ def cvmm_kernel(
             num_stages=4,
             num_warps=4,
         ),
-        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16,
+        # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
         triton.Config(
             {
                 "BLOCK_SIZE_M": 32,

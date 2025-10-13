@@ -46,7 +46,8 @@ def main(cfg: DictConfig):
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
 
-    unique = os.getenv("TMPDIR").split("_")[-1]
+    tmpdir = os.getenv("TMPDIR") or "/tmp_000"
+    unique = tmpdir.split("_")[-1]
     run_name = make_wandb_run_name(cfg.model_config, cfg.trainer_config, unique)
     cfg.trainer_config.save_filename = run_name + "-ba{batch}.pt"
     wandb_logger = WandBLogger(

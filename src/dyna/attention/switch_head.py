@@ -13,6 +13,8 @@ from dyna.modules import AttentionModule
 class SwitchHead(AttentionModule):
     """Core attention mechanism with expert routing."""
 
+    expert_shared: torch.Tensor
+
     def __init__(
         self,
         d_model: int,
@@ -189,9 +191,10 @@ class SwitchHead(AttentionModule):
 
         # Add shared experts
         if self.n_expert_shared_attn > 0:
-            shared_shape = sel_index.shape[:-1] + (self.n_expert_shared_attn,)
+            shared_shape = (*sel_index.shape[:-1], self.n_expert_shared_attn)
+            dims_to_keep = [1] * (sel_index.dim() - 1)
             expert_shared_expanded = self.expert_shared.view(
-                ([1] * (sel_index.dim() - 1)), -1
+                (*dims_to_keep, -1)
             ).expand(*shared_shape)
 
             sel_index = torch.cat([sel_index, expert_shared_expanded], dim=-1)

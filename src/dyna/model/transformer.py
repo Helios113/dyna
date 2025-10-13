@@ -1,10 +1,8 @@
 import math
-from collections.abc import Iterator
-from typing import Generic, TypeVar, overload
 
 import torch
 from jaxtyping import Bool, Float, Int
-from torch import Tensor, nn
+from torch import Tensor
 from torch.nn import ModuleList, Parameter
 from torch.nn.modules.normalization import RMSNorm
 
@@ -18,33 +16,16 @@ from dyna.layers import MoEUTLayer, SimpleLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule, LayerModule
 
-T = TypeVar("T", bound=nn.Module)
-
-
-class TypedModuleList(Generic[T], nn.ModuleList):
-    def __iter__(self) -> Iterator[T]:
-        return super().__iter__()  # type: ignore[no-any-return]
-
-    def append(self, module: T) -> "TypedModuleList[T]":  # type: ignore[override]
-        return super().append(module)  # type: ignore[return-value]
-
-    @overload
-    def __getitem__(self, idx: slice) -> "TypedModuleList[T]": ...
-
-    @overload
-    def __getitem__(self, idx: int) -> T: ...
-
-    def __getitem__(self, idx):  # type: ignore[no-untyped-def]
-        return super().__getitem__(idx)
-
-    def __setitem__(self, idx: int, module: T) -> None:  # type: ignore[override]
-        super().__setitem__(idx, module)
-
 
 class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
     """MoEUT transformer model with configurable behavior."""
 
     def __init__(self, config: DynaConfig):
+        """Initialize DynaFormer model.
+
+        Args:
+            config (DynaConfig): Configuration object for the model.
+        """
         super().__init__(config)
 
         self.reg_entropy = config.reg_entropy
@@ -127,7 +108,7 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
         for layer in self.modules():
             if isinstance(layer, DynaModule):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, (RMSNorm, torch.nn.LayerNorm)):
+            elif isinstance(layer, RMSNorm | torch.nn.LayerNorm):
                 if hasattr(layer, "reset_parameters"):
                     layer.reset_parameters()
                 else:
@@ -238,8 +219,6 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
                             continue_mask,
                             saturation_event.view(-1)[continue_mask],
                         ).reshape(energy_per_sample.shape)
-                        # saturation_event changes
-                        # But I am only intested in the union of the current and the previous
                         saturation_event_tmp = torch.scatter(
                             torch.zeros_like(saturation_event).view(-1),
                             0,
@@ -299,7 +278,6 @@ class DynaFormer(DynaPretrainedModel):  # equivalne to MPTModel
 
         if self.execution_mode.value in LATENT_RECURSION_METHODS:
             for idx, layer in enumerate(self.tail):
-                # Calculate tail layer index: head(2) + all_repeated_layers + current_tail_position + 1
                 layer_index = 2 + (self.repeats * self.n_layers) + idx + 2
                 x, expert_sel, saturation_event = layer(
                     x=x,

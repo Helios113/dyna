@@ -33,6 +33,18 @@ class ConstantWithLinWarmupAndCosCooldown(ComposerScheduler):
         t_demom: str | Time = "",
         t_offset: str | Time = "",
     ):
+        """ConstantWithLinWarmupAndCosCooldown scheduler.
+
+        Args:
+            t_warmup: Warmup duration.
+            t_cooldown: Cooldown duration.
+            t_max: Maximum duration.
+            alpha_f: Final alpha value.
+            scale_warmup: Scale warmup.
+            scale_cooldown: Scale cooldown.
+            t_demom: Denominator duration.
+            t_offset: Offset duration.
+        """
         self.t_warmup = t_warmup
         self.t_coolddown = t_cooldown
         self.t_max = t_max

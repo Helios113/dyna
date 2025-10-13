@@ -250,9 +250,6 @@ class ComposerDynaModel(HuggingFaceModel):
         self.model.reset_parameters()
 
     def forward(self, batch) -> CausalLMOutputWithPast:
-        # input_ids -- list of integers, 0 is special it means an end of sequence token.
-
-        1, 2, 162, 123, 2, 4, 32, 213, 1, 0, 123238318763148671, 000000000000 - 1024
         return self.model(
             input_ids=batch.get("input_ids", None),
             labels=batch.get("labels", None),

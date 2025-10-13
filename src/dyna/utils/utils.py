@@ -5,6 +5,7 @@ import os
 import secrets
 import string
 import time
+from typing import cast
 
 import yaml
 from composer import DataSpec
@@ -129,10 +130,10 @@ def get_callbacks(cfg: DictConfig) -> list[Callback]:
 
 
 def load_and_concat_yamls(directory):
-    """Reads all YAML files in a directory, loads them, and merges them into a single
-    dict.
+    """Reads all YAML files in a directory.
 
-    Returns an OmegaConf DictConfig.
+    loads them, and merges them into a single
+    dict.Returns an OmegaConf DictConfig.
     """
     merged = {}
     for file in sorted(
@@ -210,9 +211,11 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
     return value_map
 
 
-def build_full_concrete_config(cfg):
-    """Constructs and merges all configs (model, trainer, data) and returns a single
-    config dict."""
+def build_full_concrete_config(cfg: DictConfig):
+    """Constructs and merges all configs.
+
+    (model, trainer, data) and returns a single config dict.
+    """
     OmegaConf.resolve(cfg)
     # Model Config
     model_schema = OmegaConf.structured(ModelConfig)
@@ -238,13 +241,23 @@ def build_full_concrete_config(cfg):
         fsdp_config = OmegaConf.merge(fsdp_schema, fsdp_config)
 
     # Merge all configs into one dict for duplicate key checking
-    merged_config = {}
-    merged_config.update(OmegaConf.to_container(model_config, resolve=True))
-    merged_config.update(OmegaConf.to_container(trainer_config, resolve=True))
-    merged_config.update(OmegaConf.to_container(data_config, resolve=True))
-    merged_config.update(OmegaConf.to_container(scheduler_config, resolve=True))
+    merged_config: dict[str, object] = {}
+    merged_config.update(
+        cast(dict[str, object], OmegaConf.to_container(model_config, resolve=True))
+    )
+    merged_config.update(
+        cast(dict[str, object], OmegaConf.to_container(trainer_config, resolve=True))
+    )
+    merged_config.update(
+        cast(dict[str, object], OmegaConf.to_container(data_config, resolve=True))
+    )
+    merged_config.update(
+        cast(dict[str, object], OmegaConf.to_container(scheduler_config, resolve=True))
+    )
     if fsdp_config:
-        merged_config.update(OmegaConf.to_container(fsdp_config, resolve=True))
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(fsdp_config, resolve=True))
+        )
         # cfg.fsdp_config.load_planner = fsdp_config.get("load_planner", "default")
 
     check_duplicate_keys(merged_config)
@@ -259,38 +272,3 @@ def build_full_concrete_config(cfg):
         cfg.fsdp_config = fsdp_config
 
     return cfg
-
-
-def visualize_attention_mask(mask, max_display=2048, index=0):
-    """Helper function to visualize the attention mask."""
-    import matplotlib.pyplot as plt
-
-    # Only show first max_display tokens for readability
-    display_len = min(max_display, mask.shape[-1])
-    mask_subset = mask[0, 0].cpu()
-    print(mask_subset)
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.imshow(mask_subset.float(), cmap="Blues", aspect="equal")
-
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-
-    ax.set_title("Causal Attention Mask for Packed Sequence")
-    ax.set_xlabel("Key Positions")
-    ax.set_ylabel("Query Positions")
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(f"attn_mask_{index}.png")
-
-
-def visualize_position_mask(mask, index=0):
-    """Helper function to visualize the attention mask."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(10, 10))
-    print(mask[0])
-    ax.plot(mask[0].cpu())
-
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(f"pos_mask_{index}.png")

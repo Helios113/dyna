@@ -10,8 +10,7 @@ from composer.loggers import Logger
 
 
 class ExpertSelectionCallback(Callback):
-    """Callback to visualize expert selection patterns for both attention and FFN
-    layers.
+    """Tell us which experts are selected across different layers and time steps.
 
     Creates heatmaps showing which experts are selected across different layers and time
     steps.
@@ -31,8 +30,7 @@ class ExpertSelectionCallback(Callback):
         Args:
             ffn_experts: Number of FFN experts
             attn_experts: Number of attention experts
-            log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
-                         "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
+            log_interval: Logging frequency specified as a time string
             log_key_prefix: Prefix for logging keys. Default: "expert_selection"
             max_samples_per_batch: Maximum number of samples to visualize per batch
             figsize: Figure size for matplotlib plots
@@ -126,8 +124,11 @@ class ExpertSelectionCallback(Callback):
         self,
         selection_data: torch.Tensor,
     ) -> plt.Figure:
-        """Create a heatmap showing expert selection patterns and a heatmap for mean
-        expert selection."""
+        """Create expert heatmap.
+
+        Create a heatmap showing expert selection patterns and a heatmap for mean
+        expert selection.
+        """
         # Keep computation on GPU until final conversion
         heatmap_data_gpu = selection_data.clone()
         mean_probs_gpu = selection_data.mean(dim=0)
@@ -214,11 +215,10 @@ class ExpertSelectionCallback(Callback):
 
         # Collect expert selection data
         selections = self._collect_expert_selections(state.model.model)
-        device = next(state.model.parameters()).device
 
         if self.run_data is None:
             self.run_data = {}
-            for key in selections.keys():
+            for key in selections:
                 self.run_data[key] = torch.sum(selections[key], dim=0)
         else:
             for key in self.run_data:

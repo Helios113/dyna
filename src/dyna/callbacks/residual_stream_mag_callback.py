@@ -22,6 +22,16 @@ class ResidualMagnitudeCallback(Callback):
         figsize: tuple[int, int] = (12, 8),
         log_key: str = "residual_magnitude",
     ):
+        """Initialize the ResidualMagnitudeCallback.
+
+        Args:
+            log_interval (str | int, optional): The interval at which to log the
+            residual magnitude. Defaults to "100ba".
+            figsize (tuple[int, int], optional): The size of the figure to plot.
+            Defaults to (12, 8).
+            log_key (str, optional): The key to use when logging the residual magnitude.
+            Defaults to "residual_magnitude".
+        """
         self.log_interval = (
             Time.from_timestring(log_interval)
             if isinstance(log_interval, str)

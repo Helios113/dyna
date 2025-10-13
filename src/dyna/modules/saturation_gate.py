@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import cast
 
 import torch
 from torch.nn import Module
@@ -11,11 +12,12 @@ class SaturationGate(Module):
         self.linear = torch.nn.Sequential(
             torch.nn.Linear(d_model, d_model // 2),
             torch.nn.ReLU(),
-            torch.nn.Linear(d_model // 2, 1, bias=True),  # Enable bias
+            torch.nn.Linear(d_model // 2, 1),  # Enable bias
         )
         # Initialize with positive bias to encourage continuation
         with torch.no_grad():
-            self.linear[-1].bias.fill_(init_bias)
+            lin: torch.nn.Linear = cast(torch.nn.Linear, self.linear[-1])
+            lin.bias.fill_(init_bias)
 
     def forward(self, x):
         z = self.linear(x.detach()).squeeze(-1)

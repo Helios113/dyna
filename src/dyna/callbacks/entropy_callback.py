@@ -4,7 +4,6 @@ from typing import Any
 import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
-import torch.nn.functional as F
 import wandb
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
@@ -27,8 +26,7 @@ class ShannonEntropyCallback(Callback):
         """Initialize the Shannon entropy callback.
 
         Args:
-            log_interval: Logging frequency specified as a time string (e.g., "100ba" for every 100 batches,
-                         "1ep" for every epoch, "10sp" for every 10 steps). Default: "100ba"
+            log_interval: Logging frequency specified as a time string
             epsilon: Small value to add for numerical stability. Default: 1e-10
             figsize: Figure size for entropy plots. Default: (12, 8)
             log_key: Key for logging entropy metrics. Default: "shannon_entropy"
@@ -74,7 +72,7 @@ class ShannonEntropyCallback(Callback):
         """
         # Convert logits to probabilities
         with torch.no_grad():
-            probs = F.softmax(logits, dim=-1)
+            probs = torch.nn.functional.softmax(logits, dim=-1)
             probs = torch.clamp(probs.float(), min=1e-6).to(probs.dtype)
             # Compute log probabilities
             log_probs = torch.log(probs)

@@ -13,16 +13,23 @@ from matplotlib.ticker import ScalarFormatter
 class LayerUsageMonitor(Callback):
     """Logs the average number of layers used per batch.
 
-    This callback logs the average number of layers (layer_index_abs) used in the MoEUT model
-    during training and evaluation. It checks if microbatching is used and reports appropriately.
+    This callback logs the average number of layers used in the MoEUT model
+    during training and evaluation.
+    It checks if microbatching is used and reports appropriately.
 
     Args:
-        log_interval (Union[str, int]): Logging frequency in batches or as a time string. Default: "1ba"
+        log_interval (Union[str, int]): Logging frequency. Default: "1ba"
     """
 
     def __init__(
         self, log_interval: str | int = "100ba", figsize: tuple[int, int] = (12, 8)
     ):
+        """Initialize the LayerUsageMonitor callback.
+
+        Args:
+            log_interval (Union[str, int]): Logging frequency. Default: "100ba"
+            figsize (tuple[int, int]): Figure size for plotting. Default: (12, 8)
+        """
         super().__init__()
         self.log_interval = (
             Time.from_timestring(log_interval)

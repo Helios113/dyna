@@ -247,5 +247,7 @@ class AttentionModule(DynaModule):
 #         return q_src, (None, None)
 
 #     def get_reg_loss(self) -> torch.Tensor:
-#         """Return zero for regularization loss since DummyAttention doesn't use expert routing."""
-#         return torch.tensor(0.0, device=self.q.weight.device, dtype=self.q.weight.dtype)
+#         """Return zero for regularization loss since DummyAttention doesn't use expert
+#  routing."""
+#         return torch.tensor(0.0, device=self.q.weight.device, dtype=self.q.weight.dty
+# pe)

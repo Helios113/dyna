@@ -1,7 +1,6 @@
 from llmfoundry.registry import callbacks
 
 from dyna.callbacks.abbie_number import AbbieNumberCallback
-from dyna.callbacks.activation_monitor import ActivationMonitor
 from dyna.callbacks.clean_stats import CleanMetrics
 from dyna.callbacks.entropy_callback import ShannonEntropyCallback
 from dyna.callbacks.exit_entropy_callback import ExitEntropyCallback
@@ -22,10 +21,6 @@ __all__ = [
     "AbbieNumberCallback",
 ]
 
-callbacks.register(
-    "activation_monitor_c",
-    func=ActivationMonitor,
-)
 
 callbacks.register(
     "layer_usage_monitor",

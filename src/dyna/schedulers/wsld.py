@@ -9,8 +9,7 @@ from composer.optim.scheduler import (
 
 
 def _lin_cooldown(t: Time, t_max: Time, alpha_i=1.0, alpha_f=0.0):
-    """Linear cooldown function that drives the factor from alpha_i to alpha_f (zero by
-    default).
+    """Linear cooldown function that drives the factor from alpha_i to alpha_f.
 
     Args:
         t: Current time elapsed in the cooldown phase
@@ -37,6 +36,19 @@ class WarmupStableLinearDecay(ComposerScheduler):
         scale_warmup: bool = False,
         scale_cooldown: bool = False,
     ):
+        """Linear warmup and cooldown scheduler.
+
+        Args:
+            t_warmup: Duration of warmup phase.
+            t_cooldown: Duration of cooldown phase.
+            t_max: Maximum duration of the scheduler.
+            alpha_f: Final factor at the end of cooldown (default: 0.0).
+            scale_warmup: Scale warmup phase by factor (default: False).
+            scale_cooldown: Scale cooldown phase by factor (default: False).
+
+        Returns:
+            Current factor linearly interpolated between alpha_i and alpha_f
+        """
         self.t_warmup = t_warmup - Time(1, "ba")
         self.t_cooldown = t_cooldown + Time(1, "ba")
         self.t_max = t_max

@@ -9,4 +9,3 @@ __all__ = [
 ]
 
 schedulers.register("wsld", func=WarmupStableLinearDecay)
-# schedulers.register("constant_lin_warmup_cos_cooldown", func=ConstantWithLinWarmupAndCosCooldown)

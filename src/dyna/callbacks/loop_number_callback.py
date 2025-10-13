@@ -17,10 +17,24 @@ class LoopNumberCallback(Callback):
         total_training_duration: str = "100ba",
         upper_bound: int = 6,
         lower_bound: int = 2,
-        warm_up=0.2,
-        cool_down=0.2,
+        warm_up: float = 0.2,
+        cool_down: float = 0.2,
         log_key: str = "loop_number",
     ):
+        """Initialize the LoopNumberCallback callback.
+
+        Args:
+            log_interval (Union[str, int]): Logging frequency. Default: "100ba"
+            total_training_duration (Union[str, int]): Total training duration.
+            Default: "100ba"
+            upper_bound (int): Upper bound for loop number. Default: 6
+            lower_bound (int): Lower bound for loop number. Default: 2
+            warm_up (float): Warm-up duration as a fraction of total training duration.
+            Default: 0.2
+            cool_down (float): Cool-down duration as a fraction of total training duration.
+            Default: 0.2
+            log_key (str): Key for logging. Default: "loop_number"
+        """
         self.log_interval = (
             Time.from_timestring(log_interval)
             if isinstance(log_interval, str)
@@ -54,8 +68,8 @@ class LoopNumberCallback(Callback):
         if not self._should_log(state):
             return
         metrics_dict = {}
-        G = self.T.value * (1 - self.warm_up - self.cool_down)
-        g = (self.upper_bound - self.lower_bound - 1) / G
+        grad1: float = self.T.value * (1 - self.warm_up - self.cool_down)
+        g = (self.upper_bound - self.lower_bound - 1) / grad1
         slope = (
             self.warm_up * float(self.T.value) * g
             + self.upper_bound

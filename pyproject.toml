@@ -77,6 +77,9 @@ ignore = [
     "D104", # Missing docstring in public package
     "D105", # Missing docstring in magic method
     "F722", # Forward references which in fact are jaxtyping annotations
+    "N803",
+    "N806",
+    "E26"
 ]
 
 fixable = ["ALL"]
@@ -98,3 +101,10 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = true
+
+
+[tool.basedpyright]
+# Add the path to your site-packages or source code directory
+extraPaths = ["src", "/nfs-share/pa511/code_bases/dyna_project/dyna/.venv/lib/python3.12/site-packages"]
+reportAny = "none"
+typeCheckingMode = "basic"

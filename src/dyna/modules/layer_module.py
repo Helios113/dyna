@@ -91,7 +91,7 @@ class LayerModule(Module, ABC):
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
         update_on_stream: Float[Tensor, "batch seq d_model"],
-        continue_mask: None | Int[Tensor, size],
+        continue_mask: None | Int[Tensor, " size"],
         layer_index: int,
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,
@@ -119,11 +119,9 @@ class LayerModule(Module, ABC):
             ):
                 if e is not None:
                     residual_stream = residual_stream - e
-                if self.enable_early_exit and cum_sum is not None and tau is not None:
+                if self.enable_early_exit and cum_sum is not None:
                     scale_factor = (layer_index - 1) / layer_index
-                    update_factor = (
-                        cum_sum[continue_mask].unsqueeze(1) * tau / layer_index
-                    )
+                    update_factor = cum_sum[continue_mask].unsqueeze(1) / layer_index
 
                     residual_stream[continue_mask] = (
                         scale_factor * residual_stream[continue_mask]
@@ -139,7 +137,8 @@ class LayerModule(Module, ABC):
                 if e is not None:
                     residual_stream = residual_stream + e
             # case (
-            #     RescaleMethod.sqrt_prot_emb.value | RescaleMethod.sqrt_no_prot_emb.value
+            #     RescaleMethod.sqrt_prot_emb.value |
+            # RescaleMethod.sqrt_no_prot_emb.value
             # ):
             #     if e is not None:
             #         residual_stream = residual_stream - e
@@ -158,7 +157,8 @@ class LayerModule(Module, ABC):
             #         )
             #     else:
             #         # Apply to all tokens when early exit is disabled
-            #         scale_factor = (math.sqrt(layer_index) - 1) / math.sqrt(layer_index)
+            #         scale_factor = (math.sqrt(layer_index) - 1) /
+            #  math.sqrt(layer_index)
             #         residual_stream = scale_factor * residual_stream + update / (
             #             math.sqrt(layer_index)
             #         )

@@ -42,7 +42,7 @@ class SimpleLayer(LayerModule):
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
         mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
-        continue_mask: None | Int[Tensor, size] = None,
+        continue_mask: None | Int[Tensor, " size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
