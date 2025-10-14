@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 from torch import Tensor
 
 from dyna.attention import SwitchHead
@@ -50,10 +50,11 @@ class MoEUTLayer(LayerModule):
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
+        layer_index: int,
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
+        attention_mask: None | Float[Tensor, "batch seq seq"],
+        sequence_length: None | Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
@@ -69,10 +70,7 @@ class MoEUTLayer(LayerModule):
         q_val, k_val, v_val = self._apply_pre_norm_attn(x)
 
         att_out, expert_sel_attn = self.attention(
-            q_val,
-            k_val,
-            v_val,
-            mask,
+            q_val, k_val, v_val, attention_mask, sequence_length
         )
 
         x = self._apply_update_to_residual(

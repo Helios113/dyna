@@ -233,7 +233,8 @@ class SwitchHead(AttentionModule):
         q_src: Float[Tensor, "batch seq d_model"],
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch seq seq"], Int[Tensor, "batch seq"]],
+        attention_mask: Bool[Tensor, "batch seq seq"],
+        sequence_length: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[
@@ -280,7 +281,7 @@ class SwitchHead(AttentionModule):
             q_val_o = self.dropout(q_val_o)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(  # pyright: ignore[reportRedeclaration]
-                v_val, k_val_o, q_val_o, mask[0], mask[1]
+                v_val, k_val_o, q_val_o, attention_mask, sequence_length
             )
             res = res.transpose(-2, -3)
 
@@ -311,7 +312,7 @@ class SwitchHead(AttentionModule):
             q_val_o = self.dropout(q_val_o)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-                v_val_o, k_val_o, q_val_o, mask[0], mask[1]
+                v_val_o, k_val_o, q_val_o, attention_mask, sequence_length
             )
             res = res.transpose(-2, -3)
 

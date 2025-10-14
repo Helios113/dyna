@@ -67,7 +67,7 @@ class AttentionModule(DynaModule):
         k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
-        position_mask: Int[Tensor, "batch seq"],
+        sequence_length: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
 
@@ -80,7 +80,7 @@ class AttentionModule(DynaModule):
             k: Key tensor of shape (batch, n_heads, seq, d_head).
             q: Query tensor of shape (batch, n_heads, seq, d_head).
             attention_mask: Attention mask tensor.
-            position_mask: Position indices for RoPE of shape (batch, seq).
+            sequence_length: Position indices for RoPE of shape (batch, seq).
 
         Returns:
             Attention output tensor of shape (batch, n_heads, seq, d_head).
@@ -88,7 +88,7 @@ class AttentionModule(DynaModule):
         # Apply rotary position encoding
         # Remove debug print that could cause issues
 
-        q, k = self._apply_rope(q, k, position_mask)
+        q, k = self._apply_rope(q, k, sequence_length)
 
         # Explicitly remove scaling, as we scale in the body in the transformer
         # TODO: return scaling
@@ -122,7 +122,6 @@ class AttentionModule(DynaModule):
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=x1.ndim - 1)
 
-    # TODO: Disable F722
     def get_sincos_positions(
         self,
         x: Float[Tensor, "batch n_heads seq d_head"],
@@ -173,14 +172,14 @@ class AttentionModule(DynaModule):
         self,
         q: Float[Tensor, "batch n_heads seq d_head"],
         k: Float[Tensor, "batch n_heads seq d_head"],
-        position_mask_full: Int[Tensor, "batch seq"],
+        sequence_length_full: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch n_heads seq d_head"],
         Float[Tensor, "batch n_heads seq d_head"],
     ]:
         return (
-            self.apply_rot(q, position_mask_full),
-            self.apply_rot(k, position_mask_full),
+            self.apply_rot(q, sequence_length_full),
+            self.apply_rot(k, sequence_length_full),
         )
 
 

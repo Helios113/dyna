@@ -7,7 +7,7 @@ from beartype import beartype
 
 # from composer.callbacks
 # Add jaxtyping imports
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 from torch import Tensor
 from torch.nn import Module
 from torch.nn.modules.normalization import RMSNorm
@@ -228,15 +228,16 @@ class LayerModule(Module, ABC):
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
+        e: None | Float[Tensor, "batch seq d_model"],
+        reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
+        attention_mask: None | Float[Tensor, "batch seq seq"],
+        sequence_length: None | Int[Tensor, "batch seq"],
         layer_index: int,
-        e: Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
+        continue_mask: None | Int[Tensor, " size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
-        bool,
-        int,
-        None | Float[Tensor, "batch seq"],
         tuple,
+        Float[Tensor, "batch seq"] | None,
     ]:
         """Forward pass through the layer with configurable behavior."""
         pass

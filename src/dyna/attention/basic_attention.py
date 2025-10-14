@@ -70,7 +70,8 @@ class BasicAttn(AttentionModule):
         q_src: Float[Tensor, "batch seq d_model"],
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
+        attention_mask: Bool[Tensor, "batch 1 seq seq"],
+        sequence_length: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[None, None],
@@ -90,7 +91,7 @@ class BasicAttn(AttentionModule):
         q = self.dropout(q)
 
         # Apply attention
-        res = self.attend(v, k, q, mask[0], mask[1])
+        res = self.attend(v, k, q, attention_mask, sequence_length)
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)
 
