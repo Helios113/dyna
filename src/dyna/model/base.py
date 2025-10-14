@@ -9,9 +9,9 @@ from dyna.modules import LayerModule
 class DynaPretrainedModel(PreTrainedModel):
     """Base class for Dyna pretrained models."""
 
-    config_class = DynaConfig  # type: ignore[reportGeneralTypeIssues]
+    config_class = DynaConfig
     base_model_prefix: str = "Dyna"
     is_parallelizable: bool = False
     main_input_name: str = "input_ids"
     load_tf_weights = None
-    _no_split_modules = ClassVar[LayerModule]  # type: ignore[reportGeneralTypeIssues]
+    _no_split_modules = ClassVar[LayerModule]

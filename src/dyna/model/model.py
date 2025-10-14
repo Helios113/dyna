@@ -29,16 +29,19 @@ from dyna.modules import LayerModule
 
 
 class DynaLM(DynaPretrainedModel):
-    """MoEUT Language Model with embedding and output layers."""
+    """Base Language model class.
+
+    DynaLM contains a transformer core and input/output layers.
+    """
 
     def __init__(self, config: DynaConfig, eos_token_id: int):
         """Initialize DynaLM model.
 
         Args:
             config (DynaConfig): Configuration object.
-            eos_token_id (int): End-of-sentence token ID.
+            eos_token_id (int): End-of-sentence token ID. This is passed so that we can
+                                construct the base causal mask.
         """
-        # write docstring 88chars
         super().__init__(config)
 
         # Core transformer
@@ -48,22 +51,22 @@ class DynaLM(DynaPretrainedModel):
         self.n_repeats = config.n_repeats
         self.use_rms_norm = config.use_rms_norm
         self.d_model = config.d_model
-        # Input/output layers
+        self.eos_token_id = eos_token_id
+        self.rescaling_method = config.rescaling_method
+        self.sample_iterations = config.sample_iterations
 
+        # Input/output layers
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
-
         self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
+
         # Output normalization - configurable type
         norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
         self.out_norm = norm_class(config.d_model)
-        self.eos_token_id = eos_token_id
 
-        self.rescaling_method = config.rescaling_method
-        # Initialize parameters
-        self.sample_iterations = config.sample_iterations
         # Provide LM head to transformer for entropy computation
-
+        # The LM head cannot be used with no grad as
+        # all gradients for that step are discarded
         self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
 
     @torch.no_grad
@@ -73,14 +76,15 @@ class DynaLM(DynaPretrainedModel):
         )
         self.transformer.reset_parameters()
 
-    def _generate_causal_mask(
+    def _generate_attention_mask(
         self,
         input_ids: Int[Tensor, "batch seq"],
     ) -> Bool[Tensor, "batch 1 seq seq"]:
+        """Generate attention mask for each sample in batch."""
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
 
-        # Create base causal mask - use float16 to save memory if acceptable
+        # Create base causal mask
         base_causal = torch.tril(
             torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
         )
@@ -88,13 +92,17 @@ class DynaLM(DynaPretrainedModel):
         # Find EOS positions
         eos_mask = input_ids == self.eos_token_id  # [batch, seq]
 
-        # Quick path: if no EOS tokens in entire batch
+        # Quick path -- if no EOS tokens in entire batch
         if not eos_mask.any():
             return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
 
-        eos_positions = eos_mask.long()  # Convert to int: [batch, seq]
+        # Find EOS positions
+        eos_positions: Bool[Tensor, "batch seq"] = (
+            eos_mask.long()
+        )  # Convert to int: [batch, seq]
 
-        sequence_ids = torch.cumsum(
+        # Calculate sequence IDs
+        sequence_ids: Int[Tensor, "batch seq"] = torch.cumsum(
             torch.cat(
                 [
                     torch.zeros(batch_size, 1, dtype=torch.long, device=device),
@@ -103,16 +111,18 @@ class DynaLM(DynaPretrainedModel):
                 dim=1,
             ),
             dim=1,
-        )  # [batch, seq]
+        )
 
         # Vectorized same-sequence mask computation
         # Use broadcasting instead of unsqueeze for better memory efficiency
-        same_seq_mask = (
+        same_seq_mask: Bool[Tensor, "batch seq seq"] = (
             sequence_ids[:, :, None] == sequence_ids[:, None, :]
-        )  # [batch, seq, seq]
+        )
 
-        # Apply masks efficiently
-        final_mask = base_causal[None, :, :] & same_seq_mask
+        # Apply masks
+        final_mask: Bool[Tensor, "batch seq seq"] = (
+            base_causal[None, :, :] & same_seq_mask
+        )
 
         return final_mask.unsqueeze(1)
 
@@ -125,19 +135,19 @@ class DynaLM(DynaPretrainedModel):
 
         pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
 
-        causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)  # [seq, seq]
+        causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)
 
         # Expand to batch dimension
-        causal_indices = causal_indices.unsqueeze(0).expand(
-            batch_size, -1, -1
-        )  # [batch, seq, seq]
+        causal_indices: Bool[Tensor, "batch seq seq"] = causal_indices.unsqueeze(
+            0
+        ).expand(batch_size, -1, -1)
 
         # Apply the attention mask to get valid positions
-        valid_positions = (
+        valid_positions: Bool[Tensor, "batch seq seq"] = (
             attention_mask.squeeze(1) & causal_indices
-        )  # [batch, seq, seq]
+        )
 
-        position_mask = valid_positions.sum(dim=-1) - 1
+        position_mask: Int[Tensor, "batch seq"] = valid_positions.sum(dim=-1) - 1
         return position_mask
 
     def forward(
@@ -155,19 +165,13 @@ class DynaLM(DynaPretrainedModel):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("Cannot specify both input_ids and inputs_embeds")
 
-        # Get embeddings
+        # Get embeddings and subsequenent masks
         if input_ids is not None:
             x = self.embedding(input_ids)
             if attention_mask is None:
-                attention_mask = self._generate_causal_mask(input_ids)
-                # first unit test -- make sure that attention masking is correct
-                # create an artificial input with known eos positions
-                # save output somehow -- compare with future runs
-
+                attention_mask = self._generate_attention_mask(input_ids)
             if src_len_mask is None:
                 src_len_mask = self._generate_source_len_mask(attention_mask)
-                # is a list of position ids -- one dim goes up and restarts
-                # second unit test
 
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
@@ -178,10 +182,13 @@ class DynaLM(DynaPretrainedModel):
         # Prepare protected embeddings if enabled
         e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
 
+        # Run the transformer model
         x, energy_per_sample = self.transformer(x, e, (attention_mask, src_len_mask))
 
         # Apply output projection
         logits = self.lm_head(self.out_norm(x))
+
+        # Calculate the loss
         loss = None
         if labels is not None:
             _labels = torch.roll(labels, shifts=-1)
@@ -206,10 +213,9 @@ class DynaLM(DynaPretrainedModel):
             attentions=None,
         )
 
-    # FSDP Wrap function
-
     @staticmethod
     def fsdp_wrap_fn(module: Module) -> bool:
+        """Determines whether a module should be wrapped with FSDP."""
         if hasattr(module, "_fsdp_kwargs_dict"):
             return bool(module._fsdp_kwargs_dict)
         print(
@@ -222,7 +228,7 @@ class DynaLM(DynaPretrainedModel):
 
 
 class ComposerDynaModel(HuggingFaceModel):
-    """Composer-compatible MoEUT model wrapper."""
+    """Composer-compatible language model wrapper."""
 
     model: DynaLM
 
