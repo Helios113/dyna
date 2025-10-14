@@ -1,13 +1,10 @@
 from abc import ABC, abstractmethod
 
 import torch
-
-# from composer.callbacks
-# Add jaxtyping imports
 from jaxtyping import Float, Int
+from llmfoundry.models.layers.layer_builders import build_norm
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.modules.normalization import RMSNorm
 
 from dyna.config import DynaConfig, NormStructure, RescaleMethod
 
@@ -28,16 +25,22 @@ class LayerModule(Module, ABC):
         self.attention = attention_module
         self.ffn = ffn_module
         self.input_projection = input_projection
-        # Layer normalization - configurable type
-        # norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
 
-        self.attn_pre = RMSNorm(config.d_model)
-        self.attn_post = RMSNorm(config.d_model)
+        self.attn_pre = build_norm(
+            name=config.norm_type, normalized_shape=config.d_model
+        )
+        self.attn_post = build_norm(
+            name=config.norm_type, normalized_shape=config.d_model
+        )
         self.attn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
-        self.ffn_pre = RMSNorm(config.d_model)
-        self.ffn_post = RMSNorm(config.d_model)
+        self.ffn_pre = build_norm(
+            name=config.norm_type, normalized_shape=config.d_model
+        )
+        self.ffn_post = build_norm(
+            name=config.norm_type, normalized_shape=config.d_model
+        )
         self.ffn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
@@ -59,8 +62,8 @@ class LayerModule(Module, ABC):
         Float[Tensor, "batch seq d_model"],
     ]:
         if (
-            self.norm_structure.value == NormStructure.peri.value
-            or self.norm_structure == NormStructure.pre.value
+            self.norm_structure == NormStructure.peri
+            or self.norm_structure == NormStructure.pre
         ):
             # Peri, Pre
             residual_stream_normed = self.attn_pre(residual_stream)
@@ -68,12 +71,12 @@ class LayerModule(Module, ABC):
             k_val = residual_stream_normed
             v_val = residual_stream_normed
 
-        elif self.norm_structure.value == NormStructure.post.value:
+        elif self.norm_structure == NormStructure.post:
             q_val = residual_stream
             k_val = residual_stream
             v_val = residual_stream
 
-        elif self.norm_structure.value == NormStructure.moeut.value:
+        elif self.norm_structure == NormStructure.moeut:
             residual_stream_normed = self.attn_pre(residual_stream)
             q_val = residual_stream_normed
             k_val = residual_stream_normed
@@ -94,12 +97,12 @@ class LayerModule(Module, ABC):
         cum_sum: Float[Tensor, "batch seq"] | None = None,
     ) -> Float[Tensor, "batch seq d_model"]:
         update = update_on_stream
-        if self.norm_structure.value == NormStructure.peri.value:
+        if self.norm_structure == NormStructure.peri:
             update = norm_to_use(update_on_stream)
         update = self.drop(update)
 
-        match self.rescaling_method.value:
-            case RescaleMethod.none.value:
+        match self.rescaling_method:
+            case RescaleMethod.none:
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
                         residual_stream.view(-1),
@@ -109,10 +112,7 @@ class LayerModule(Module, ABC):
                     ).reshape_as(residual_stream)
                 else:
                     residual_stream = residual_stream + update
-            case (
-                RescaleMethod.cum_avg_prot_emb.value
-                | RescaleMethod.cum_avg_no_prot_emb.value
-            ):
+            case RescaleMethod.cum_avg_prot_emb | RescaleMethod.cum_avg_no_prot_emb:
                 if e is not None:
                     residual_stream = residual_stream - e
                 if (
@@ -137,8 +137,8 @@ class LayerModule(Module, ABC):
                 if e is not None:
                     residual_stream = residual_stream + e
             # case (
-            #     RescaleMethod.sqrt_prot_emb.value |
-            # RescaleMethod.sqrt_no_prot_emb.value
+            #     RescaleMethod.sqrt_prot_emb |
+            # RescaleMethod.sqrt_no_prot_emb
             # ):
             #     if e is not None:
             #         residual_stream = residual_stream - e
@@ -164,7 +164,7 @@ class LayerModule(Module, ABC):
             #         )
             #     if e is not None:
             #         residual_stream = residual_stream + e
-            # case RescaleMethod.sqrt_scale_prot_emb.value:
+            # case RescaleMethod.sqrt_scale_prot_emb:
             #     residual_stream = residual_stream - e
             #     if self.enable_early_exit:
             #         update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
@@ -181,7 +181,7 @@ class LayerModule(Module, ABC):
             #             residual_stream = (residual_stream + update) / (math.sqrt(2))
 
             #     residual_stream = residual_stream + e
-            # case RescaleMethod.avg_prot_emb.value:
+            # case RescaleMethod.avg_prot_emb:
             #     residual_stream = residual_stream - e
             #     if self.enable_early_exit:
             #         update_factor = cum_sum[continue_mask].unsqueeze(1) * tau
@@ -194,24 +194,24 @@ class LayerModule(Module, ABC):
             #         residual_stream = residual_stream / 2 + update
 
             #     residual_stream = residual_stream + e
-        if self.norm_structure.value == NormStructure.post.value:
+        if self.norm_structure == NormStructure.post:
             residual_stream = norm_to_use(residual_stream)
 
         return residual_stream
 
     def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
         if (
-            self.norm_structure.value == NormStructure.peri.value
-            or self.norm_structure.value == NormStructure.pre.value
+            self.norm_structure == NormStructure.peri
+            or self.norm_structure == NormStructure.pre
         ):
             # Peri, Pre
             residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
             ffn_val_2 = residual_stream_normed
-        elif self.norm_structure.value == NormStructure.post.value:
+        elif self.norm_structure == NormStructure.post:
             ffn_val_1 = residual_stream
             ffn_val_2 = residual_stream
-        elif self.norm_structure.value == NormStructure.moeut.value:
+        elif self.norm_structure == NormStructure.moeut:
             residual_stream_normed = self.ffn_pre(residual_stream)
             ffn_val_1 = residual_stream_normed
             ffn_val_2 = residual_stream

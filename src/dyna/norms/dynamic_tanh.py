@@ -1,10 +1,9 @@
 import torch
-import torch.nn as nn
 from jaxtyping import Float
 from torch import Tensor
 
 
-class DynamicTanh(nn.Module):
+class DynamicTanh(torch.nn.Module):
     def __init__(
         self, normalized_shape: int, channels_last: bool, alpha_init_value: float = 0.5
     ):
@@ -14,9 +13,9 @@ class DynamicTanh(nn.Module):
         self.alpha_init_value = alpha_init_value
         self.channels_last = channels_last
 
-        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.alpha = torch.nn.Parameter(torch.ones(1) * alpha_init_value)
+        self.weight = torch.nn.Parameter(torch.ones(normalized_shape))
+        self.bias = torch.nn.Parameter(torch.zeros(normalized_shape))
 
     def forward(
         self, x: Float[Tensor, "batch seq d_model"]
@@ -27,6 +26,10 @@ class DynamicTanh(nn.Module):
         else:
             x = x * self.weight[:, None, None] + self.bias[:, None, None]
         return x
+
+    def reset_parameters(self):
+        torch.nn.init.ones_(self.weight)
+        torch.nn.init.zeros_(self.bias)
 
     def extra_repr(self):
         return f"""normalized_shape={self.normalized_shape},

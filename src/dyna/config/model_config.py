@@ -1,10 +1,6 @@
 from dataclasses import dataclass
 
-from dyna.config.enums import (
-    ExecutionMode,
-    NormStructure,
-    RescaleMethod,
-)
+from dyna.config.enums import ExecutionMode, NormStructure, NormType, RescaleMethod
 
 
 @dataclass
@@ -36,6 +32,7 @@ class ModelConfig:
     enable_early_exit: bool = True
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
     norm_structure: NormStructure = NormStructure.peri
+    norm_type: NormType = NormType.rmsnorm
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False

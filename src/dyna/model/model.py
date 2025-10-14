@@ -6,10 +6,10 @@ from composer.models.huggingface import HuggingFaceModel
 # from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Bool, Float, Int
+from llmfoundry.models.layers.layer_builders import build_norm
 from llmfoundry.utils.builders import build_metric
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.modules.normalization import RMSNorm
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
@@ -60,9 +60,10 @@ class DynaLM(DynaPretrainedModel):
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
 
-        # Output normalization - configurable type
-        norm_class = RMSNorm if config.use_rms_norm else torch.nn.LayerNorm
-        self.out_norm = norm_class(config.d_model)
+        # TODO: add norm_type to dynaconfig
+        self.out_norm = build_norm(
+            name=config.norm_type, normalized_shape=config.d_model
+        )
 
         # Provide LM head to transformer for entropy computation
         # The LM head cannot be used with no grad as

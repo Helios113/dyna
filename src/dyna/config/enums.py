@@ -24,3 +24,9 @@ class ExecutionMode(str, Enum):
     geiping_std = "geiping_std"
     geiping_moe = "geiping_moe"
     arbit = "arbit"
+
+
+class NormType(str, Enum):
+    layernorm = "low_precision_layernorm"
+    rmsnorm = "low_precision_rmsnorm"
+    dyt = "dynamic_thanh"

@@ -5,7 +5,6 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from torch.nn import ModuleList
-from torch.nn.modules.normalization import RMSNorm
 
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
@@ -149,7 +148,8 @@ class DynaFormer(DynaPretrainedModel):
         for layer in self.modules():
             if isinstance(layer, DynaModule):
                 layer.reset_parameters(scale)
-            elif isinstance(layer, RMSNorm):
+            elif hasattr(layer, "reset_parameters"):
+                assert isinstance(layer.reset_parameters, Callable)
                 layer.reset_parameters()
             elif isinstance(layer, torch.nn.LayerNorm):
                 torch.nn.init.ones_(layer.weight)
