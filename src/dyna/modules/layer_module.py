@@ -1,9 +1,6 @@
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 
 import torch
-from beartype import beartype
 
 # from composer.callbacks
 # Add jaxtyping imports
@@ -18,7 +15,6 @@ from .attention_module import AttentionModule
 from .dyna_module import DynaModule
 
 
-@beartype
 class LayerModule(Module, ABC):
     def __init__(
         self,

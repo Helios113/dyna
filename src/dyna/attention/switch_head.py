@@ -29,7 +29,9 @@ class SwitchHead(AttentionModule):
         rope_base: int = 10000,
     ):
         """Initialize SwitchHead with expert routing configuration."""
-        super().__init__(d_model, n_heads, d_head, rope_base)
+        super().__init__(
+            d_model=d_model, n_heads=n_heads, d_head=d_head, base=rope_base
+        )
         # Model configuration
         self.d_model = d_model
         self.n_heads = n_heads

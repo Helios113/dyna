@@ -36,7 +36,6 @@ class DynaFormer(DynaPretrainedModel):
         self.collect_reg_loss = config.collect_reg_loss
 
         # Size of head and tail
-        # TODO: add head_size and tail_size to config
         self.head_size = config.head_size
         self.tail_size = config.tail_size
 
@@ -46,7 +45,6 @@ class DynaFormer(DynaPretrainedModel):
         self.repeat_residual = config.repeat_residual
         self.min_loop_layers = self.n_repeats
         self.repeats = config.n_repeats
-        # TODO: add total_depth_for_init to config
         self.total_depth_for_init = config.total_depth_for_init
 
         # Execution behaviour
@@ -83,6 +81,8 @@ class DynaFormer(DynaPretrainedModel):
                 )
             # Geiping
             case ExecutionMode.geiping_std:
+                assert self.head_size > 0
+                assert self.tail_size > 0
                 self.head_layers = ModuleList(
                     [SimpleLayer(config) for _ in range(self.head_size)]
                 )
@@ -97,6 +97,8 @@ class DynaFormer(DynaPretrainedModel):
                 )
             # Arbit
             case ExecutionMode.arbit:
+                assert self.head_size > 0
+                assert self.tail_size > 0
                 self.head_layers = ModuleList(
                     [SimpleLayer(config) for _ in range(self.head_size)]
                 )
@@ -108,6 +110,8 @@ class DynaFormer(DynaPretrainedModel):
                 )
             # Geiping MOE
             case ExecutionMode.geiping_moe:
+                assert self.head_size > 0
+                assert self.tail_size > 0
                 self.head_layers = ModuleList(
                     [MoEUTLayer(config) for _ in range(self.head_size)]
                 )
