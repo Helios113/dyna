@@ -18,9 +18,10 @@ class BasicAttn(AttentionModule):
         dropout: float = 0.0,
         rotate_fraction: float = 1.0,
         rope_base: int = 10000,
+        nope_pos: bool = False,
     ):
         """Initialize BasicAttn with configurable parameters."""
-        super().__init__(d_model, n_heads, d_head, rope_base)
+        super().__init__(d_model, n_heads, d_head, rope_base, nope_pos)
         # Model configuration
         self.d_model = d_model
         self.n_heads = n_heads

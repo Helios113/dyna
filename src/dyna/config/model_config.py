@@ -37,3 +37,4 @@ class ModelConfig:
     sample_iterations: bool = False
     repeat_residual: bool = False
     perfiery_size: int = 2
+    nope_pos: bool = False

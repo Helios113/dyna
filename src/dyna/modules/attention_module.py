@@ -33,6 +33,7 @@ class AttentionModule(DynaModule):
         n_heads: int,
         d_head: int,
         base: int = 10000,
+        nope_pos: bool = False,
     ) -> None:
         """Base attention module with RoPE (Rotary Position Encoding) support.
 
@@ -46,6 +47,7 @@ class AttentionModule(DynaModule):
             d_head: Dimension of each attention head.
             base: Base value for rotary position encoding frequency computation
                 (default: 10000).
+            nope_pos: Whether to use nope position encoding.
         """
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         # Compute inverse frequencies
@@ -60,6 +62,7 @@ class AttentionModule(DynaModule):
 
         self.n_heads = n_heads
         self.d_head = d_head
+        self.nope_pos = nope_pos
 
     def attend(
         self,
@@ -81,6 +84,7 @@ class AttentionModule(DynaModule):
             q: Query tensor of shape (batch, n_heads, seq, d_head).
             attention_mask: Attention mask tensor.
             sequence_length: Position indices for RoPE of shape (batch, seq).
+            nope_pos: where to apply NoPe position encoding
 
         Returns:
             Attention output tensor of shape (batch, n_heads, seq, d_head).
@@ -88,7 +92,8 @@ class AttentionModule(DynaModule):
         # Apply rotary position encoding
         # Remove debug print that could cause issues
 
-        q, k = self._apply_rope(q, k, sequence_length)
+        if not self.nope_pos:
+            q, k = self._apply_rope(q, k, sequence_length)
 
         # Explicitly remove scaling, as we scale in the body in the transformer
         # TODO: return scaling

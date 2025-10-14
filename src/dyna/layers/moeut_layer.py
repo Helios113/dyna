@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import torch
 from jaxtyping import Float, Int
 from torch import Tensor
@@ -26,6 +24,7 @@ class MoEUTLayer(LayerModule):
                 dropout_expert=config.dropout_expert_attn,
                 k_attn=config.k_attn,
                 n_expert_shared_attn=config.n_expert_shared_attn,
+                nope_pos=config.nope_pos,
             ),
             ffn_module=SigmaMoE(
                 config.d_model,

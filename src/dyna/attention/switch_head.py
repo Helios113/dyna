@@ -27,10 +27,15 @@ class SwitchHead(AttentionModule):
         n_expert_shared_attn: int = 0,
         rotate_fraction: float = 1,
         rope_base: int = 10000,
+        nope_pos: bool = False,
     ):
         """Initialize SwitchHead with expert routing configuration."""
         super().__init__(
-            d_model=d_model, n_heads=n_heads, d_head=d_head, base=rope_base
+            d_model=d_model,
+            n_heads=n_heads,
+            d_head=d_head,
+            base=rope_base,
+            nope_pos=nope_pos,
         )
         # Model configuration
         self.d_model = d_model

@@ -20,6 +20,7 @@ class SimpleLayer(LayerModule):
                 n_heads=config.n_heads,
                 d_head=config.d_head,
                 dropout=config.dropout,
+                nope_pos=config.nope_pos,
             ),
             BasicFFN(
                 config.d_model,
@@ -39,7 +40,8 @@ class SimpleLayer(LayerModule):
         layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        mask: tuple[Bool[Tensor, "batch 1 seq seq"], Int[Tensor, "batch seq"]],
+        attention_mask: Bool[Tensor, "batch 1 seq seq"],
+        sequence_length: Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
@@ -55,11 +57,9 @@ class SimpleLayer(LayerModule):
             x = self.input_projection(x)
 
         q_val, k_val, v_val = self._apply_pre_norm_attn(x)
+
         att_out, expert_sel_attn = self.attention(
-            q_val,
-            k_val,
-            v_val,
-            mask,
+            q_val, k_val, v_val, attention_mask, sequence_length
         )
 
         x = self._apply_update_to_residual(
