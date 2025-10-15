@@ -61,7 +61,12 @@ class DynaLM(DynaPretrainedModel):
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
-
+        if config.use_embedding_norm:
+            self.embedding_norm = build_norm(
+                name=config.norm_type, normalized_shape=config.d_model
+            )
+        else:
+            self.embedding_norm = None
         self.out_norm = build_norm(
             name=config.norm_type, normalized_shape=config.d_model
         )
@@ -174,7 +179,10 @@ class DynaLM(DynaPretrainedModel):
                 attention_mask = self._generate_attention_mask(input_ids)
             if src_len_mask is None:
                 src_len_mask = self._generate_source_len_mask(attention_mask)
-
+        if self.embedding_norm is not None:
+            x = self.embedding_norm(x)
+        elif self.embedding_norm is None:
+            x = x
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
 
