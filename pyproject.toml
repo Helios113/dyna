@@ -29,6 +29,7 @@ dependencies = [
     "ruff>=0.7.0",
     "pre-commit>=4.3.0",
     "docformatter>=1.7.7",
+    "pytest>=8.0.0",
 ]
 
 [build-system]
