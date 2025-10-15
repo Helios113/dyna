@@ -8,7 +8,7 @@ from dyna.config.enums import (
 
 
 @dataclass
-class DynaConfig:
+class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
     execution_mode: ExecutionMode = ExecutionMode.moe
     vocab_size: int = 49152

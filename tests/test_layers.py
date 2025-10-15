@@ -1,6 +1,6 @@
 """Basic tests for layers submodule."""
 
-from dyna.config import DynaConfig
+from dyna.config import ModelConfig
 from dyna.layers import SimpleLayer
 
 
@@ -11,6 +11,6 @@ def test_layers_import():
 
 def test_layers_instantiation():
     """Test basic layer instantiation."""
-    config = DynaConfig()
+    config = ModelConfig()
     layer = SimpleLayer(config)
     assert layer is not None

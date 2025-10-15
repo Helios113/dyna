@@ -18,7 +18,7 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from dyna.config import (
     DataConfig,
     FSDPConfig,
-    DynaConfig,
+    ModelConfig,
     SchedulerConfig,
     TrainerConfig,
 )
@@ -225,7 +225,7 @@ def build_full_concrete_config(cfg: DictConfig):
     """
     OmegaConf.resolve(cfg)
     # Model Config
-    model_schema = OmegaConf.structured(DynaConfig)
+    model_schema = OmegaConf.structured(ModelConfig)
     model_config = OmegaConf.merge(model_schema, cfg.model_config)
 
     # Trainer Config

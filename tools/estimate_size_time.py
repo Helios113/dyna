@@ -12,7 +12,7 @@ sys.path.insert(0, PROJECT_ROOT)
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from dyna.config import DynaConfig
+from dyna.config import ModelConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils.utils import build_full_concrete_config
 
@@ -30,7 +30,7 @@ def main(cfg: DictConfig):
     model_cfg_dict = OmegaConf.to_container(model_cfg, resolve=True)
 
     # Convert to MoEUTConfig (inherits from PretrainedConfig)
-    hf_cfg = DynaConfig(**model_cfg_dict)
+    hf_cfg = ModelConfig(**model_cfg_dict)
     # Instantiate model and move to CUDA
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")

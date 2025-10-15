@@ -6,7 +6,7 @@ from composer.loggers import WandBLogger
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer
 
-from dyna.config import DynaConfig
+from dyna.config import ModelConfig
 from dyna.model.model import ComposerDynaModel
 from dyna.utils.utils import (
     build_full_concrete_config,
@@ -37,7 +37,7 @@ def main(cfg: DictConfig):
     tokenizer.pad_token = tokenizer.eos_token
 
     # Create model
-    conf = DynaConfig(**cfg.model_config)
+    conf = ModelConfig(**cfg.model_config)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
 
     # Get evaluation dataloader
