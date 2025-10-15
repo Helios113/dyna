@@ -3,6 +3,7 @@ from .dyna_config import DynaConfig
 from .enums import ExecutionMode, NormStructure, RescaleMethod
 from .fsdp_config import FSDPConfig
 from .model_config import ModelConfig
+from .dyna_config import DynaConfig
 from .scheduler_config import SchedulerConfig
 from .trainer_config import TrainerConfig
 CROSS_ENTROPY_IGNORE_INDEX = -100
