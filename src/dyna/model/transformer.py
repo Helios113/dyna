@@ -32,8 +32,8 @@ class DynaFormer(DynaPretrainedModel):
         # Moeut regularization entropy
         self.reg_entropy = config.reg_entropy
         self.reg_entropy_attn = config.reg_entropy_attn
-        self.collect_reg_loss = config.collect_reg_loss
-
+        self.use_reg_loss = config.use_reg_loss
+        self.use_energy_per_sample = config.use_energy_per_sample
         # Size of head and tail
         self.head_size = config.head_size
         self.tail_size = config.tail_size
@@ -156,7 +156,7 @@ class DynaFormer(DynaPretrainedModel):
                 torch.nn.init.zeros_(layer.bias)
 
     def _collect_regularization_loss(self) -> torch.Tensor:
-        if not self.collect_reg_loss:
+        if not self.use_reg_loss:
             device = next(self.parameters()).device
             dtype = next(self.parameters()).dtype
             return torch.tensor(0.0, device=device, dtype=dtype)
@@ -324,13 +324,14 @@ class DynaFormer(DynaPretrainedModel):
         continue_processing = True
         x = x_out
         if old_continue_mask is not None:
-            assert energy_per_sample is not None
-            energy_per_sample = torch.scatter_add(
-                energy_per_sample.view(-1),
-                0,
-                old_continue_mask,
-                saturation_event.view(-1)[old_continue_mask],
-            ).reshape(energy_per_sample.shape)
+            if self.use_energy_per_sample:
+                assert energy_per_sample is not None
+                energy_per_sample = torch.scatter_add(
+                    energy_per_sample.view(-1),
+                    0,
+                    old_continue_mask,
+                    saturation_event.view(-1)[old_continue_mask],
+                ).reshape(energy_per_sample.shape)
             saturation_event_tmp = torch.scatter(
                 torch.zeros_like(saturation_event).view(-1),
                 0,
@@ -346,7 +347,8 @@ class DynaFormer(DynaPretrainedModel):
                 reduce="prod",
             ).reshape(x.shape)
         else:
-            energy_per_sample = saturation_event
+            if self.use_energy_per_sample:
+                energy_per_sample = saturation_event
             continue_mask = self.mask_to_scatter_index(saturation_event)
 
             x = torch.scatter_reduce(
