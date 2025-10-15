@@ -1,5 +1,5 @@
 from dyna.config import ExecutionMode, NormStructure, RescaleMethod
-from dyna.modules.dyna_module import DynaModule
+from dyna.modules.dyna_module import DynaModule, entropy_reg
 from dyna.modules.layer_module import LayerModule
 from dyna.modules.layer_scaled_identity_fn import LayerScaledIdentityFn
 from dyna.modules.saturation_gate import SaturationGate
@@ -17,4 +17,5 @@ __all__ = [
     "SaturationGate",
     "LayerScaledIdentityFn",
     "AttentionModule",
+    "entropy_reg",
 ]

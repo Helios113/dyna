@@ -7,7 +7,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from dyna.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
-from dyna.modules import AttentionModule
+from dyna.modules import AttentionModule, entropy_reg
 
 
 class SwitchHead(AttentionModule):
@@ -28,6 +28,7 @@ class SwitchHead(AttentionModule):
         rotate_fraction: float = 1,
         rope_base: int = 10000,
         nope_pos: bool = False,
+        use_bias: bool = True,
     ):
         """Initialize SwitchHead with expert routing configuration."""
         super().__init__(
@@ -41,6 +42,7 @@ class SwitchHead(AttentionModule):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
+        self.use_bias = use_bias
 
         def identity_pytorch(x: torch.Tensor) -> torch.Tensor:
             return x
@@ -82,7 +84,7 @@ class SwitchHead(AttentionModule):
 
         # Tracking variables for visualization
         self.selections_to_visualize = {}
-        # self.sel_hist:list[torch.Tensor]
+        self.sel_hist: list[tuple[Tensor, Tensor]] = []
 
         self.call_h = 0
 
@@ -142,15 +144,16 @@ class SwitchHead(AttentionModule):
 
     def get_reg_loss(self) -> Float[Tensor, " dim"]:
         """Get regularization loss from selection history."""
-        loss = torch.tensor(0.0, device=next(self.parameters()).device)
-        # if self.sel_hist:
-        #     for i in range(len(self.sel_hist[0])):
-        #         loss = loss + entropy_reg(
-        #            torch.stack([l[i] for l in self.sel_hist], dim=-3).flatten(-4, -3),
-        #             -3,
-        #         )
-        # # Clear the history to prevent memory accumulation
-        # self.sel_hist.clear()
+        loss = torch.tensor(0.0)
+        if self.sel_hist:
+            for i in range(len(self.sel_hist[0])):
+                loss = loss + entropy_reg(
+                    torch.stack(
+                        [selection[i] for selection in self.sel_hist], dim=-3
+                    ).flatten(-4, -3),
+                    -3,
+                )
+        self.sel_hist.clear()
         return loss
 
     def _get_expert_selection(
@@ -206,7 +209,7 @@ class SwitchHead(AttentionModule):
             sel_index = torch.cat([sel_index, expert_shared_expanded], dim=-1)
 
         # Update bias for load balancing
-        if self.training and bias is not None:
+        if self.use_bias and self.training and bias is not None:
             with torch.no_grad():
                 c_i = torch.bincount(sel_index.flatten(), minlength=self.n_experts_attn)
                 c_i_avg = torch.mean(c_i, dtype=torch.float32)
@@ -266,8 +269,8 @@ class SwitchHead(AttentionModule):
                 q_src, self.sel_o, self.bias_o
             )
             # Commented for mem reduction
-            # if self.training:
-            #     self.sel_hist.append((o_sel_r, v_sel_r))
+            if self.training:
+                self.sel_hist.append((o_sel_r, v_sel_r))
             v_val: Float[Tensor, "batch n_heads seq d_head"] = cvmm(
                 v_src, v_sel, self.v
             ).transpose(-2, -3)

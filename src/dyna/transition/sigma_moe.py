@@ -9,7 +9,7 @@ from torch import Tensor
 
 from dyna.cvmm.cvmm import cvmm
 from dyna.cvmm.cvmm_sel import cvmm_prepare_sel2
-from dyna.modules.attention_module import entropy_reg
+from dyna.modules import entropy_reg
 from dyna.modules.dyna_module import DynaModule
 
 
@@ -25,12 +25,14 @@ class SigmaMoE(DynaModule):
         k_ffn: int,
         activation: Callable[[torch.Tensor], torch.Tensor] = torch.nn.functional.gelu,
         dropout_expert: float = 0.0,
+        use_bias: bool = True,
     ):
         """Initialize SigmaMoE with configurable parameters."""
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.d_model = d_model
         self.n_experts_ffn = n_experts_ffn
         self.d_expert_ffn = d_expert_ffn
+        self.use_bias = use_bias
         self.n_expert_shared_ffn = min(n_expert_shared_ffn, n_experts_ffn)
         self.n_expert_routed_ffn = n_experts_ffn - self.n_expert_shared_ffn
         self.k_ffn = k_ffn
@@ -65,7 +67,7 @@ class SigmaMoE(DynaModule):
             requires_grad=False,
         )
 
-        self.selection_history_s_moe = []
+        self.sel_hist = []
 
     def reset_parameters(self, std_scale: float) -> None:
         """Initialize parameters with proper scaling."""
@@ -148,7 +150,7 @@ class SigmaMoE(DynaModule):
         affinity = torch.gather(affinity, -1, selection_index)
 
         # Update bias for load balancing during training
-        if self.training and self.n_expert_routed_ffn > 0:
+        if self.use_bias and self.training and self.n_expert_routed_ffn > 0:
             assert self.bias_ffn is not None  # For type checker
             with torch.no_grad():  # Prevent gradient accumulation
                 c_i = torch.bincount(
@@ -171,7 +173,8 @@ class SigmaMoE(DynaModule):
         """Forward pass through the MoE layer."""
         # Get expert selection
         affinity, selection_index = self._compute_expert_selection(selection_input)
-        # self.selection_history_s_moe.append(affinity.clone().detach())
+        if self.training:
+            self.sel_hist.append(affinity)
         # Detach to avoid storing gradients
 
         # Prepare selection indices for CVMM operations
@@ -195,16 +198,8 @@ class SigmaMoE(DynaModule):
         return out.view_as(token_stream), selection_index
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
-        """Get regularization loss and reset selection history."""
-        if not self.selection_history_s_moe:
-            return torch.tensor(
-                0.0, device=self.keys.device
-            )  # Ensure tensor is on the correct device
-
         # Average over time and layers
-        loss = entropy_reg(
-            torch.stack(self.selection_history_s_moe, dim=-2).flatten(-3, -2), -2
-        )
+        loss = entropy_reg(torch.stack(self.sel_hist, dim=-2).flatten(-3, -2), -2)
         # Clear the history to prevent memory accumulation
-        self.selection_history_s_moe.clear()
+        self.sel_hist.clear()
         return loss

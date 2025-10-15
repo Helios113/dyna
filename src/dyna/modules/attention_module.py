@@ -1,29 +1,10 @@
 from __future__ import annotations
 
-import math
-
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from . import DynaModule
-
-
-def log_mean(x: Float[Tensor, "*batch dim"], dim: int = 0) -> Float[Tensor, "*batch"]:
-    """Compute log of mean along specified dimension."""
-    return x.logsumexp(dim) - math.log(x.shape[dim])
-
-
-def entropy_l(log_probs: Float[Tensor, "*batch dim"]) -> Float[Tensor, "*batch"]:
-    """Compute entropy from log probabilities."""
-    return -(log_probs * log_probs.exp()).sum(-1)
-
-
-def entropy_reg(sel: Float[Tensor, "*batch n_experts"], dim: int) -> Float[Tensor, ""]:
-    """Compute entropy regularization term."""
-    sel = torch.nn.functional.log_softmax(sel, dim=-1)
-    sel = log_mean(sel, dim)
-    return -entropy_l(sel).mean()
 
 
 class AttentionModule(DynaModule):

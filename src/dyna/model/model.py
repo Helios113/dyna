@@ -54,13 +54,14 @@ class DynaLM(DynaPretrainedModel):
         self.eos_token_id = eos_token_id
         self.rescaling_method = config.rescaling_method
         self.sample_iterations = config.sample_iterations
+        self.use_energy_per_sample = config.use_energy_per_sample
+        self.use_reg_loss = config.use_reg_loss
 
         # Input/output layers
         self.embedding = torch.nn.Embedding(config.vocab_size, config.d_model)
         self.lm_head = torch.nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
 
-        # TODO: add norm_type to dynaconfig
         self.out_norm = build_norm(
             name=config.norm_type, normalized_shape=config.d_model
         )
@@ -199,13 +200,23 @@ class DynaLM(DynaPretrainedModel):
                 _labels.to(logits.device).view(-1),
                 reduction="none",
             )
-            loss = losses.flatten() * energy_per_sample.flatten()
+            loss = losses.flatten()
+
+            # energy per sample for early exit
+            if self.use_energy_per_sample:
+                loss = loss * energy_per_sample.flatten()
+
             # Reduce the loss according to the correct tokens
             if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
                 loss = loss.sum()
             else:
                 loss = loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()  # type: ignore
 
+            # Reg loss for moeut
+            if self.use_reg_loss:
+                loss = loss + self.transformer._collect_regularization_loss()
+
+        assert isinstance(loss, torch.FloatTensor)
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
