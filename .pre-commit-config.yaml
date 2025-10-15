@@ -27,3 +27,13 @@ repos:
       rev: v1.13.0
       hooks:
           - id: basedpyright
+    - repo: local
+      hooks:
+          - id: pytest
+            name: pytest
+            entry: pytest
+            language: system
+            pass_filenames: false
+            always_run: true
+            args: ["-v"]
+            stages: [pre-push]

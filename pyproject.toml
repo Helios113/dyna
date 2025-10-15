@@ -30,6 +30,8 @@ dependencies = [
     "pre-commit>=4.3.0",
     "docformatter>=1.7.7",
     "sphinx-rtd-theme>=3.0.2",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
 ]
 
 [build-system]
