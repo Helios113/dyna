@@ -2,8 +2,13 @@ import random
 
 import hydra
 import numpy as np
-import torch
-from model.modules.model_config import ModelConfig
+from transformers import AutoTokenizer
+from model.modules.model_config import DynaConfig, TrainerConfig
+from model.model import ComposerMoEUT, MoEUTConfig
+from composer import Trainer
+from streaming import StreamingDataset
+import os
+import hydra
 from omegaconf import DictConfig, OmegaConf
 from tools.old_model import MoEUTLM_old
 
@@ -25,7 +30,7 @@ def main(cfg: DictConfig):
 
     # CONFIGS
     # Model Config
-    model_schema = OmegaConf.structured(ModelConfig)
+    model_schema = OmegaConf.structured(DynaConfig)
     model_config = cfg.model_config
     model_config = OmegaConf.merge(model_schema, model_config)
 
