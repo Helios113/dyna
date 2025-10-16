@@ -32,7 +32,7 @@ class ModelConfig:
     enable_early_exit: bool = True
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
     norm_structure: NormStructure = NormStructure.peri
-    norm_type: NormType = NormType.rmsnorm
+    norm_type: NormType = NormType.low_precision_rmsnorm
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False

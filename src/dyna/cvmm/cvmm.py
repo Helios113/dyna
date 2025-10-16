@@ -1,8 +1,9 @@
-from __future__ import annotations
+
 
 import torch
-import triton
-import triton.language as tl
+if torch.cuda.is_available():
+    import triton
+    import triton.language as tl
 from beartype import BeartypeConf, BeartypeStrategy, beartype
 from packaging import version
 
@@ -30,175 +31,473 @@ def dtype_to_type_id(dtype: torch.dtype):
 
     raise ValueError("Unknown dtype")
 
-
-@triton.autotune(
-    configs=[
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 256,
-                "BLOCK_SIZE_K": 64,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=3,
-            num_warps=8,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 256,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 256,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 128,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 128,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=5,
-            num_warps=2,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=5,
-            num_warps=2,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-    ],
-    key=["M", "N", "K", "dtype_id", "allow_tf32"],
-)
-@triton.jit
-def cvmm_kernel(
-    # Pointers to matrices
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    index_ptr,
-    sel_ptr,
-    out_index_ptr,
-    # Matrix dimensions
-    M,
-    N,
-    K,
-    # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension.
-    # E.g. `stride_am` is how much to increase `a_ptr`
-    # by to get the element one row down (A has M rows).
-    stride_am,
-    stride_ak,
-    stride_bo,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
-    stride_index,
-    stride_sel,
-    stride_out_index,
-    out_index_is_none: tl.constexpr,
-    dtype_id: tl.constexpr,
-    allow_tf32: tl.constexpr,
-    # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-):
-    """Kernel for computing the matmul C = A x B.
-
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section for details.
-    pid = tl.program_id(axis=0)
-
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_n = (pid % num_pid_in_group) // group_size_m
-
-    pid_m = first_pid_m + (pid % group_size_m)
-
-    sel_first = tl.load(sel_ptr + pid_m * BLOCK_SIZE_M * stride_sel)
-    sel_last = tl.load(sel_ptr + (min((pid_m + 1) * BLOCK_SIZE_M, M) - 1) * stride_sel)
-    sel_all = tl.load(
-        sel_ptr + stride_sel * ((pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
+if torch.cuda.is_available():
+    @triton.autotune(
+        configs=[
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 128,
+                    "BLOCK_SIZE_N": 256,
+                    "BLOCK_SIZE_K": 64,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=3,
+                num_warps=8,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 256,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 256,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 128,
+                    "BLOCK_SIZE_N": 128,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 128,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 128,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 128,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=5,
+                num_warps=2,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=5,
+                num_warps=2,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 32,
+                    "GROUP_SIZE_M": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+        ],
+        key=["M", "N", "K", "dtype_id", "allow_tf32"],
     )
+    @triton.jit
+    def cvmm_kernel(
+        # Pointers to matrices
+        a_ptr,
+        b_ptr,
+        c_ptr,
+        index_ptr,
+        sel_ptr,
+        out_index_ptr,
+        # Matrix dimensions
+        M,
+        N,
+        K,
+        # The stride variables represent how much to increase the ptr by when moving by 1
+        # element in a particular dimension.
+        # E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
+        stride_am,
+        stride_ak,
+        stride_bo,
+        stride_bk,
+        stride_bn,
+        stride_cm,
+        stride_cn,
+        stride_index,
+        stride_sel,
+        stride_out_index,
+        out_index_is_none: tl.constexpr,
+        dtype_id: tl.constexpr,
+        allow_tf32: tl.constexpr,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr,
+        BLOCK_SIZE_N: tl.constexpr,
+        BLOCK_SIZE_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+    ):
+        """Kernel for computing the matmul C = A x B.
 
-    for matrix_id in range(sel_first, sel_last + 1):
+        A has shape (M, K), B has shape (K, N) and C has shape (M, N)
+        """
+        # -----------------------------------------------------------
+        # Map program ids `pid` to the block of C it should compute.
+        # This is done in a grouped ordering to promote L2 data reuse.
+        # See above `L2 Cache Optimizations` section for details.
+        pid = tl.program_id(axis=0)
+
+        num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+        num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+
+        pid_m = first_pid_m + (pid % group_size_m)
+
+        sel_first = tl.load(sel_ptr + pid_m * BLOCK_SIZE_M * stride_sel)
+        sel_last = tl.load(sel_ptr + (min((pid_m + 1) * BLOCK_SIZE_M, M) - 1) * stride_sel)
+        sel_all = tl.load(
+            sel_ptr + stride_sel * ((pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
+        )
+
+        for matrix_id in range(sel_first, sel_last + 1):
+            # ----------------------------------------------------------
+            # Create pointers for the first blocks of A and B.
+            # We will advance this pointer as we move in the K direction
+            # and accumulate
+            # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
+            # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+            # See above `Pointer Arithmetics` section for details
+            offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+            offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+
+            remap_offs_am = tl.load(index_ptr + stride_index * offs_am)
+
+            # Create offset pointers
+            offs_k = tl.arange(0, BLOCK_SIZE_K)
+            a_ptrs = a_ptr + (
+                remap_offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
+            )
+            b_ptrs = (
+                b_ptr
+                + matrix_id * stride_bo
+                + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+            )
+
+            # -----------------------------------------------------------
+            # Iterate to compute a block of the C matrix.
+            # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
+            # of fp32 values for higher accuracy.
+            # `accumulator` will be converted back to fp16 after the loop.
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+            for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+                # Load the next block of A and B, generate a mask by checking the K dimension.
+                # If it is out of bounds, set it to 0.
+                a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+                b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+                # We accumulate along the K dimension.
+
+                # Triton was unhappy with passing dtypes as vars.
+                if dtype_id == 1:
+                    a = a.to(tl.float16)
+                    b = b.to(tl.float16)
+                elif dtype_id == 2:
+                    a = a.to(tl.bfloat16)
+                    b = b.to(tl.bfloat16)
+
+                accumulator += tl.dot(a, b, allow_tf32=allow_tf32)
+
+                # Advance the ptrs to the next K block.
+                a_ptrs += BLOCK_SIZE_K * stride_ak
+                b_ptrs += BLOCK_SIZE_K * stride_bk
+
+            if dtype_id == 1:
+                c = accumulator.to(tl.float16)
+            elif dtype_id == 2:
+                c = accumulator.to(tl.bfloat16)
+            else:
+                c = accumulator
+
+            # -----------------------------------------------------------
+            # Write back the block of the output matrix C with masks.
+            offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+
+            if out_index_is_none:
+                remap_offs_cm = remap_offs_am
+            else:
+                remap_offs_cm = tl.load(out_index_ptr + stride_out_index * offs_am)
+
+            offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+            c_ptrs = (
+                c_ptr + stride_cm * remap_offs_cm[:, None] + stride_cn * offs_cn[None, :]
+            )
+            c_mask = ((offs_cm[:, None] < M) & (sel_all[:, None] == matrix_id)) & (
+                offs_cn[None, :] < N
+            )
+            tl.store(c_ptrs, c, mask=c_mask)
+
+if torch.cuda.is_available():
+    @triton.autotune(
+        configs=[
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 64,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 16,
+            # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 32,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 4,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 64,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16,
+            # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 32,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 8,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 16,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 16,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 64,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 64,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 32,
+                    "BLOCK_SIZE_N": 64,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 32,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+            triton.Config(
+                {
+                    "BLOCK_SIZE_M": 64,
+                    "BLOCK_SIZE_N": 32,
+                    "BLOCK_SIZE_K": 16,
+                    "GROUP_SIZE_M": 8,
+                    "K_BLOCKS": 32,
+                },
+                num_stages=4,
+                num_warps=4,
+            ),
+        ],
+        key=["M", "N", "K", "out_dtype_id", "allow_tf32", "dtype_id"],
+        reset_to_zero=["c_ptr"],
+    )
+    @triton.jit
+    @nobeartype
+    def cvmm_backward_kernel3(
+        # Pointers to matrices
+        a_ptr,
+        b_ptr,
+        c_ptr,
+        index_ptr,
+        sel_ptr,
+        out_index_ptr,
+        # Matrix dimensions
+        M,
+        N,
+        K,
+        # The stride variables represent how much to increase the ptr by when moving by 1
+        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
+        stride_am,
+        stride_ak,
+        stride_bk,
+        stride_bn,
+        stride_co,
+        stride_cm,
+        stride_cn,
+        stride_index,
+        stride_sel,
+        stride_out_index,
+        out_index_is_none: tl.constexpr,
+        out_dtype_id: tl.constexpr,
+        allow_tf32: tl.constexpr,
+        dtype_id: tl.constexpr,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr,
+        BLOCK_SIZE_N: tl.constexpr,
+        BLOCK_SIZE_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+        K_BLOCKS: tl.constexpr,
+    ):
+        """Kernel for computing the matmul C = A x B.
+
+        A has shape (M, K), B has shape (K, N) and C has shape (M, N)
+        """
+        # -----------------------------------------------------------
+        # Map program ids `pid` to the block of C it should compute.
+        # This is done in a grouped ordering to promote L2 data reuse.
+        # See above `L2 Cache Optimizations` section for details.
+        pid = tl.program_id(axis=0)
+        k_block_id = tl.program_id(axis=1)
+
+        num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+        num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (pid % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+
         # ----------------------------------------------------------
         # Create pointers for the first blocks of A and B.
         # We will advance this pointer as we move in the K direction
@@ -209,412 +508,114 @@ def cvmm_kernel(
         offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
         offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
 
-        remap_offs_am = tl.load(index_ptr + stride_index * offs_am)
-
-        # Create offset pointers
-        offs_k = tl.arange(0, BLOCK_SIZE_K)
-        a_ptrs = a_ptr + (
-            remap_offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
-        )
-        b_ptrs = (
-            b_ptr
-            + matrix_id * stride_bo
-            + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-        )
-
         # -----------------------------------------------------------
         # Iterate to compute a block of the C matrix.
         # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
         # of fp32 values for higher accuracy.
         # `accumulator` will be converted back to fp16 after the loop.
-        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-            # Load the next block of A and B, generate a mask by checking the K dimension.
-            # If it is out of bounds, set it to 0.
-            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-            # We accumulate along the K dimension.
 
-            # Triton was unhappy with passing dtypes as vars.
-            if dtype_id == 1:
-                a = a.to(tl.float16)
-                b = b.to(tl.float16)
-            elif dtype_id == 2:
-                a = a.to(tl.bfloat16)
-                b = b.to(tl.bfloat16)
+        a_ptrs_this = a_ptr + offs_am[:, None] * stride_am
+        b_ptrs_this = b_ptr + offs_bn[None, :] * stride_bn
 
-            accumulator += tl.dot(a, b, allow_tf32=allow_tf32)
+        # Kactual = end_i - start_i
+        # Nblocks = (Kactual + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K
 
-            # Advance the ptrs to the next K block.
-            a_ptrs += BLOCK_SIZE_K * stride_ak
-            b_ptrs += BLOCK_SIZE_K * stride_bk
+        # WORK_PER_WORKER = (Nblocks + K_BLOCKS - 1) // K_BLOCKS
+        # WORK_PER_WORKER = WORK_PER_WORKER if WORK_PER_WORKER > MIN_WORK_SIZE else MIN_WORK_SIZE
 
-        if dtype_id == 1:
-            c = accumulator.to(tl.float16)
-        elif dtype_id == 2:
-            c = accumulator.to(tl.bfloat16)
-        else:
-            c = accumulator
+        # # Kloop_start = (Kactual + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K
 
-        # -----------------------------------------------------------
-        # Write back the block of the output matrix C with masks.
-        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+        # first_block_k = k_block_id * WORK_PER_WORKER
+        # last_block_k = min((k_block_id+1) * WORK_PER_WORKER, Nblocks)
 
-        if out_index_is_none:
-            remap_offs_cm = remap_offs_am
-        else:
-            remap_offs_cm = tl.load(out_index_ptr + stride_out_index * offs_am)
+        block_start_index = k_block_id * BLOCK_SIZE_K * K_BLOCKS
+        block_end_index = min(block_start_index + BLOCK_SIZE_K * K_BLOCKS, K) - 1
 
-        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-        c_ptrs = (
-            c_ptr + stride_cm * remap_offs_cm[:, None] + stride_cn * offs_cn[None, :]
-        )
-        c_mask = ((offs_cm[:, None] < M) & (sel_all[:, None] == matrix_id)) & (
-            offs_cn[None, :] < N
-        )
-        tl.store(c_ptrs, c, mask=c_mask)
+        first_mat = tl.load(sel_ptr + stride_sel * block_start_index)
+        last_mat = tl.load(sel_ptr + stride_sel * block_end_index)
 
+        for matrix_index in range(first_mat, last_mat + 1):
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-@triton.autotune(
-    configs=[
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 64,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 16,
-        # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 32,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 4,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 64,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16,
-        # 'GROUP_SIZE_M': 8, 'K_BLOCKS': 128}, num_stages=4, num_warps=4),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 32,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 16,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 16,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 64,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 64,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 32,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 16,
-                "GROUP_SIZE_M": 8,
-                "K_BLOCKS": 32,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-    ],
-    key=["M", "N", "K", "out_dtype_id", "allow_tf32", "dtype_id"],
-    reset_to_zero=["c_ptr"],
-)
-@triton.jit
-@nobeartype
-def cvmm_backward_kernel3(
-    # Pointers to matrices
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    index_ptr,
-    sel_ptr,
-    out_index_ptr,
-    # Matrix dimensions
-    M,
-    N,
-    K,
-    # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
-    # by to get the element one row down (A has M rows).
-    stride_am,
-    stride_ak,
-    stride_bk,
-    stride_bn,
-    stride_co,
-    stride_cm,
-    stride_cn,
-    stride_index,
-    stride_sel,
-    stride_out_index,
-    out_index_is_none: tl.constexpr,
-    out_dtype_id: tl.constexpr,
-    allow_tf32: tl.constexpr,
-    dtype_id: tl.constexpr,
-    # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-    K_BLOCKS: tl.constexpr,
-):
-    """Kernel for computing the matmul C = A x B.
-
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section for details.
-    pid = tl.program_id(axis=0)
-    k_block_id = tl.program_id(axis=1)
-
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
-
-    # ----------------------------------------------------------
-    # Create pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
-    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetics` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-
-    # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix.
-    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
-
-    a_ptrs_this = a_ptr + offs_am[:, None] * stride_am
-    b_ptrs_this = b_ptr + offs_bn[None, :] * stride_bn
-
-    # Kactual = end_i - start_i
-    # Nblocks = (Kactual + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K
-
-    # WORK_PER_WORKER = (Nblocks + K_BLOCKS - 1) // K_BLOCKS
-    # WORK_PER_WORKER = WORK_PER_WORKER if WORK_PER_WORKER > MIN_WORK_SIZE else MIN_WORK_SIZE
-
-    # # Kloop_start = (Kactual + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K
-
-    # first_block_k = k_block_id * WORK_PER_WORKER
-    # last_block_k = min((k_block_id+1) * WORK_PER_WORKER, Nblocks)
-
-    block_start_index = k_block_id * BLOCK_SIZE_K * K_BLOCKS
-    block_end_index = min(block_start_index + BLOCK_SIZE_K * K_BLOCKS, K) - 1
-
-    first_mat = tl.load(sel_ptr + stride_sel * block_start_index)
-    last_mat = tl.load(sel_ptr + stride_sel * block_end_index)
-
-    for matrix_index in range(first_mat, last_mat + 1):
-        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-        start_i = block_start_index
-        end_i = block_end_index + 1
-        while start_i < end_i:
-            middle = (start_i + end_i) // 2
-            middle_matrix = tl.load(sel_ptr + middle * stride_sel)
-            if middle_matrix < matrix_index:
-                start_i = middle + 1
-            else:
-                end_i = middle
-
-        # # Continue binary search: find the first matrix that is > matrix_index
-        start_i2 = start_i
-        end_i = block_end_index + 1
-        while start_i2 < end_i:
-            middle = (start_i2 + end_i) // 2
-            middle_matrix = tl.load(sel_ptr + middle * stride_sel)
-            if middle_matrix <= matrix_index:
-                start_i2 = middle + 1
-            else:
-                end_i = middle
-
-        end_i = start_i2
-
-        count = end_i - start_i
-
-        block_mem_indices_f_base = start_i + tl.arange(0, BLOCK_SIZE_K)
-
-        if count > 0:
-            for k in range((count + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K):
-                # block_mem_indices = (k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)) % K
-                block_mem_indices_f = block_mem_indices_f_base + k * BLOCK_SIZE_K
-                block_mem_indices = block_mem_indices_f % K
-                a_index = tl.load(index_ptr + stride_index * block_mem_indices)
-                if out_index_is_none:
-                    b_index = a_index
+            start_i = block_start_index
+            end_i = block_end_index + 1
+            while start_i < end_i:
+                middle = (start_i + end_i) // 2
+                middle_matrix = tl.load(sel_ptr + middle * stride_sel)
+                if middle_matrix < matrix_index:
+                    start_i = middle + 1
                 else:
-                    b_index = tl.load(
-                        out_index_ptr + stride_out_index * block_mem_indices
-                    )
-                sel_ok = block_mem_indices_f < end_i
+                    end_i = middle
 
-                a_ptrs = a_ptrs_this + a_index[None, :] * stride_ak
-                b_ptrs = b_ptrs_this + b_index[:, None] * stride_bk
+            # # Continue binary search: find the first matrix that is > matrix_index
+            start_i2 = start_i
+            end_i = block_end_index + 1
+            while start_i2 < end_i:
+                middle = (start_i2 + end_i) // 2
+                middle_matrix = tl.load(sel_ptr + middle * stride_sel)
+                if middle_matrix <= matrix_index:
+                    start_i2 = middle + 1
+                else:
+                    end_i = middle
 
-                # Load the next block of A and B, generate a mask by checking the K dimension.
-                # If it is out of bounds, set it to 0.
-                a = tl.load(a_ptrs, mask=sel_ok[None, :], other=0.0)
-                b = tl.load(b_ptrs, mask=sel_ok[:, None], other=0.0)
+            end_i = start_i2
 
-                if dtype_id == 1:
-                    a = a.to(tl.float16)
-                    b = b.to(tl.float16)
-                elif dtype_id == 2:
-                    a = a.to(tl.bfloat16)
-                    b = b.to(tl.bfloat16)
+            count = end_i - start_i
 
-                # We accumulate along the K dimension.
-                accumulator += tl.dot(a, b, allow_tf32=allow_tf32)
+            block_mem_indices_f_base = start_i + tl.arange(0, BLOCK_SIZE_K)
 
-            if out_dtype_id == 1:
-                c = accumulator.to(tl.float16)
-            elif out_dtype_id == 2:
-                c = accumulator.to(tl.bfloat16)
-            else:
-                c = accumulator
+            if count > 0:
+                for k in range((count + BLOCK_SIZE_K - 1) // BLOCK_SIZE_K):
+                    # block_mem_indices = (k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)) % K
+                    block_mem_indices_f = block_mem_indices_f_base + k * BLOCK_SIZE_K
+                    block_mem_indices = block_mem_indices_f % K
+                    a_index = tl.load(index_ptr + stride_index * block_mem_indices)
+                    if out_index_is_none:
+                        b_index = a_index
+                    else:
+                        b_index = tl.load(
+                            out_index_ptr + stride_out_index * block_mem_indices
+                        )
+                    sel_ok = block_mem_indices_f < end_i
 
-            # -----------------------------------------------------------
-            # Write back the block of the output matrix C with masks.
-            offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-            offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-            c_ptrs = (
-                c_ptr
-                + stride_co * matrix_index
-                + stride_cm * offs_cm[:, None]
-                + stride_cn * offs_cn[None, :]
-            )
-            c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-            # tl.store(c_ptrs, c, mask=c_mask)
-            tl.atomic_add(c_ptrs, c, mask=c_mask)
+                    a_ptrs = a_ptrs_this + a_index[None, :] * stride_ak
+                    b_ptrs = b_ptrs_this + b_index[:, None] * stride_bk
+
+                    # Load the next block of A and B, generate a mask by checking the K dimension.
+                    # If it is out of bounds, set it to 0.
+                    a = tl.load(a_ptrs, mask=sel_ok[None, :], other=0.0)
+                    b = tl.load(b_ptrs, mask=sel_ok[:, None], other=0.0)
+
+                    if dtype_id == 1:
+                        a = a.to(tl.float16)
+                        b = b.to(tl.float16)
+                    elif dtype_id == 2:
+                        a = a.to(tl.bfloat16)
+                        b = b.to(tl.bfloat16)
+
+                    # We accumulate along the K dimension.
+                    accumulator += tl.dot(a, b, allow_tf32=allow_tf32)
+
+                if out_dtype_id == 1:
+                    c = accumulator.to(tl.float16)
+                elif out_dtype_id == 2:
+                    c = accumulator.to(tl.bfloat16)
+                else:
+                    c = accumulator
+
+                # -----------------------------------------------------------
+                # Write back the block of the output matrix C with masks.
+                offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+                offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+                c_ptrs = (
+                    c_ptr
+                    + stride_co * matrix_index
+                    + stride_cm * offs_cm[:, None]
+                    + stride_cn * offs_cn[None, :]
+                )
+                c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+                # tl.store(c_ptrs, c, mask=c_mask)
+                tl.atomic_add(c_ptrs, c, mask=c_mask)
 
 
 if version.parse(torch.__version__) >= version.parse("2.2.0"):

@@ -7,7 +7,6 @@ from composer import Trainer
 from composer.algorithms import GradientClipping
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW
-from composer.utils import reproducibility
 from omegaconf import DictConfig, OmegaConf
 from streaming.base.util import clean_stale_shared_memory
 from transformers import AutoTokenizer
@@ -22,8 +21,6 @@ from dyna.utils import (
     get_scheduler,
     make_wandb_run_name,
 )
-
-reproducibility.configure_deterministic_mode()
 
 
 def trace_handler(p):

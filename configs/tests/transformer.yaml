@@ -1,0 +1,16 @@
+model_config:
+    execution_mode: transformer
+    d_model: 768
+    d_ffn: 3072
+    n_repeats: 1
+    n_heads: 12
+    d_head: 64
+    n_layers: 12
+    vocab_size: 50368
+    max_seq_len: 1024
+    n_expert_shared_attn: 0
+    n_expert_shared_ffn: 0
+    collect_reg_loss: False
+    enable_early_exit: False
+    norm_structure: pre
+    rescaling_method: none

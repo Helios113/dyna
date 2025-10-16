@@ -28,6 +28,79 @@ from dyna.model.transformer import DynaFormer
 from dyna.modules import LayerModule
 
 
+def _generate_attention_mask(
+    input_ids: Int[Tensor, "batch seq"], eos_token_id: int
+) -> Bool[Tensor, "batch 1 seq seq"]:
+    """Generate attention mask for each sample in batch."""
+    batch_size, seq_len = input_ids.shape
+    device = input_ids.device
+
+    # Create base causal mask
+    base_causal = torch.tril(
+        torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
+    )
+
+    # Find EOS positions
+    eos_mask = input_ids == eos_token_id  # [batch, seq]
+
+    # Quick path -- if no EOS tokens in entire batch
+    if not eos_mask.any():
+        return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
+
+    # Find EOS positions
+    eos_positions: Bool[Tensor, "batch seq"] = (
+        eos_mask.long()
+    )  # Convert to int: [batch, seq]
+
+    # Calculate sequence IDs
+    sequence_ids: Int[Tensor, "batch seq"] = torch.cumsum(
+        torch.cat(
+            [
+                torch.zeros(batch_size, 1, dtype=torch.long, device=device),
+                eos_positions[:, :-1],
+            ],
+            dim=1,
+        ),
+        dim=1,
+    )
+
+    # Vectorized same-sequence mask computation
+    # Use broadcasting instead of unsqueeze for better memory efficiency
+    same_seq_mask: Bool[Tensor, "batch seq seq"] = (
+        sequence_ids[:, :, None] == sequence_ids[:, None, :]
+    )
+
+    # Apply masks
+    final_mask: Bool[Tensor, "batch seq seq"] = base_causal[None, :, :] & same_seq_mask
+
+    return final_mask.unsqueeze(1)
+
+
+def _generate_source_len_mask(
+    attention_mask: Bool[Tensor, "batch 1 seq seq"],
+) -> Int[Tensor, "batch seq"]:
+    """Generate source length mask with position indices for each sequence."""
+    batch_size, _, seq_len, _ = attention_mask.shape
+    device = attention_mask.device
+
+    pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
+
+    causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)
+
+    # Expand to batch dimension
+    causal_indices: Bool[Tensor, "batch seq seq"] = causal_indices.unsqueeze(0).expand(
+        batch_size, -1, -1
+    )
+
+    # Apply the attention mask to get valid positions
+    valid_positions: Bool[Tensor, "batch seq seq"] = (
+        attention_mask.squeeze(1) & causal_indices
+    )
+
+    position_mask: Int[Tensor, "batch seq"] = valid_positions.sum(dim=-1) - 1
+    return position_mask
+
+
 class DynaLM(DynaPretrainedModel):
     """Base Language model class.
 
@@ -49,7 +122,6 @@ class DynaLM(DynaPretrainedModel):
 
         # Model configuration
         self.n_repeats = config.n_repeats
-        self.use_rms_norm = config.use_rms_norm
         self.d_model = config.d_model
         self.eos_token_id = eos_token_id
         self.rescaling_method = config.rescaling_method
@@ -83,80 +155,6 @@ class DynaLM(DynaPretrainedModel):
         )
         self.transformer.reset_parameters()
 
-    def _generate_attention_mask(
-        self,
-        input_ids: Int[Tensor, "batch seq"],
-    ) -> Bool[Tensor, "batch 1 seq seq"]:
-        """Generate attention mask for each sample in batch."""
-        batch_size, seq_len = input_ids.shape
-        device = input_ids.device
-
-        # Create base causal mask
-        base_causal = torch.tril(
-            torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
-        )
-
-        # Find EOS positions
-        eos_mask = input_ids == self.eos_token_id  # [batch, seq]
-
-        # Quick path -- if no EOS tokens in entire batch
-        if not eos_mask.any():
-            return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
-
-        # Find EOS positions
-        eos_positions: Bool[Tensor, "batch seq"] = (
-            eos_mask.long()
-        )  # Convert to int: [batch, seq]
-
-        # Calculate sequence IDs
-        sequence_ids: Int[Tensor, "batch seq"] = torch.cumsum(
-            torch.cat(
-                [
-                    torch.zeros(batch_size, 1, dtype=torch.long, device=device),
-                    eos_positions[:, :-1],
-                ],
-                dim=1,
-            ),
-            dim=1,
-        )
-
-        # Vectorized same-sequence mask computation
-        # Use broadcasting instead of unsqueeze for better memory efficiency
-        same_seq_mask: Bool[Tensor, "batch seq seq"] = (
-            sequence_ids[:, :, None] == sequence_ids[:, None, :]
-        )
-
-        # Apply masks
-        final_mask: Bool[Tensor, "batch seq seq"] = (
-            base_causal[None, :, :] & same_seq_mask
-        )
-
-        return final_mask.unsqueeze(1)
-
-    def _generate_source_len_mask(
-        self, attention_mask: Bool[Tensor, "batch 1 seq seq"]
-    ) -> Int[Tensor, "batch seq"]:
-        """Generate source length mask with position indices for each sequence."""
-        batch_size, _, seq_len, _ = attention_mask.shape
-        device = attention_mask.device
-
-        pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
-
-        causal_indices = pos_range.unsqueeze(0) <= pos_range.unsqueeze(1)
-
-        # Expand to batch dimension
-        causal_indices: Bool[Tensor, "batch seq seq"] = causal_indices.unsqueeze(
-            0
-        ).expand(batch_size, -1, -1)
-
-        # Apply the attention mask to get valid positions
-        valid_positions: Bool[Tensor, "batch seq seq"] = (
-            attention_mask.squeeze(1) & causal_indices
-        )
-
-        position_mask: Int[Tensor, "batch seq"] = valid_positions.sum(dim=-1) - 1
-        return position_mask
-
     def forward(
         self,
         input_ids: Int[Tensor, "batch seq"] | None = None,
@@ -173,18 +171,9 @@ class DynaLM(DynaPretrainedModel):
             raise ValueError("Cannot specify both input_ids and inputs_embeds")
 
         # Get embeddings and subsequenent masks
-        if input_ids is not None:
-            x = self.embedding(input_ids)
-            if attention_mask is None:
-                attention_mask = self._generate_attention_mask(input_ids)
-            if src_len_mask is None:
-                src_len_mask = self._generate_source_len_mask(attention_mask)
-        if self.embedding_norm is not None:
-            x = self.embedding_norm(x)
-        elif self.embedding_norm is None:
-            x = x
-        elif isinstance(inputs_embeds, torch.Tensor):
-            x = inputs_embeds
+        x, attention_mask, src_len_mask = self.embedding_stage(
+            input_ids, inputs_embeds, attention_mask, src_len_mask
+        )
 
         assert attention_mask is not None
         assert src_len_mask is not None
@@ -232,6 +221,21 @@ class DynaLM(DynaPretrainedModel):
             hidden_states=None,
             attentions=None,
         )
+
+    def embedding_stage(self, input_ids, inputs_embeds, attention_mask, src_len_mask):
+        if input_ids is not None:
+            x = self.embedding(input_ids)
+            if attention_mask is None:
+                attention_mask = _generate_attention_mask(input_ids, self.eos_token_id)
+            if src_len_mask is None:
+                src_len_mask = _generate_source_len_mask(attention_mask)
+        if self.embedding_norm is not None:
+            x = self.embedding_norm(x)
+        elif self.embedding_norm is None:
+            x = x
+        elif isinstance(inputs_embeds, torch.Tensor):
+            x = inputs_embeds
+        return x, attention_mask, src_len_mask
 
     @staticmethod
     def fsdp_wrap_fn(module: Module) -> bool:
