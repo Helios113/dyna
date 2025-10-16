@@ -15,6 +15,8 @@ def test_embeddings():
 
     embedding, _, _ = model.embedding_stage(input, None, None, None)
 
+    # TODO: check gradients as well!
+
     # Hash the embedding using hashlib
     hash_value = hashlib.sha256(embedding.detach().cpu().numpy().tobytes()).hexdigest()
     assert hash_value == DEFAULT_HASH

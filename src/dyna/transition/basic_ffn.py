@@ -1,11 +1,17 @@
-from __future__ import annotations
-
+# encoding: pypreprocessor
 import math
+import os
 from collections.abc import Callable
 
 import torch
 
 from dyna.modules import DynaModule
+
+# execute
+
+if "PYTEST_CURRENT_TEST" not in os.environ:
+    defines.add("PYTEST")  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
+# endexecute
 
 
 class BasicFFN(DynaModule):
@@ -24,9 +30,17 @@ class BasicFFN(DynaModule):
         self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
 
     def forward(
-        self, token_stream: torch.Tensor, selection_input: torch.Tensor
+        self,
+        token_stream: torch.Tensor,
+        selection_input: torch.Tensor,
+        # ifdef PYTEST
+        collector: list,
+        # endif
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
         output = self.projection_down(self.activation(self.projection_up(token_stream)))
+        # ifdef PYTEST
+        collector.append("Hello this worked")
+        # endif
         return output, None  # Return None for the selection index to match SigmaMoE
 
     def reset_parameters(self, std_scale: float) -> None:
