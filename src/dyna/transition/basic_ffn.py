@@ -1,6 +1,6 @@
 # encoding: pypreprocessor
+# ruff: noqa: I001
 import math
-import os
 from collections.abc import Callable
 
 import torch
@@ -8,6 +8,7 @@ import torch
 from dyna.modules import DynaModule
 
 # execute
+import os
 
 if "PYTEST_CURRENT_TEST" not in os.environ:
     defines.add("PYTEST")  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
