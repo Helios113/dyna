@@ -16,6 +16,10 @@ def test_embeddings():
     embedding, _, _ = model.embedding_stage(input, None, None, None)
 
     # TODO: check gradients as well!
+    # .grad_fn is not None
+    # .grad if that not zero
+    # Test gradients.py
+    # grad(emb) * grad(transformer) * grad(task_head )
 
     # Hash the embedding using hashlib
     hash_value = hashlib.sha256(embedding.detach().cpu().numpy().tobytes()).hexdigest()

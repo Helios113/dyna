@@ -10,7 +10,7 @@ from dyna.modules import DynaModule
 # execute
 import os
 
-if "PYTEST_CURRENT_TEST" not in os.environ:
+if "PYTEST_CURRENT_TEST" in os.environ:
     defines.add("PYTEST")  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
 # endexecute
 
@@ -35,11 +35,12 @@ class BasicFFN(DynaModule):
         token_stream: torch.Tensor,
         selection_input: torch.Tensor,
         # ifdef PYTEST
-        collector: list,
+        collector: list | None = None,
         # endif
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
         output = self.projection_down(self.activation(self.projection_up(token_stream)))
         # ifdef PYTEST
+        assert collector is not None
         collector.append("Hello this worked")
         # endif
         return output, None  # Return None for the selection index to match SigmaMoE
