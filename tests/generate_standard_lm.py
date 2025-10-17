@@ -39,5 +39,5 @@ def generate_standard_lm():
     return model
 
 
-if __name__ == "__main__" and "PYTEST_CURRENT_TEST" not in os.environ:
+if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:
     generate_standard_lm()

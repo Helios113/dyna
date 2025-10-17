@@ -19,6 +19,7 @@ def test_basic_ffn():
     d_model = model.config.d_model
     d_ffn = model.config.d_ffn
     torch.manual_seed(42)
+
     ffn: BasicFFN = BasicFFN(d_model, d_ffn)
     collector = []
     ffn_output, _ = ffn(embedding, None, collector)
@@ -29,5 +30,5 @@ def test_basic_ffn():
     assert hash_value == DEFAULT_HASH
 
 
-if __name__ == "__main__" and "PYTEST_CURRENT_TEST" not in os.environ:
+if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:
     test_basic_ffn()

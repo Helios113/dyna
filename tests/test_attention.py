@@ -55,5 +55,5 @@ def test_attention_mask():
 
 
 # enable test_attention_mask if we run this not from pytest
-if __name__ == "__main__" and "PYTEST_CURRENT_TEST" not in os.environ:
+if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:
     test_attention_mask()

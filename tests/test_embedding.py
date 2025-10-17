@@ -26,5 +26,5 @@ def test_embeddings():
     assert hash_value == DEFAULT_HASH
 
 
-if __name__ == "__main__" and "PYTEST_CURRENT_TEST" not in os.environ:
+if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:
     test_embeddings()
