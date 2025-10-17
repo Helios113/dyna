@@ -33,7 +33,7 @@ class BasicFFN(DynaModule):
     def forward(
         self,
         token_stream: torch.Tensor,
-        selection_input: torch.Tensor,
+        selection_input: torch.Tensor | None,
         # ifdef PYTEST
         collector: list | None = None,
         # endif
