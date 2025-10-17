@@ -10,6 +10,7 @@ from dyna.modules import DynaModule
 # execute
 import os
 
+print(os.environ)
 if "PYTEST_CURRENT_TEST" in os.environ:
     defines.add("PYTEST")  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
 # endexecute
