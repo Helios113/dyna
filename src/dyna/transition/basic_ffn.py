@@ -1,4 +1,4 @@
-# encodinweqg: pypreprocessor
+# encoding: pypreprocessor
 # ruff: noqa: I001
 import math
 from collections.abc import Callable
@@ -7,12 +7,12 @@ import torch
 
 from dyna.modules import DynaModule
 
-# # execute
-# import os
+# execute
+import os
 
-# if "PYTEST_VERSION" in os.environ:
-#     defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable]
-# # endexecute
+if "PYTEST_VERSION" in os.environ:
+    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
+# endexecute
 
 
 class BasicFFN(DynaModule):
@@ -34,15 +34,15 @@ class BasicFFN(DynaModule):
         self,
         token_stream: torch.Tensor,
         selection_input: torch.Tensor,
-        # # ifdef PYTEST
-        # collector: list | None = None,
-        # # endif
+        # ifdef PYTEST
+        collector: list | None = None,
+        # endif
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
         output = self.projection_down(self.activation(self.projection_up(token_stream)))
-        # # ifdef PYTEST
-        # assert collector is not None
-        # collector.append("Hello this worked")
-        # # endif
+        # ifdef PYTEST
+        assert collector is not None
+        collector.append("Hello this worked")
+        # endif
         return output, None  # Return None for the selection index to match SigmaMoE
 
     def reset_parameters(self, std_scale: float) -> None:
