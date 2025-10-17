@@ -38,3 +38,4 @@ class ModelConfig:
     repeat_residual: bool = False
     perfiery_size: int = 2
     nope_pos: bool = False
+    total_depth_for_init: int = 12

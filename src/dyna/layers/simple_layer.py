@@ -37,8 +37,8 @@ class SimpleLayer(LayerModule):
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        layer_index: int,
         e: None | Float[Tensor, "batch seq d_model"],
+        layer_index: int,
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],

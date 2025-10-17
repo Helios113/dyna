@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import math
 
 import torch
@@ -92,6 +90,11 @@ class BasicAttn(AttentionModule):
         q = self.dropout(q)
 
         # Apply attention
+        print("q type", type(q))
+        print("k type", type(k))
+        print("v type", type(v))
+        print("attention attention_mask", type(attention_mask))
+        print("sequence_length", type(sequence_length))
         res = self.attend(v, k, q, attention_mask, sequence_length)
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)

@@ -75,6 +75,7 @@ class DynaFormer(DynaPretrainedModel):
                 )
             # Transformer
             case ExecutionMode.transformer:
+                print("in transformer mode", flush=True)
                 self.body_layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
@@ -133,9 +134,9 @@ class DynaFormer(DynaPretrainedModel):
     def reset_parameters(self) -> None:
         """Initialize all model parameters."""
         if self.enable_early_exit:
-            scale = math.sqrt(2 / (self.n_repeats * len(self.total_depth_for_init)))
+            scale = math.sqrt(2 / (self.n_repeats * self.total_depth_for_init))
         else:
-            scale = math.sqrt(2 / len(self.total_depth_for_init))
+            scale = math.sqrt(2 / self.total_depth_for_init)
 
         # Initialize tracking variables
         self._seq_len = []
@@ -146,7 +147,9 @@ class DynaFormer(DynaPretrainedModel):
 
         # Initialize layer parameters
         for layer in self.modules():
-            if isinstance(layer, DynaModule):
+            if isinstance(layer, DynaFormer):
+                continue
+            elif isinstance(layer, DynaModule):
                 layer.reset_parameters(scale)
             elif hasattr(layer, "reset_parameters"):
                 assert isinstance(layer.reset_parameters, Callable)
@@ -194,6 +197,9 @@ class DynaFormer(DynaPretrainedModel):
         self._latent_vectors.append([])
         self._seq_len.append([])
         self._residual_magnitudes.append([])
+        print("in transformer")
+        print("attn", attention_mask)
+        print("seql", sequence_length)
 
         x, reinjection_embeddings, layer_index = self.head(
             x, attention_mask, sequence_length, e
@@ -269,6 +275,7 @@ class DynaFormer(DynaPretrainedModel):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:
+                print("in body", attention_mask, sequence_length)
                 x_out, expert_sel, saturation_event = layer(
                     x=x,
                     e=e,
@@ -310,7 +317,7 @@ class DynaFormer(DynaPretrainedModel):
     def _apply_early_exit(
         self,
         x_out: Float[Tensor, "batch seq d_model"],
-        saturation_event: Float[Tensor, "batch seq"],
+        saturation_event: Float[Tensor, "batch seq"] | None,
         old_continue_mask: Float[Tensor, "batch seq"] | None,
         energy_per_sample: Float[Tensor, "batch seq"] | None,
     ) -> tuple[
@@ -319,7 +326,7 @@ class DynaFormer(DynaPretrainedModel):
         bool,
         Float[Tensor, "batch seq"] | None,
     ]:
-        if not self.enable_early_exit:
+        if not self.enable_early_exit or saturation_event is None:
             return x_out, None, True, energy_per_sample
         continue_processing = True
         x = x_out

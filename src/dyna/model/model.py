@@ -10,10 +10,10 @@ from llmfoundry.models.layers.layer_builders import build_norm
 from llmfoundry.utils.builders import build_metric
 from torch import Tensor
 from torch.nn import Module
+from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from transformers.tokenization_utils import PreTrainedTokenizer
 
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
@@ -182,7 +182,9 @@ class DynaLM(DynaPretrainedModel):
         e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
 
         # Run the transformer model
-        x, energy_per_sample = self.transformer(x, e, (attention_mask, src_len_mask))
+        x, energy_per_sample = self.transformer(
+            x, attention_mask=attention_mask, sequence_length=src_len_mask, e=e
+        )
 
         # Apply output projection
         logits = self.lm_head(self.out_norm(x))
@@ -213,9 +215,8 @@ class DynaLM(DynaPretrainedModel):
             if self.use_reg_loss:
                 loss = loss + self.transformer._collect_regularization_loss()
 
-        assert isinstance(loss, torch.FloatTensor)
         return CausalLMOutputWithPast(
-            loss=loss,
+            loss=loss,  # pyright: ignore[reportArgumentType]
             logits=logits,
             past_key_values=None,
             hidden_states=None,
@@ -259,7 +260,7 @@ class ComposerDynaModel(HuggingFaceModel):
     def __init__(
         self,
         config: DynaConfig,
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
     ):
         """Initialize the ComposerDynaModel.
 

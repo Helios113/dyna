@@ -92,6 +92,8 @@ class AttentionModule(DynaModule):
         positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Optimized rotary position encoding application."""
+        print("Applying rotary position encoding...")
+        print(type(positions))
         sin, cos = self.get_sincos_positions(x, positions)
 
         # Get sequence length once
@@ -127,6 +129,8 @@ class AttentionModule(DynaModule):
             or self.cos_cached.device != x.device
         ):
             # Create position indices for the maximum sequence length we might need
+            print("pos type", type(positions))
+            print(positions)
             max_pos = positions.max().item() + 1
             pos_idx = torch.arange(max_pos, device=x.device)
 

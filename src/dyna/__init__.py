@@ -13,20 +13,20 @@ __author__ = "Preslav Aleksandorv"
 
 from jaxtyping import install_import_hook
 
-from dyna import (
-    attention,
-    callbacks,
-    config,
-    cvmm,
-    data,
-    layers,
-    modules,
-    schedulers,
-    transition,
-    utils,
-)
-
-install_import_hook("dyna", "beartype.beartype")
+with install_import_hook("dyna", "beartype.beartype"):
+    from dyna import (
+        attention,
+        callbacks,
+        config,
+        cvmm,
+        data,
+        layers,
+        model,
+        modules,
+        schedulers,
+        transition,
+        utils,
+    )
 
 
 __all__ = [
