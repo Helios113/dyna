@@ -6,7 +6,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from dyna.cvmm import CVMMSel, cvmm, cvmm_prepare_sel2
+from dyna.kernel import CVMMSel, cvmm, cvmm_prepare_sel2
 from dyna.modules import AttentionModule, entropy_reg
 
 
@@ -243,7 +243,7 @@ class SwitchHead(AttentionModule):
         q_src: Float[Tensor, "batch seq d_model"],
         k_src: Float[Tensor, "batch seq d_model"],
         v_src: Float[Tensor, "batch seq d_model"],
-        attention_mask: Bool[Tensor, "batch seq seq"],
+        attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],

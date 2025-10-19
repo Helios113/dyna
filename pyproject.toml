@@ -25,11 +25,8 @@ dependencies = [
     "jupyter>=1.1.1",
     "torchtune>=0.6.1",
     "pysnooper>=1.2.3",
-    "pyrefly>=0.34.0",
     "ruff>=0.7.0",
     "pre-commit>=4.3.0",
-    "docformatter>=1.7.7",
-    "sphinx-rtd-theme>=3.0.2",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "pypreprocessor>=0.1.0",
@@ -50,7 +47,6 @@ pypreprocessor = {git = "https://github.com/Helios113/pypreprocessor.git", branc
 # [tool.uv]
 # no-build-isolation-package = ["flash-attn"]  # Commented out since flash-attn is disabled
 
-
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -58,7 +54,6 @@ src = ["src"]
 fix = true
 exclude = [
 "tools/",
-"src/dyna/cvmm/"
 ]
 
 [tool.ruff.lint]
@@ -119,6 +114,5 @@ reportAny = "none"
 typeCheckingMode = "basic"
 
 exclude = [
-    "src/dyna/cvmm/", # Ignore a single file
     "tools/",
 ]

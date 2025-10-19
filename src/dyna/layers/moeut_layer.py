@@ -1,5 +1,5 @@
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from dyna.attention import SwitchHead
@@ -54,7 +54,7 @@ class MoEUTLayer(LayerModule):
         e: None | Float[Tensor, "batch seq d_model"],
         layer_index: int,
         reinjection_embeddings: None | Float[Tensor, "batch seq d_model"],
-        attention_mask: None | Float[Tensor, "batch seq seq"],
+        attention_mask: None | Bool[Tensor, "batch 1 seq seq"],
         sequence_length: None | Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
     ) -> tuple[
