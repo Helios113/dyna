@@ -28,3 +28,4 @@ local_data/
 dyna_*
 *.mds
 source/
+slurm_outputs/*
