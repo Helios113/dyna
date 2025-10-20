@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import math
 
 import torch
@@ -14,6 +12,7 @@ class SwitchHead(AttentionModule):
     """Core attention mechanism with expert routing."""
 
     expert_shared: torch.Tensor
+    scale: torch.Tensor
 
     def __init__(
         self,
@@ -29,6 +28,7 @@ class SwitchHead(AttentionModule):
         rope_base: int = 10000,
         nope_pos: bool = False,
         use_bias: bool = True,
+        manual_scale: bool = False,
     ):
         """Initialize SwitchHead with expert routing configuration."""
         super().__init__(
@@ -55,7 +55,7 @@ class SwitchHead(AttentionModule):
         self.k_attn = k_attn
         self.n_expert_shared_attn = min(n_expert_shared_attn, n_experts_attn)
         self.n_expert_routed_attn = n_experts_attn - self.n_expert_shared_attn
-
+        self.manual_scale = manual_scale
         # Bias tracking
         self.bias_update_lr = 0.001
 
@@ -85,7 +85,6 @@ class SwitchHead(AttentionModule):
         # Tracking variables for visualization
         self.selections_to_visualize = {}
         self.sel_hist: list[tuple[Tensor, Tensor]] = []
-
         self.call_h = 0
 
     def _init_expert_parameters(self) -> None:
@@ -259,6 +258,12 @@ class SwitchHead(AttentionModule):
         v_sel_index = None
         o_sel_inedx = None
 
+        # check if we are scaling
+        if self.manual_scale:
+            scale = self.scale.sqrt()
+            q_val = q_val * scale.type(q_val.type())
+            k_val = k_val * scale.type(q_val.type())
+
         # Handle expert routing for values and outputs
         if self.n_experts_attn > 1:
             v_sel, v_sel_r, v_sel_index = self._get_expert_selection(
@@ -322,7 +327,12 @@ class SwitchHead(AttentionModule):
             q_val_o = self.dropout(q_val_o)
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
-                v_val_o, k_val_o, q_val_o, attention_mask, sequence_length
+                v_val_o,
+                k_val_o,
+                q_val_o,
+                attention_mask,
+                sequence_length,
+                manual_scale=self.manual_scale,
             )
             res = res.transpose(-2, -3)
 

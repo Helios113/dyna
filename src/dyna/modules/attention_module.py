@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -52,6 +50,7 @@ class AttentionModule(DynaModule):
         q: Float[Tensor, "batch n_heads seq d_head"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
+        manual_scale: bool = False,
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
 
@@ -66,6 +65,7 @@ class AttentionModule(DynaModule):
             attention_mask: Attention mask tensor.
             sequence_length: Position indices for RoPE of shape (batch, seq).
             nope_pos: where to apply NoPe position encoding
+            manual_scale: whether to manually scale the attention scores
 
         Returns:
             Attention output tensor of shape (batch, n_heads, seq, d_head).
@@ -76,7 +76,12 @@ class AttentionModule(DynaModule):
         # Explicitly remove scaling, as we scale in the body in the transformer
         # TODO: return scaling
         return torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attention_mask, dropout_p=0.0, scale=1.0
+            q,
+            k,
+            v,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            scale=1.0 if manual_scale else None,
         )
 
     def project_to_torch_order(self, x: torch.Tensor) -> torch.Tensor:

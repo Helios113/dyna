@@ -41,3 +41,4 @@ class ModelConfig:
     total_depth_for_init: int = 12
     use_reg_loss: bool = False
     use_embedding_norm: bool = False
+    manual_scale: bool = False

@@ -26,6 +26,7 @@ class MoEUTLayer(LayerModule):
                 n_expert_shared_attn=config.n_expert_shared_attn,
                 nope_pos=config.nope_pos,
                 use_bias=config.use_moe_bias,
+                manual_scale=config.manual_scale,
             ),
             ffn_module=SigmaMoE(
                 config.d_model,

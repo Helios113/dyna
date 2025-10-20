@@ -7,22 +7,30 @@ defaults:
     - fsdp_config: null
 
 model_config:
-    execution_mode: transformer
+    execution_mode: moe
     d_model: 768
-    d_ffn: 3072
-    n_repeats: 1
-    n_heads: 12
-    d_head: 64
-    n_layers: 12
+    n_repeats: 6
+    n_heads: 3
+    n_experts_ffn: 192
+    n_experts_attn: 10
+    d_head: 128
+    k_ffn: 12
+    k_attn: 2
+    d_expert_ffn: 128
+    n_layers: 2
     vocab_size: 50368
     max_seq_len: 1024
     n_expert_shared_attn: 0
     n_expert_shared_ffn: 0
     collect_reg_loss: False
     enable_early_exit: False
-    norm_structure: pre
+    norm_structure: moeut
+    norm_type: low_precision_rmsnorm
     rescaling_method: none
-    total_depth_for_init: ${model_config.n_layers}
+    repeat_residual: false
+    use_reg_loss: True
+    total_depth_for_init: 12
+    manual_scale: True
 
 train:
     max_duration: "3171ba"
