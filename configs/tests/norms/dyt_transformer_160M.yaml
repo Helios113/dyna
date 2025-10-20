@@ -1,0 +1,88 @@
+# @package _global_
+
+model_config:
+    execution_mode: transformer
+    d_model: 768
+    d_ffn: 3072
+    n_repeats: 1
+    n_heads: 12
+    d_head: 64
+    n_layers: 12
+    vocab_size: 50368
+    max_seq_len: 1024
+    n_expert_shared_attn: 0
+    n_expert_shared_ffn: 0
+    collect_reg_loss: False
+    enable_early_exit: False
+    norm_structure: pre
+    rescaling_method: none
+    total_depth_for_init: ${model_config.n_layers}
+    norm_type: dynamic_thanh
+
+train:
+    max_duration: "3171ba"
+    warmup: "634ba"
+    cooldown: "634ba"
+    device_train_batch_size: 1024
+
+trainer_config:
+    run_name: "dyttest"
+    max_duration: ${train.max_duration}
+    train_dataloader_label: "train"
+    device_train_microbatch_size: 32
+    precision: "amp_bf16"
+    device: "gpu"
+    save_folder: "s3://loop-llm/dyna/"
+    save_interval: "100ba"
+
+scheduler_config:
+    name: "wsld"
+    t_warmup: ${train.warmup}
+    t_max: ${train.max_duration}
+    t_cooldown: ${train.cooldown}
+    alpha_f: 1.0
+
+callbacks:
+    lr_monitor: {}
+    clean_metrics:
+        interval: 1
+    speed_monitor:
+        window_size: 1
+        gpu_flops_available:
+            fp64: 67e12,
+            fp32: 67e12,
+            tf32: 989e12 / 2,
+            fp16: 1.979e15 / 2,
+            amp_fp16: 1.979e15 / 2,
+            bf16: 1.979e15 / 2,
+            amp_bf16: 1.979e15 / 2,
+            fp8: 3.958e15 / 2,
+            amp_fp8: 3.958e15 / 2,
+            int8: 3.958e15 / 2,
+    memory_monitor: {}
+    runtime_estimator: {}
+    optimizer_monitor: {}
+    entropy_callback:
+        log_interval: 1
+    residual_magnitude:
+        log_interval: 1
+    # layer_usage_monitor:
+    #   log_interval: 20
+    # # # activation_monitor_c: {}
+
+data_config:
+    path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configs/streams_fastest"
+    dataset:
+        max_seq_len: ${model_config.max_seq_len}
+    num_workers: 8
+
+optimizer_config:
+    name: "decoupled_adamw"
+    lr: 0.003
+    weight_decay: 0.01
+    betas: [0.9, 0.95]
+    eps: 1e-8
+
+    clipping_type: "norm"
+    # can also be 'adaptive' or 'value'
+fsdp_config: null

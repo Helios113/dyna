@@ -13,7 +13,6 @@ def test_generate_standard_inputs():
 
     # Calculate the SHA-256 hash
     sha256_hash = hashlib.sha256(tensor_bytes).hexdigest()
-    print(sha256_hash)
     assert (
         sha256_hash == DEFAULT_HASH
     ), """Hashes of generated tensor do not match the pre-calculated hash,

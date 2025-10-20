@@ -16,6 +16,29 @@ from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule
 
 
+def calc_entropy(
+    # chunks: tuple[Float[Tensor, "batch chunk vocab"], ...], temperature: float
+    chunks: Float[Tensor, "batch seq_len vocab"],
+    temperature: float,
+) -> Float[Tensor, "batch seq_len"]:
+    """Calculate entropy of logits.
+
+    Args:
+        chunks (Float[Tensor, "batch seq vocab"]): Logits tensor.
+        temperature (float): Temperature for softmax.
+
+    Returns:
+        Float[Tensor, "batch seq"]: Entropy tensor.
+    """
+    # entropy = 0
+    # for logits in chunks:
+    logits = chunks
+    probs = torch.softmax(logits / temperature, dim=-1)
+    log_probs = torch.log(probs + 1e-8)
+    entropy = -torch.sum(probs * log_probs, dim=-1).detach()
+    return entropy
+
+
 class DynaFormer(DynaPretrainedModel):
     """Transformer model with configurable behavior."""
 
@@ -75,7 +98,6 @@ class DynaFormer(DynaPretrainedModel):
                 )
             # Transformer
             case ExecutionMode.transformer:
-                print("in transformer mode", flush=True)
                 self.body_layers = ModuleList(
                     [SimpleLayer(config) for _ in range(config.n_layers)]
                 )
@@ -197,9 +219,6 @@ class DynaFormer(DynaPretrainedModel):
         self._latent_vectors.append([])
         self._seq_len.append([])
         self._residual_magnitudes.append([])
-        print("in transformer")
-        print("attn", attention_mask)
-        print("seql", sequence_length)
 
         x, reinjection_embeddings, layer_index = self.head(
             x, attention_mask, sequence_length, e
@@ -239,15 +258,7 @@ class DynaFormer(DynaPretrainedModel):
             layer_index += 1
 
             if self.gather_stats:
-                assert isinstance(self._temp_lm_head, torch.nn.Module)
-                self._latent_vectors[-1].append(
-                    self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
-                )
-                if expert_sel[0] is not None:
-                    self._expert_sel[-1].append(expert_sel)
-                self._residual_magnitudes[-1].append(
-                    torch.norm(x, dim=-1).detach().clone().cpu()
-                )
+                self.gather_stats_func(x, expert_sel)
 
         if self.execution_mode in GEIPING_METHODS:
             reinjection_embeddings = x.clone()
@@ -275,7 +286,6 @@ class DynaFormer(DynaPretrainedModel):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:
-                print("in body", attention_mask, sequence_length)
                 x_out, expert_sel, saturation_event = layer(
                     x=x,
                     e=e,
@@ -298,15 +308,7 @@ class DynaFormer(DynaPretrainedModel):
                 if not continue_processing:
                     break
                 if self.gather_stats:
-                    assert isinstance(self._temp_lm_head, torch.nn.Module)
-                    self._latent_vectors[-1].append(
-                        self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
-                    )
-                    if expert_sel[0] is not None:
-                        self._expert_sel[-1].append(expert_sel)
-                    self._residual_magnitudes[-1].append(
-                        torch.norm(x, dim=-1).detach().clone().cpu()
-                    )
+                    self.gather_stats_func(x, expert_sel)
 
             if self.repeat_residual:
                 residual_embeddings = x.clone()
@@ -318,13 +320,13 @@ class DynaFormer(DynaPretrainedModel):
         self,
         x_out: Float[Tensor, "batch seq d_model"],
         saturation_event: Float[Tensor, "batch seq"] | None,
-        old_continue_mask: Float[Tensor, "batch seq"] | None,
+        old_continue_mask: Int[Tensor, " batchseq"] | None,
         energy_per_sample: Float[Tensor, "batch seq"] | None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
-        Float[Tensor, "batch seq"] | None,
+        Int[Tensor, " batchseq"] | None,
         bool,
-        Float[Tensor, "batch seq"] | None,
+        Int[Tensor, "batch seq"] | None,
     ]:
         if not self.enable_early_exit or saturation_event is None:
             return x_out, None, True, energy_per_sample
@@ -356,6 +358,7 @@ class DynaFormer(DynaPretrainedModel):
         else:
             if self.use_energy_per_sample:
                 energy_per_sample = saturation_event
+                # TODO PRINT ENERGY PER SAMPLE to check if it is correct
             continue_mask = self.mask_to_scatter_index(saturation_event)
 
             x = torch.scatter_reduce(
@@ -368,7 +371,6 @@ class DynaFormer(DynaPretrainedModel):
 
         if continue_mask is not None and continue_mask.numel() == 0:
             continue_processing = False
-
         return x, continue_mask, continue_processing, energy_per_sample
 
     def tail(
@@ -395,14 +397,30 @@ class DynaFormer(DynaPretrainedModel):
             )
             layer_index += 1
             if self.gather_stats:
-                assert isinstance(self._temp_lm_head, torch.nn.Module)
-                self._latent_vectors[-1].append(
-                    self._temp_lm_head(x[:, 10, :].detach()).detach().cpu()
-                )
-                if expert_sel[0] is not None:
-                    self._expert_sel[-1].append(expert_sel)
-                self._residual_magnitudes[-1].append(
-                    torch.norm(x, dim=-1).detach().clone().cpu()
-                )
+                self.gather_stats_func(x, expert_sel)
 
         return x
+
+    def gather_stats_func(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        expert_sel: tuple[
+            tuple[
+                Int[Tensor, "batch seq expert_heads attn_experts"] | None,
+                Int[Tensor, "batch seq expert_heads attn_experts"] | None,
+            ],
+            Int[Tensor, "batch seq ffn_experts"] | None,
+        ],
+    ) -> None:
+        assert isinstance(self._temp_lm_head, Callable)
+        self._latent_vectors[-1].append(
+            calc_entropy(
+                # torch.chunk(self._temp_lm_head(x.detach()), chunks=4, dim=1), 1.0
+                self._temp_lm_head(x.detach()),
+                1.0,
+                #
+            )
+        )
+        if expert_sel[0] is not None:
+            self._expert_sel[-1].append(expert_sel)
+        self._residual_magnitudes[-1].append(torch.norm(x.detach(), dim=-1).cpu())

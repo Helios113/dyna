@@ -39,3 +39,5 @@ class ModelConfig:
     perfiery_size: int = 2
     nope_pos: bool = False
     total_depth_for_init: int = 12
+    use_reg_loss: bool = False
+    use_embedding_norm: bool = False

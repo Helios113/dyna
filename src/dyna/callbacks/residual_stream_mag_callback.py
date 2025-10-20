@@ -72,9 +72,6 @@ class ResidualMagnitudeCallback(Callback):
                 else:
                     residual_magnitudes[i] = torch.cat((residual_magnitudes[i], sample))
 
-        print(len(residual_magnitudes), "residual magnitudes", flush=True)
-        print(residual_magnitudes[0].shape, "residual magnitudes[0] shape", flush=True)
-
         metrics_dict["metrics/residual_magnitude"] = self._fig_to_wandb_image(
             self._create_magnitude_plot(residual_magnitudes, step)
         )

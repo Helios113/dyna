@@ -1,6 +1,7 @@
 import os
 
 import hydra
+import torch
 import torch.distributed as dist
 from beartype import beartype
 from composer import Trainer
@@ -40,6 +41,7 @@ def safe_clean_stale_shared_memory():
 @hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
 def main(cfg: DictConfig):
     safe_clean_stale_shared_memory()
+
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
 
@@ -60,6 +62,8 @@ def main(cfg: DictConfig):
 
     # Instead of passing the DictConfig directly, unpack it as kwargs
     conf = DynaConfig(**cfg.model_config)
+
+    torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
 
     train_dataloader = get_data_loader(

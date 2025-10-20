@@ -23,7 +23,6 @@ def test_basic_ffn():
     ffn: BasicFFN = BasicFFN(d_model, d_ffn)
     collector = []
     ffn_output, _ = ffn(embedding, None, collector)
-    print(collector)
 
     # No non-deterministic operations so hashing will work
     hash_value = hashlib.sha256(ffn_output.detach().numpy().tobytes()).hexdigest()

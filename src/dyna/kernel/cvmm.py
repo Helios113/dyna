@@ -1,9 +1,10 @@
-import torch
 from dataclasses import dataclass
+
+import torch
 import triton
 import triton.language as tl
 from packaging import version
-from triton.language import constexpr
+
 # Based on https://github.com/openai/triton/blob/main/python/tutorials/03-matrix-multiplication.py
 # torch.compile() fixes by Julian Büchel <jub@zurich.ibm.com>, based on https://github.com/pytorch/pytorch/issues/115344
 
@@ -155,183 +156,142 @@ def dtype_to_type_id(dtype: torch.dtype):
     key=["M", "N", "K", "dtype_id", "allow_tf32"],
 )
 @triton.jit
-def cvmm_forward_kernel(
-    # Input/output pointers
-    a_ptr,  # Input matrix A [M, K] with indirection
-    b_ptr,  # Batch of matrices B [num_matrices, K, N]
-    c_ptr,  # Output matrix C [M, N]
-    row_ptr_inp,  # Row indirection for A [M] - maps logical to physical rows
-    expert_ptr,  # Matrix selector [M] - which B matrix to use per row
-    row_ptr_out,  # Row indirection for output [M] (optional)
-    # Dimensions
+def cvmm_kernel(
+    # Pointers to matrices
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    index_ptr,
+    sel_ptr,
+    out_index_ptr,
+    # Matrix dimensions
     M,
     N,
     K,
-    # Strides for A
-    stride_a_m,  # Stride between rows of A
-    stride_a_k,  # Stride between columns of A
-    # Strides for B
-    stride_b_o,  # Stride between different B matrices
-    stride_b_k,  # Stride between rows of B
-    stride_b_n,  # Stride between columns of B
-    # Strides for C
-    stride_c_m,  # Stride between rows of C
-    stride_c_n,  # Stride between columns of C
-    # Strides for index arrays
-    stride_row_ptr_inp,
-    stride_expert_ptr,
-    stride_row_ptr_out,
-    # Config flags
-    out_index_is_none: constexpr,
-    dtype_id: constexpr,  # 1=fp16, 2=bf16, else=fp32
-    allow_tf32: constexpr,
-    # Block sizes (tuned by autotune)
-    BLOCK_SIZE_M: constexpr,
-    BLOCK_SIZE_N: constexpr,
-    BLOCK_SIZE_K: constexpr,
-    GROUP_SIZE_M: constexpr,
+    # The stride variables represent how much to increase the ptr by when moving by 1
+    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+    # by to get the element one row down (A has M rows).
+    stride_am,
+    stride_ak,
+    stride_bo,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
+    stride_index,
+    stride_sel,
+    stride_out_index,
+    out_index_is_none: tl.constexpr,
+    dtype_id: tl.constexpr,
+    allow_tf32: tl.constexpr,
+    # Meta-parameters
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
-    """Forward pass: Compute C = A @ B with row-wise matrix selection.
-
-    For each row i:
-        C[i, :] = A[index[i], :] @ B[sel[i], :, :]
-
-    This allows different rows to use different matrices from the batch B.
+    """Kernel for computing the matmul C = A x B.
+    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
-    # ========================================================================
-    # STEP 1: Determine which block of C this program instance computes
-    # ========================================================================
-
+    # -----------------------------------------------------------
+    # Map program ids `pid` to the block of C it should compute.
+    # This is done in a grouped ordering to promote L2 data reuse.
+    # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
 
-    # Calculate grid dimensions
-    num_blocks_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_blocks_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
 
-    # Group blocks to improve L2 cache reuse
-    num_blocks_in_group = GROUP_SIZE_M * num_blocks_n
-    group_id = pid // num_blocks_in_group
-    first_block_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_blocks_m - first_block_m, GROUP_SIZE_M)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    # Determine this block's position
-    pid_m = first_block_m + (pid % group_size_m)
-    pid_n = (pid % num_blocks_in_group) // group_size_m
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
 
-    # ========================================================================
-    # STEP 2: Find which matrices from B are needed for this M-block
-    # ========================================================================
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # Check selector values at the start and end of this M-block
-    m_start = pid_m * BLOCK_SIZE_M
-    m_end = min((pid_m + 1) * BLOCK_SIZE_M, M) - 1
-
-    sel_first = tl.load(sel_ptr + m_start * stride_sel)
-    sel_last = tl.load(sel_ptr + m_end * stride_sel)
-
-    # Load all selector values for this block
-    row_offsets = (m_start + tl.arange(0, BLOCK_SIZE_M)) % M
-    sel_values = tl.load(sel_ptr + stride_sel * row_offsets)
-
-    # ========================================================================
-    # STEP 3: Process each required matrix
-    # ========================================================================
+    sel_first = tl.load(sel_ptr + pid_m * BLOCK_SIZE_M * stride_sel)
+    sel_last = tl.load(sel_ptr + (min((pid_m + 1) * BLOCK_SIZE_M, M) - 1) * stride_sel)
+    sel_all = tl.load(
+        sel_ptr + stride_sel * ((pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
+    )
 
     for matrix_id in range(sel_first, sel_last + 1):
-        # --------------------------------------------------------------------
-        # Setup pointers for this matrix multiplication
-        # --------------------------------------------------------------------
+        # ----------------------------------------------------------
+        # Create pointers for the first blocks of A and B.
+        # We will advance this pointer as we move in the K direction
+        # and accumulate
+        # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
+        # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+        # See above `Pointer Arithmetics` section for details
+        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
 
-        # Row offsets in A and C
-        m_offsets = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-        # Column offsets in B and C
-        n_offsets = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+        remap_offs_am = tl.load(index_ptr + stride_index * offs_am)
 
-        # Apply indirection to get physical row indices in A
-        a_row_indices = tl.load(index_ptr + stride_index * m_offsets)
-
-        # Create pointer blocks for A and B
-        k_offsets = tl.arange(0, BLOCK_SIZE_K)
-
-        # A block: [BLOCK_SIZE_M, BLOCK_SIZE_K]
+        # Create offset pointers
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
         a_ptrs = a_ptr + (
-            a_row_indices[:, None] * stride_am + k_offsets[None, :] * stride_ak
+            remap_offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
         )
-
-        # B block: [BLOCK_SIZE_K, BLOCK_SIZE_N] for the selected matrix
         b_ptrs = (
             b_ptr
             + matrix_id * stride_bo
-            + k_offsets[:, None] * stride_bk
-            + n_offsets[None, :] * stride_bn
+            + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
         )
 
-        # --------------------------------------------------------------------
-        # Accumulate C = A @ B over K dimension
-        # --------------------------------------------------------------------
-
+        # -----------------------------------------------------------
+        # Iterate to compute a block of the C matrix.
+        # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
+        # of fp32 values for higher accuracy.
+        # `accumulator` will be converted back to fp16 after the loop.
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            # Load the next block of A and B, generate a mask by checking the K dimension.
+            # If it is out of bounds, set it to 0.
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            # We accumulate along the K dimension.
 
-        for k_block in range(tl.cdiv(K, BLOCK_SIZE_K)):
-            # Create mask for valid K indices
-            k_valid = k_offsets < (K - k_block * BLOCK_SIZE_K)
-
-            # Load blocks of A and B
-            a_block = tl.load(a_ptrs, mask=k_valid[None, :], other=0.0)
-            b_block = tl.load(b_ptrs, mask=k_valid[:, None], other=0.0)
-
-            # Convert to computation dtype
+            # Triton was unhappy with passing dtypes as vars.
             if dtype_id == 1:
-                a_block = a_block.to(tl.float16)
-                b_block = b_block.to(tl.float16)
+                a = a.to(tl.float16)
+                b = b.to(tl.float16)
             elif dtype_id == 2:
-                a_block = a_block.to(tl.bfloat16)
-                b_block = b_block.to(tl.bfloat16)
+                a = a.to(tl.bfloat16)
+                b = b.to(tl.bfloat16)
 
-            # Accumulate matrix product
-            accumulator += tl.dot(a_block, b_block, allow_tf32=allow_tf32)
+            accumulator += tl.dot(a, b, allow_tf32=allow_tf32)
 
-            # Advance to next K block
+            # Advance the ptrs to the next K block.
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
 
-        # Convert accumulator to output dtype
         if dtype_id == 1:
-            result = accumulator.to(tl.float16)
+            c = accumulator.to(tl.float16)
         elif dtype_id == 2:
-            result = accumulator.to(tl.bfloat16)
+            c = accumulator.to(tl.bfloat16)
         else:
-            result = accumulator
+            c = accumulator
 
-        # --------------------------------------------------------------------
-        # Write results to C
-        # --------------------------------------------------------------------
+        # -----------------------------------------------------------
+        # Write back the block of the output matrix C with masks.
+        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
 
-        c_m_offsets = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-
-        # Apply output indirection if specified
         if out_index_is_none:
-            c_row_indices = a_row_indices
+            remap_offs_cm = remap_offs_am
         else:
-            c_row_indices = tl.load(out_index_ptr + stride_out_index * m_offsets)
+            remap_offs_cm = tl.load(out_index_ptr + stride_out_index * offs_am)
 
-        c_n_offsets = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-        # Create output pointers
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptrs = (
-            c_ptr
-            + stride_cm * c_row_indices[:, None]
-            + stride_cn * c_n_offsets[None, :]
+            c_ptr + stride_cm * remap_offs_cm[:, None] + stride_cn * offs_cn[None, :]
         )
-
-        # Create mask: only write if row is in bounds AND selector matches
-        write_mask = (
-            (c_m_offsets[:, None] < M)
-            & (sel_values[:, None] == matrix_id)
-            & (c_n_offsets[None, :] < N)
+        c_mask = ((offs_cm[:, None] < M) & (sel_all[:, None] == matrix_id)) & (
+            offs_cn[None, :] < N
         )
-
-        tl.store(c_ptrs, result, mask=write_mask)
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 @triton.autotune(
@@ -522,16 +482,16 @@ def cvmm_backward_kernel3(
     stride_index,
     stride_sel,
     stride_out_index,
-    out_index_is_none: constexpr,
-    out_dtype_id: constexpr,
-    allow_tf32: constexpr,
-    dtype_id: constexpr,
+    out_index_is_none: tl.constexpr,
+    out_dtype_id: tl.constexpr,
+    allow_tf32: tl.constexpr,
+    dtype_id: tl.constexpr,
     # Meta-parameters
-    BLOCK_SIZE_M: constexpr,
-    BLOCK_SIZE_N: constexpr,
-    BLOCK_SIZE_K: constexpr,
-    GROUP_SIZE_M: constexpr,
-    K_BLOCKS: constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    K_BLOCKS: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -761,7 +721,10 @@ if version.parse(torch.__version__) >= version.parse("2.2.0"):
 else:
     cvmm_triton_call = cvmm_triton
 
+# torch.library.define("mylib::cvmm_triton_backward", "(Tensor x, Tensor sel_index, Tensor sel, Tensor grads, int n_experts, ScalarType key_dtype, bool op_float16, Tensor out_index) -> Tensor")
 
+
+# @torch.library.impl("mylib::cvmm_triton_backward", "default")
 def cvmm_triton_backward(
     x: torch.Tensor,
     sel_index: torch.Tensor,

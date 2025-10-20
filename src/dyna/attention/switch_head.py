@@ -142,7 +142,7 @@ class SwitchHead(AttentionModule):
             x.div_(x.norm(dim=-1, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
             x.mul_(std_t / x.std())
 
-    def get_reg_loss(self) -> Float[Tensor, " dim"]:
+    def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss from selection history."""
         loss = torch.tensor(0.0)
         if self.sel_hist:

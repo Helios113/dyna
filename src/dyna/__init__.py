@@ -11,30 +11,30 @@ Version: 0.1.0
 __version__ = "0.1.0"
 __author__ = "Preslav Aleksandorv"
 
-from jaxtyping import install_import_hook
+# from jaxtyping import install_import_hook
+from beartype.claw import beartype_this_package
 
-with install_import_hook("dyna", "beartype.beartype"):
-    from dyna import (
-        attention,
-        callbacks,
-        config,
-        kernel,
-        data,
-        layers,
-        model,
-        modules,
-        schedulers,
-        transition,
-        utils,
-    )
+beartype_this_package()
 
+from dyna import (
+    attention,
+    callbacks,
+    config,
+    data,
+    layers,
+    model,
+    modules,
+    schedulers,
+    transition,
+    utils,
+)
 
 __all__ = [
     "attention",
     "callbacks",
     "config",
-    "kernel",
     "data",
+    "kernel",
     "layers",
     "modules",
     "schedulers",

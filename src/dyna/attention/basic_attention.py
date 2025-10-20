@@ -76,9 +76,9 @@ class BasicAttn(AttentionModule):
         tuple[None, None],
     ]:
         """Forward pass through the attention layer."""
-        q: Float[Tensor, "batch seq n_heads*d_head"] = self.q(q_src)
-        k: Float[Tensor, "batch seq n_heads*d_head"] = self.k(k_src)
-        v: Float[Tensor, "batch seq n_heads*d_head"] = self.v(v_src)
+        q: Float[Tensor, "batch seq nd_head"] = self.q(q_src)
+        k: Float[Tensor, "batch seq nd_head"] = self.k(k_src)
+        v: Float[Tensor, "batch seq nd_head"] = self.v(v_src)
 
         # Project to attention format
 
@@ -90,11 +90,6 @@ class BasicAttn(AttentionModule):
         q = self.dropout(q)
 
         # Apply attention
-        print("q type", type(q))
-        print("k type", type(k))
-        print("v type", type(v))
-        print("attention attention_mask", type(attention_mask))
-        print("sequence_length", type(sequence_length))
         res = self.attend(v, k, q, attention_mask, sequence_length)
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)

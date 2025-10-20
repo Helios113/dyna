@@ -64,27 +64,6 @@ class ShannonEntropyCallback(Callback):
             )
         return False
 
-    def _compute_shannon_entropy(self, logits: torch.Tensor) -> torch.Tensor:
-        """Compute Shannon entropy from logits.
-
-        Args:
-            logits: Model logits of shape [batch_size, seq_len, vocab_size]
-
-        Returns:
-            entropy: Average entropy across batch and sequence, scalar tensor
-        """
-        # Convert logits to probabilities
-        with torch.no_grad():
-            probs = torch.nn.functional.softmax(logits, dim=-1)
-            probs = torch.clamp(probs.float(), min=1e-6).to(probs.dtype)
-            # Compute log probabilities
-            log_probs = torch.log(probs)
-
-            # Compute Shannon entropy: H(p) = -sum(p * log(p))
-            entropy = -torch.sum(probs * log_probs, dim=-1)
-
-            return entropy
-
     def batch_end(self, state: State, logger: Logger) -> None:
         """Called at the end of each batch to compute and log entropy."""
         if not self._should_log(state):
@@ -94,22 +73,16 @@ class ShannonEntropyCallback(Callback):
         step = str(state.timestamp.batch)
         model: DynaLM = cast(DynaLM, state.model.model)
         batch_latentes = model.transformer._latent_vectors
-        batch_entropy = []
 
         # Keep everything on GPU
-        data_proc = []
+        batch_entropy = []
         for elem in batch_latentes:
             for i, sample in enumerate(elem):
-                if i == len(data_proc):
-                    data_proc.append(sample)
+                if i == len(batch_entropy):
+                    batch_entropy.append(sample)
 
                 else:
-                    data_proc[i] = torch.cat((data_proc[i], sample))
-
-        for elem in data_proc:
-            entropy = self._compute_shannon_entropy(elem)
-            batch_entropy.append(entropy)
-
+                    batch_entropy[i] = torch.cat((batch_entropy[i], sample))
         if batch_entropy:
             metrics_dict["metrics/shanon_entropy"] = batch_entropy[-1].mean().item()
             try:

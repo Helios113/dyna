@@ -70,9 +70,6 @@ class AttentionModule(DynaModule):
         Returns:
             Attention output tensor of shape (batch, n_heads, seq, d_head).
         """
-        # Apply rotary position encoding
-        # Remove debug print that could cause issues
-
         if not self.nope_pos:
             q, k = self._apply_rope(q, k, sequence_length)
 
@@ -92,8 +89,6 @@ class AttentionModule(DynaModule):
         positions: Int[Tensor, "batch seq"],
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Optimized rotary position encoding application."""
-        print("Applying rotary position encoding...")
-        print(type(positions))
         sin, cos = self.get_sincos_positions(x, positions)
 
         # Get sequence length once
@@ -129,15 +124,14 @@ class AttentionModule(DynaModule):
             or self.cos_cached.device != x.device
         ):
             # Create position indices for the maximum sequence length we might need
-            print("pos type", type(positions))
-            print(positions)
             max_pos = positions.max().item() + 1
             pos_idx = torch.arange(max_pos, device=x.device)
 
             # Compute frequencies
-            freqs: Float[Tensor, "max_pos max_pos"] = torch.einsum(
+            freqs: Float[Tensor, "max_pos d_head"] = torch.einsum(
                 "i,j->ij", pos_idx, self.inv_freq
             )
+
             emb = torch.cat((freqs, freqs), dim=-1)
 
             # Cache sin/cos for future use

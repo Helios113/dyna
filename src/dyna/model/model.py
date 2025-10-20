@@ -48,7 +48,7 @@ def _generate_attention_mask(
         return base_causal.unsqueeze(0).expand(batch_size, -1, -1)
 
     # Find EOS positions
-    eos_positions: Bool[Tensor, "batch seq"] = (
+    eos_positions: Int[Tensor, "batch seq"] = (
         eos_mask.long()
     )  # Convert to int: [batch, seq]
 

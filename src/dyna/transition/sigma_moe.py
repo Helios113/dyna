@@ -171,7 +171,7 @@ class SigmaMoE(DynaModule):
         # Get expert selection
         affinity, selection_index = self._compute_expert_selection(selection_input)
         if self.training:
-            self.sel_hist.append(affinity)
+            self.sel_hist.append(affinity.unsqueeze(2))
         # Detach to avoid storing gradients
 
         # Prepare selection indices for CVMM operations
