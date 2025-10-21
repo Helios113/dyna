@@ -58,33 +58,33 @@ def test_basic_attention():
         f"Got: {list(collector.keys())}"
     )
 
-    # print(f"Q_PROJ_HASH = \"{hashlib.sha256("
+    # print(f"Q_PROJ_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_q_proj'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"K_PROJ_HASH = \"{hashlib.sha256("
+    # print(f"K_PROJ_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_k_proj'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"V_PROJ_HASH = \"{hashlib.sha256("
+    # print(f"V_PROJ_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_v_proj'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"Q_RESHAPED_HASH = \"{hashlib.sha256("
+    # print(f"Q_RESHAPED_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_q_reshaped'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"K_RESHAPED_HASH = \"{hashlib.sha256("
+    # print(f"K_RESHAPED_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_k_reshaped'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"V_RESHAPED_HASH = \"{hashlib.sha256("
+    # print(f"V_RESHAPED_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_v_reshaped'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"ATTENTION_OUTPUT_HASH = \"{hashlib.sha256("
+    # print(f"ATTENTION_OUTPUT_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_attention_output'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f"OUTPUT_PROJ_HASH = \"{hashlib.sha256("
+    # print(f"OUTPUT_PROJ_HASH = \"{hashlib.sha256(
     #     collector['basic_attn_output_proj'].detach().numpy().tobytes()
     # ).hexdigest()}\"")
-    # print(f'FINAL_OUTPUT_HASH = "{hashlib.sha256('
+    # print(f'FINAL_OUTPUT_HASH = "{hashlib.sha256(
     #     attention_output.detach().numpy().tobytes()
-    # ).hexdigest()}"')
+    # ).hexdigest()}")
 
     q_proj_hash = hashlib.sha256(
         collector["basic_attn_q_proj"].detach().numpy().tobytes()

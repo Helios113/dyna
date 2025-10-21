@@ -1,3 +1,5 @@
+# encoding: pypreprocessor
+# ruff: noqa: I001
 import math
 from collections.abc import Callable
 
@@ -8,6 +10,13 @@ from torch import Tensor
 from dyna.kernel.cvmm import cvmm, cvmm_prepare_sel2
 from dyna.modules import entropy_reg
 from dyna.modules.dyna_module import DynaModule
+
+# execute
+import os
+
+if "PYTEST_VERSION" in os.environ:
+    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
+# endexecute
 
 
 class SigmaMoE(DynaModule):
@@ -166,6 +175,9 @@ class SigmaMoE(DynaModule):
         self,
         token_stream: Float[Tensor, "batch seq d_model"],
         selection_input: Float[Tensor, "batch seq d_model"],
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[Float[Tensor, "batch seq d_model"], Int[Tensor, "batch seq k_experts"]]:
         """Forward pass through the MoE layer."""
         # Get expert selection
@@ -174,25 +186,52 @@ class SigmaMoE(DynaModule):
             self.sel_hist.append(affinity)
         # Detach to avoid storing gradients
 
+        # ifdef PYTEST
+        assert collector is not None
+        collector["sigma_moe_affinity"] = affinity.clone()
+        collector["sigma_moe_selection_index"] = selection_index.clone()
+        # endif
+
         # Prepare selection indices for CVMM operations
         selection_indices = cvmm_prepare_sel2(selection_index.int())
 
-        scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(
+        # ifdef PYTEST
+        assert collector is not None
+        collector["sigma_moe_selection_indices"] = selection_indices.clone()
+        # endif
+
+        scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(  # type: ignore[assignment]
             token_stream, selection_indices, self.keys
         )
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["sigma_moe_scores_pre_activation"] = scores.clone()
+        # endif
+
         scores = self.activation(scores)
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["sigma_moe_scores_post_activation"] = scores.clone()
+        # endif
 
         # Down-projection: scores * expert_values
         selection_indices.reduction_weight = affinity
-        selection_indices.sel_index = selection_indices.out_index
+        selection_indices.sel_index = selection_indices.out_index  # type: ignore[assignment]
         selection_indices.out_index = None
 
-        out = cvmm(scores, selection_indices, self.values)
+        out = cvmm(scores, selection_indices, self.values)  # type: ignore[assignment]
+
+        # if PYTEST
+        assert collector is not None
+        collector["sigma_moe_output"] = out.clone()  # type: ignore[union-attr]
+        # endif
 
         # Clean up intermediate tensors to prevent memory leak
         del scores, selection_indices
 
-        return out.view_as(token_stream), selection_index
+        return out.view_as(token_stream), selection_index  # type: ignore[union-attr]
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
         # Average over time and layers
