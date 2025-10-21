@@ -39,13 +39,6 @@ class BasicAttn(AttentionModule):
         # RoPE configuration
         self.n_rotate = int(rotate_fraction * self.d_head)
 
-        # # Attention scale
-        # self.register_buffer(
-        #     "scale",
-        #     torch.full([1], 1.0 / math.sqrt(self.d_head)),
-        #     persistent=False,
-        # )
-
     def reset_parameters(self, std_scale: float) -> None:
         with torch.no_grad():
             # Initialize projection parameters

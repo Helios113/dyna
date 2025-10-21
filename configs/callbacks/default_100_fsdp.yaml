@@ -1,0 +1,17 @@
+lr_monitor: {}
+speed_monitor:
+    window_size: 1
+    gpu_flops_available:
+        fp64: 67e12,
+        fp32: 67e12,
+        tf32: 989e12 / 2,
+        fp16: 1.979e15 / 2,
+        amp_fp16: 1.979e15 / 2,
+        bf16: 1.979e15 / 2,
+        amp_bf16: 1.979e15 / 2,
+        fp8: 3.958e15 / 2,
+        amp_fp8: 3.958e15 / 2,
+        int8: 3.958e15 / 2,
+memory_monitor: {}
+runtime_estimator: {}
+optimizer_monitor: {}
