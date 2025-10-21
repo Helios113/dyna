@@ -125,7 +125,6 @@ class DynaLM(DynaPretrainedModel):
         self.d_model = config.d_model
         self.eos_token_id = eos_token_id
         self.rescaling_method = config.rescaling_method
-        self.sample_iterations = config.sample_iterations
         self.use_energy_per_sample = config.use_energy_per_sample
         self.use_reg_loss = config.use_reg_loss
 
@@ -214,6 +213,8 @@ class DynaLM(DynaPretrainedModel):
             # Reg loss for moeut
             if self.use_reg_loss:
                 loss = loss + self.transformer._collect_regularization_loss()
+            else:
+                self.transformer._clear_selection_history()
 
         return CausalLMOutputWithPast(
             loss=loss,  # pyright: ignore[reportArgumentType]

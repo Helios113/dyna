@@ -200,3 +200,7 @@ class SigmaMoE(DynaModule):
         # Clear the history to prevent memory accumulation
         self.sel_hist.clear()
         return loss
+
+    def clear_selection_history(self):
+        if self.sel_hist:
+            self.sel_hist.clear()

@@ -746,14 +746,14 @@ class MoEUTLM_old(torch.nn.Module):
         x = self.embedding(x)
 
         # x shape batch_size x seq_len x d_model
-        # print(x.shape)
+
         out = self.transformer(x, mask, kv_cache)
         return out
 
-        # print(x.shape)
+
         # x shape batch_size x seq_len x d_model
         out.outputs = self.lm_head(self.out_norm(out.outputs))
-        # print(out.outputs.shape)
+ d
         # out.outputs shape batch_size x seq_len x vocab_size
         return out
 

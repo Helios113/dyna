@@ -25,7 +25,7 @@ class MoEUTLayer(LayerModule):
                 k_attn=config.k_attn,
                 n_expert_shared_attn=config.n_expert_shared_attn,
                 nope_pos=config.nope_pos,
-                use_bias=config.use_moe_bias,
+                use_bias=not config.use_reg_loss,
                 manual_scale=config.manual_scale,
             ),
             ffn_module=SigmaMoE(
@@ -35,7 +35,7 @@ class MoEUTLayer(LayerModule):
                 k_ffn=config.k_ffn,
                 dropout_expert=config.dropout_expert_ffn,
                 n_expert_shared_ffn=config.n_expert_shared_ffn,
-                use_bias=config.use_moe_bias,
+                use_bias=not config.use_reg_loss,
             ),
             input_projection=(
                 torch.nn.Linear(2 * config.d_model, config.d_model, bias=False)

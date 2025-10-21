@@ -1,4 +1,5 @@
 import math
+import random
 from collections.abc import Callable
 
 import torch
@@ -60,13 +61,13 @@ class DynaFormer(DynaPretrainedModel):
         # Size of head and tail
         self.head_size = config.head_size
         self.tail_size = config.tail_size
+        self.sample_iterations = config.sample_iterations
 
         # Looping behaviour
         self.n_layers = config.n_layers
         self.n_repeats = config.n_repeats
         self.repeat_residual = config.repeat_residual
         self.min_loop_layers = self.n_repeats
-        self.repeats = config.n_repeats
         self.total_depth_for_init = config.total_depth_for_init
 
         # Execution behaviour
@@ -197,6 +198,12 @@ class DynaFormer(DynaPretrainedModel):
                 reg_loss = reg_loss + self.reg_entropy * layer.get_reg_loss()
         return reg_loss
 
+    def _clear_selection_history(self):
+        for layer in self.modules():
+            if hasattr(layer, "clear_selection_history"):
+                assert isinstance(layer, DynaModule)
+                layer.clear_selection_history()
+
     def mask_to_scatter_index(self, mask: torch.Tensor):
         idexes = torch.nonzero(mask.view(-1), as_tuple=True)[0]
         return idexes
@@ -224,11 +231,28 @@ class DynaFormer(DynaPretrainedModel):
             x, attention_mask, sequence_length, e
         )
         x, energy_per_sample, layer_index = self.body(
-            x, attention_mask, sequence_length, e, reinjection_embeddings, layer_index
+            x,
+            attention_mask,
+            sequence_length,
+            self._get_repeat_number(),
+            e,
+            reinjection_embeddings,
+            layer_index,
         )
         x = self.tail(x, attention_mask, sequence_length, e, layer_index)
 
         return x, energy_per_sample
+
+    def _get_repeat_number(self) -> int:
+        if self.head_layers is None or not self.sample_iterations:
+            return self.n_repeats
+        # uniform sampling
+        return random.randint(1, self.n_repeats)
+        # Gaussian sampling
+        # TODO: Implement lambda sampling
+        # Lambda sampling
+        # TODO: Implement lambda sampling
+        return 0
 
     def head(
         self,
@@ -271,6 +295,7 @@ class DynaFormer(DynaPretrainedModel):
         x: Float[Tensor, "batch seq d_model"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
+        repeats: int,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         reinjection_embeddings: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
@@ -282,7 +307,7 @@ class DynaFormer(DynaPretrainedModel):
         residual_embeddings = None
         continue_mask = None
         energy_per_sample = None
-        for _ in range(self.n_repeats):
+        for _ in range(repeats):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:

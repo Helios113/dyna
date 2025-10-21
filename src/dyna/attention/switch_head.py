@@ -155,6 +155,10 @@ class SwitchHead(AttentionModule):
         self.sel_hist.clear()
         return loss
 
+    def clear_selection_history(self):
+        if self.sel_hist:
+            self.sel_hist.clear()
+
     def _get_expert_selection(
         self,
         input_tensor: Float[Tensor, "batch seq d_model"],
@@ -351,5 +355,4 @@ class SwitchHead(AttentionModule):
         assert isinstance(out, torch.Tensor)
         assert isinstance(v_sel_index, torch.Tensor)
         assert isinstance(o_sel_inedx, torch.Tensor)
-
         return out, (v_sel_index.detach().cpu(), o_sel_inedx.detach().cpu())

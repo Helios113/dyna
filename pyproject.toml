@@ -109,10 +109,10 @@ docstring-code-format = true
 
 [tool.basedpyright]
 # Add the path to your site-packages or source code directory
-extraPaths = ["src", "/nfs-share/pa511/code_bases/dyna_project/dyna/.venv/"]
 reportAny = "none"
 typeCheckingMode = "basic"
 
 exclude = [
     "tools/",
+    "src/dyna/kernel"
 ]
