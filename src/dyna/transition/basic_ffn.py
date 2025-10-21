@@ -63,3 +63,6 @@ class BasicFFN(DynaModule):
         BasicFFN doesn't use expert routing, so no regularization loss.
         """
         return torch.tensor(0.0, device=self.projection_up.weight.device)
+
+    def clear_selection_history(self):
+        return

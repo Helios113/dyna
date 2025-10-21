@@ -42,3 +42,5 @@ class ModelConfig:
     use_reg_loss: bool = False
     use_embedding_norm: bool = False
     manual_scale: bool = False
+    tail_size: int = 2
+    head_size: int = 2

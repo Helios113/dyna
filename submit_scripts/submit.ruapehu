@@ -13,8 +13,10 @@ unique_name=$(mktemp -d dyna_XXXXXX)
 echo "Created temp dir $unique_name"
 export TMPDIR=$unique_name
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=new_geipping_160M
-HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_dyt
+# HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_dyt
+HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=TODOgeiping_160M
 
+TODOgeiping_160M
 # rm -rf /tmp > /dev/null
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M

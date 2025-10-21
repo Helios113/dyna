@@ -25,7 +25,7 @@ model_config:
     enable_early_exit: False
     norm_structure: pre
     rescaling_method: none
-    total_depth_for_init: ${model_config.n_layers}
+    total_depth_for_init: 12
 
 train:
     max_duration: "3171ba"
@@ -34,10 +34,10 @@ train:
     device_train_batch_size: 1024
 
 trainer_config:
-    run_name: "moeut"
+    run_name: "geiping"
     max_duration: ${train.max_duration}
     train_dataloader_label: "train"
-    device_train_microbatch_size: 32
+    device_train_microbatch_size: 16
     precision: "amp_bf16"
     device: "gpu"
     save_folder: "s3://loop-llm/dyna/"

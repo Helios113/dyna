@@ -247,7 +247,9 @@ class DynaFormer(DynaPretrainedModel):
         if self.head_layers is None or not self.sample_iterations:
             return self.n_repeats
         # uniform sampling
-        return random.randint(1, self.n_repeats)
+        a = random.randint(1, self.n_repeats)
+        print(f"We have sampled {a} iterations")
+        return a
         # Gaussian sampling
         # TODO: Implement lambda sampling
         # Lambda sampling

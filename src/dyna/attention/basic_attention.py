@@ -97,3 +97,6 @@ class BasicAttn(AttentionModule):
         # Apply output projection
         out = self.o(res)
         return out, (None, None)
+
+    def clear_selection_history(self):
+        return
