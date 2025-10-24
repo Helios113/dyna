@@ -10,10 +10,10 @@ model_config:
     execution_mode: transformer
     d_model: 768
     d_ffn: 3072
-    n_repeats: 1
+    n_repeats: 2
     n_heads: 12
     d_head: 64
-    n_layers: 12
+    n_layers: 6
     vocab_size: 50368
     max_seq_len: 1024
     n_expert_shared_attn: 0
@@ -22,11 +22,9 @@ model_config:
     enable_early_exit: False
     norm_structure: pre
     rescaling_method: none
-    norms:
-        norm_type: dynamic_tanh
-        attn_eps: 3.0
-        ffn_eps: 3.0
-    total_depth_for_init: ${model_config.n_layers}
+    total_depth_for_init: 12
+    loop_normalization: True
+    sample_iterations: True
 
 train:
     max_duration: "3171ba"
@@ -35,10 +33,10 @@ train:
     device_train_batch_size: 1024
 
 trainer_config:
-    run_name: "dytPostTransformer"
+    run_name: "loopTransformerDyn"
     max_duration: ${train.max_duration}
     train_dataloader_label: "train"
-    device_train_microbatch_size: 32
+    device_train_microbatch_size: 16
     precision: "amp_bf16"
     device: "gpu"
     save_folder: "s3://loop-llm/dyna/"

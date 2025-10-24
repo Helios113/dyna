@@ -29,7 +29,7 @@ dependencies = [
     "pre-commit>=4.3.0",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
-    "pypreprocessor>=0.1.0"
+    "pypreprocessor>=0.1.0",
 ]
 
 [build-system]

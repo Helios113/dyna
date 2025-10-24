@@ -1,4 +1,6 @@
+import json
 import os
+from dataclasses import asdict
 
 import hydra
 import torch
@@ -20,6 +22,7 @@ from dyna.utils import (
     get_data_loader,
     get_scheduler,
     make_wandb_run_name,
+    create_param_groups_with_conditional_wd,
 )
 
 
@@ -57,22 +60,25 @@ def main(cfg: DictConfig):
     )
 
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
-
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
-    # Instead of passing the DictConfig directly, unpack it as kwargs
     conf = DynaConfig(**cfg.model_config)
-
+    print(conf)
     torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
-
+    print("model_structure  ", model, flush=True)
     train_dataloader = get_data_loader(
         cfg.data_config,
         tokenizer=tokenizer,
         device_train_batch_size=cfg.train.device_train_batch_size,
     )
     # Make optimizer
-    optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
+    params = create_param_groups_with_conditional_wd(
+        model,
+        ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+    )
+    print("param optimizer settings:\n", params, flush=True)
+    optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 

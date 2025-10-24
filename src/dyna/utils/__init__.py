@@ -6,6 +6,7 @@ from dyna.utils.utils import (
     get_data_loader,
     get_scheduler,
     make_wandb_run_name,
+    create_param_groups_with_conditional_wd,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "get_scheduler",
     "check_duplicate_keys",
     "build_full_concrete_config",
+    "create_param_groups_with_conditional_wd",
 ]

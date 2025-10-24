@@ -84,6 +84,12 @@ class AttentionModule(DynaModule):
             scale=1.0 if manual_scale else None,
         )
 
+    def update_inv_freq(self, base: int) -> None:
+        self.inv_freq = 1.0 / (
+            base ** (torch.arange(0, self.d_head, 2).float() / self.d_head)
+        )
+        self.seq_len_cached = 0
+
     def project_to_torch_order(self, x: torch.Tensor) -> torch.Tensor:
         """Reshape tensor to PyTorch attention format."""
         return x.view(*x.shape[:-1], self.n_heads, self.d_head).transpose(-2, -3)

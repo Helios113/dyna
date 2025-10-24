@@ -29,4 +29,5 @@ class ExecutionMode(str, Enum):
 class NormType(str, Enum):
     low_precision_layernorm = "low_precision_layernorm"
     low_precision_rmsnorm = "low_precision_rmsnorm"
-    dynamic_thanh = "dynamic_thanh"
+    dynamic_tanh = "dynamic_tanh"
+    unit_norm = "unit_norm"

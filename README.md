@@ -11,3 +11,13 @@
 ## Dyna
 Framework and implementation of dynamic path iterative transformer models.
   This servers as a backbone for DynaLLMs and for DynaDiffusion models.
+
+
+
+## Directions:
+
+1. We need to run some baselines
+  -- we have the typical transformer
+  -- we also have moeut
+  -- I can now run abbie method for a bit longer to see what happens
+    *

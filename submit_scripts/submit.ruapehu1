@@ -1,24 +1,30 @@
 #!/bin/bash
 #SBATCH -J dyna
-#SBATCH -w mauao
+#SBATCH -w ruapehu
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --cpus-per-task=12
-#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=24
+#SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
-
-export MASTER_ADDR="127.0.0.2"
-
 ulimit -n 4096
 unique_name=$(mktemp -d dyna_XXXXXX)
 echo "Created temp dir $unique_name"
 export TMPDIR=$unique_name
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=new_geipping_160M
-# HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_dyt
-TORCH_DISTRIBUTED_DEBUG=INFO HYDRA_FULL_ERROR=1 uv run composer -n 2 -v main.py --config-name=transformer_160M_loop
+HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_nope
+# HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=TODOgeiping_160M
+
+TODOgeiping_160M
+# rm -rf /tmp > /dev/null
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=MoA_moeut_peri_div_ee_160M
 # HYDRA_FULL_ERROR=1 uv run python main.py --config-name=transformer_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=geiping_160M
+# HYDRA_FULL_ERROR=1 uv run python main.py --config-name=new_abbie_160M
+
+
 status=$?
 if [ $status -eq 0 ]; then
    # Add notification after job completion

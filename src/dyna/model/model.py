@@ -134,12 +134,16 @@ class DynaLM(DynaPretrainedModel):
         self.lm_head._fsdp_wrap = True  # pyright: ignore[reportArgumentType]
         if config.use_embedding_norm:
             self.embedding_norm = build_norm(
-                name=config.norm_type, normalized_shape=config.d_model
+                name=config.norms.norm_type,
+                eps=config.norms.ffn_eps,
+                normalized_shape=config.d_model,
             )
         else:
             self.embedding_norm = None
         self.out_norm = build_norm(
-            name=config.norm_type, normalized_shape=config.d_model
+            name=config.norms.norm_type,
+            eps=config.norms.ffn_eps,
+            normalized_shape=config.d_model,
         )
 
         # Provide LM head to transformer for entropy computation

@@ -281,3 +281,49 @@ def build_full_concrete_config(cfg: DictConfig):
         cfg.fsdp_config = fsdp_config
 
     return cfg
+
+
+def create_param_groups_with_conditional_wd(
+    model, no_decay_param_names, default_wd=1e-5
+):
+    """
+    Creates parameter groups where specified parameters have zero weight decay.
+
+    Args:
+        model: The model whose parameters to group
+        no_decay_param_names: List of parameter name substrings to exclude from weight decay
+        default_wd: Default weight decay for other parameters
+
+    Returns:
+        List of parameter group dicts for optimizer
+    """
+    decay_params = []
+    no_decay_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        # Check if parameter name contains any of the no-decay strings
+        if any(nd_name in name for nd_name in no_decay_param_names):
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    param_groups = [
+        {"params": decay_params, "weight_decay": default_wd},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+
+    return param_groups
+
+
+# # Usage:
+# no_decay_list = ['bias', 'LayerNorm', 'layernorm']  # Example: common parameters to exclude
+# param_groups = create_param_groups_with_conditional_wd(
+#     model,
+#     no_decay_list,
+#     default_wd=0.01
+# )
+
+# optimizer = DecoupledAdamW(param_groups, lr=cfg.optimizer_config.lr)

@@ -17,6 +17,7 @@ from beartype.claw import beartype_this_package
 beartype_this_package()
 
 from dyna import (
+    norms,
     attention,
     callbacks,
     config,

@@ -1,31 +1,21 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-*.png
+# 1. Ignore everything
+*
+!src/
+!src/**
+!configs/
+!configs/**
+!submit_scripts/
+!submit_scripts/**
+!tests/
+!tests/**
+!main.py
+!.pre-commit-config.yaml
+!pyproject.toml
+!README.md
+!LICENSE
+!.python-version
+!.gitignore
 
-# Virtual environments
-.venv
-*.ans
-*.lock
-outputs/
-data_cache/
-wandb/
-logs/
-*.mds
-*.json
-*.err
-*.out
-*.log
-*jsonl
-*jsonl_tmp
-*.zip
-dyna_tmp*
-local_data/
-dyna_*
-*.mds
-source/
-slurm_outputs/*
+# 2. Now, re-ignore build/cache artifacts
+__pycache__/
+*.egg-info/

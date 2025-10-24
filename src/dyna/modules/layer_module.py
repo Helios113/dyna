@@ -25,32 +25,49 @@ class LayerModule(Module, ABC):
         self.attention = attention_module
         self.ffn = ffn_module
         self.input_projection = input_projection
-
         self.attn_pre = build_norm(
-            name=config.norm_type, normalized_shape=config.d_model
+            name=config.norms.norm_type,
+            eps=config.norms.attn_eps,
+            normalized_shape=config.d_model,
         )
         self.attn_post = build_norm(
-            name=config.norm_type, normalized_shape=config.d_model
+            name=config.norms.norm_type,
+            eps=config.norms.attn_eps,
+            normalized_shape=config.d_model,
+        )
+        self.attn_pre.requires_grad_(
+            config.norm_structure
+            in [NormStructure.peri, NormStructure.pre, NormStructure.moeut]
         )
         self.attn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
         self.ffn_pre = build_norm(
-            name=config.norm_type, normalized_shape=config.d_model
+            name=config.norms.norm_type,
+            eps=config.norms.ffn_eps,
+            normalized_shape=config.d_model,
+        )
+        self.ffn_pre.requires_grad_(
+            config.norm_structure
+            in [NormStructure.peri, NormStructure.pre, NormStructure.moeut]
         )
         self.ffn_post = build_norm(
-            name=config.norm_type, normalized_shape=config.d_model
+            name=config.norms.norm_type,
+            eps=config.norms.ffn_eps,
+            normalized_shape=config.d_model,
         )
         self.ffn_post.requires_grad_(
             config.norm_structure in [NormStructure.peri, NormStructure.post]
         )
-
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
         self.n_layers = config.n_layers
         self.enable_early_exit = config.enable_early_exit
         self.rescaling_method = config.rescaling_method
         self.norm_structure = config.norm_structure
+
+    def update_inv_freq(self, base: int):
+        self.attention.update_inv_freq(base)
 
     # Done
     def _apply_pre_norm_attn(

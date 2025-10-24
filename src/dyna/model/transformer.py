@@ -69,12 +69,15 @@ class DynaFormer(DynaPretrainedModel):
         self.repeat_residual = config.repeat_residual
         self.min_loop_layers = self.n_repeats
         self.total_depth_for_init = config.total_depth_for_init
-
+        self.loop_normalization = config.loop_normalization
+        if self.loop_normalization:
+            self.loop_norm = torch.nn.LayerNorm(config.d_model)
         # Execution behaviour
         self.enable_early_exit = config.enable_early_exit
         self.execution_mode = config.execution_mode
         self.gather_stats = False
-
+        self.loop_rebase = config.loop_rebase
+        self.rope_base = 10000
         # Layer configuration
         self.body_layers: ModuleList
         self.head_layers: ModuleList | None = None
@@ -244,7 +247,7 @@ class DynaFormer(DynaPretrainedModel):
         return x, energy_per_sample
 
     def _get_repeat_number(self) -> int:
-        if self.head_layers is None or not self.sample_iterations:
+        if not self.sample_iterations:
             return self.n_repeats
         # uniform sampling
         a = random.randint(1, self.n_repeats)
@@ -309,7 +312,7 @@ class DynaFormer(DynaPretrainedModel):
         residual_embeddings = None
         continue_mask = None
         energy_per_sample = None
-        for _ in range(repeats):
+        for i in range(repeats):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:
@@ -336,12 +339,19 @@ class DynaFormer(DynaPretrainedModel):
                     break
                 if self.gather_stats:
                     self.gather_stats_func(x, expert_sel)
-
+            if self.loop_normalization:
+                x = self.loop_norm(x)
+            if self.loop_rebase:
+                self.update_inv_freq(self.rope_base * i)
             if self.repeat_residual:
                 residual_embeddings = x.clone()
             if not continue_processing:
                 break
         return x, energy_per_sample, layer_index
+
+    def update_inv_freq(self, base: int):
+        for layer in self.body_layers:
+            layer.update_inv_freq(base)
 
     def _apply_early_exit(
         self,

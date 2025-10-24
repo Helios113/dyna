@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from dyna.config.enums import ExecutionMode, NormStructure, NormType, RescaleMethod
+from dyna.config.enums import ExecutionMode, NormStructure, RescaleMethod
+from dyna.config.norm_config import NormConfig
 
 
 @dataclass
@@ -32,7 +33,7 @@ class ModelConfig:
     enable_early_exit: bool = True
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
     norm_structure: NormStructure = NormStructure.peri
-    norm_type: NormType = NormType.low_precision_rmsnorm
+    norms: NormConfig = field(default_factory=NormConfig)
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False
@@ -44,3 +45,5 @@ class ModelConfig:
     manual_scale: bool = False
     tail_size: int = 2
     head_size: int = 2
+    loop_normalization: bool = False
+    loop_rebase: bool = False
