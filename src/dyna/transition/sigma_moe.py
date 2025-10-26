@@ -223,7 +223,7 @@ class SigmaMoE(DynaModule):
 
         out = cvmm(scores, selection_indices, self.values)  # type: ignore[assignment]
 
-        # if PYTEST
+        # ifdef PYTEST
         assert collector is not None
         collector["sigma_moe_output"] = out.clone()  # type: ignore[union-attr]
         # endif
