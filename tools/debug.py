@@ -2,7 +2,8 @@ import random
 
 import hydra
 import numpy as np
-import torch
+from transformers import AutoTokenizer
+from model.modules.model_config import ModelConfig, TrainerConfig
 from model.model import ComposerMoEUT, MoEUTConfig
 from model.modules.model_config import ModelConfig
 from omegaconf import DictConfig, OmegaConf

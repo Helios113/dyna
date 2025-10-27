@@ -27,9 +27,11 @@ dependencies = [
     "pysnooper>=1.2.3",
     "ruff>=0.7.0",
     "pre-commit>=4.3.0",
-    "pytest>=8.4.2",
+    "docformatter>=1.7.7",
+    "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
     "pypreprocessor>=0.1.0",
+    "basedpyright>=1.31.7",
 ]
 
 [build-system]
@@ -109,6 +111,7 @@ docstring-code-format = true
 
 [tool.basedpyright]
 # Add the path to your site-packages or source code directory
+extraPaths = ["src", ".venv/lib/python3.12/site-packages", ".venv/lib/python3.11/site-packages", ".venv/lib/python3.10/site-packages"]
 reportAny = "none"
 typeCheckingMode = "basic"
 

@@ -35,15 +35,22 @@ class BasicFFN(DynaModule):
         token_stream: torch.Tensor,
         selection_input: torch.Tensor | None,
         # ifdef PYTEST
-        collector: list | None = None,
+        collector: dict | None = None,
         # endif
     ) -> tuple[torch.Tensor, None]:  # Match return type with SigmaMoE
-        output = self.projection_down(self.activation(self.projection_up(token_stream)))
+        up_output = self.projection_up(token_stream)
+        activation_output = self.activation(up_output)
+        down_output = self.projection_down(activation_output)
         # ifdef PYTEST
         assert collector is not None
-        collector.append("Hello this worked")
+        collector["basic_ffn_proj_up"] = up_output.clone()
+        collector["basic_ffn_activation"] = activation_output.clone()
+        collector["basic_ffn_proj_down"] = down_output.clone()
         # endif
-        return output, None  # Return None for the selection index to match SigmaMoE
+        return (
+            down_output,
+            None,
+        )  # Return None for the selection index to match SigmaMoE
 
     def reset_parameters(self, std_scale: float) -> None:
         with torch.no_grad():

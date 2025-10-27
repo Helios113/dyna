@@ -2,8 +2,13 @@ import random
 
 import hydra
 import numpy as np
-import torch
-from model.modules.model_config import ModelConfig
+from transformers import AutoTokenizer
+from model.modules.model_config import ModelConfig, TrainerConfig
+from model.model import ComposerMoEUT, MoEUTConfig
+from composer import Trainer
+from streaming import StreamingDataset
+import os
+import hydra
 from omegaconf import DictConfig, OmegaConf
 from tools.old_model import MoEUTLM_old
 
