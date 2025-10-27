@@ -3,7 +3,7 @@ name = "dyna"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "mosaicml[streaming, wandb]==0.32.1",
     # "flash-attn==2.8.1",  # Commented out due to GLIBC compatibility issues
