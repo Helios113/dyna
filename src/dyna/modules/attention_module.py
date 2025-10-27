@@ -32,7 +32,6 @@ class AttentionModule(DynaModule):
         # Compute inverse frequencies
         inv_freq = 1.0 / (base ** (torch.arange(0, d_head, 2).float() / d_head))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-
         # Cache for efficiency
         self.seq_len_cached = 0
         self.cos_cached = None
@@ -73,8 +72,6 @@ class AttentionModule(DynaModule):
         if not self.nope_pos:
             q, k = self._apply_rope(q, k, sequence_length)
 
-        # Explicitly remove scaling, as we scale in the body in the transformer
-        # TODO: return scaling
         return torch.nn.functional.scaled_dot_product_attention(
             q,
             k,
@@ -86,7 +83,11 @@ class AttentionModule(DynaModule):
 
     def update_inv_freq(self, base: int) -> None:
         self.inv_freq = 1.0 / (
-            base ** (torch.arange(0, self.d_head, 2).float() / self.d_head)
+            base
+            ** (
+                torch.arange(0, self.d_head, 2, device=self.device).float()
+                / self.d_head
+            )
         )
         self.seq_len_cached = 0
 

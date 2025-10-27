@@ -112,12 +112,13 @@ class LayerModule(Module, ABC):
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         cum_sum: Float[Tensor, "batch seq"] | None = None,
-    ) -> Float[Tensor, "batch seq d_model"]:
+    ) -> tuple[Float[Tensor, "batch seq d_model"], int]:
         update = update_on_stream
         if self.norm_structure == NormStructure.peri:
             update = norm_to_use(update_on_stream)
         update = self.drop(update)
-
+        layer_index = layer_index + 1
+        print(f"Layer {layer_index}")
         match self.rescaling_method:
             case RescaleMethod.none:
                 if self.enable_early_exit and continue_mask is not None:
@@ -148,6 +149,7 @@ class LayerModule(Module, ABC):
                 else:
                     # Apply to all tokens when early exit is disabled
                     scale_factor = (layer_index - 1) / layer_index
+                    print(f"scale_factor: {scale_factor}", flush=True)
                     residual_stream = (
                         scale_factor * residual_stream + update / layer_index
                     )
@@ -214,7 +216,7 @@ class LayerModule(Module, ABC):
         if self.norm_structure == NormStructure.post:
             residual_stream = norm_to_use(residual_stream)
 
-        return residual_stream
+        return residual_stream, layer_index
 
     def _apply_pre_norm_ffn(self, residual_stream: Float[Tensor, "batch seq d_model"]):
         if (

@@ -42,3 +42,7 @@ class DynaModule(torch.nn.Module, ABC):
     @abstractmethod
     def reset_parameters(self, std_scale: float) -> None:
         pass
+
+    @property
+    def device(self):
+        return next(self.parameters()).device

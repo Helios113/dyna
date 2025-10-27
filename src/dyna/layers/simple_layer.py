@@ -47,6 +47,7 @@ class SimpleLayer(LayerModule):
         Float[Tensor, "batch seq d_model"],
         tuple,
         Float[Tensor, "batch seq"] | None,
+        int,
     ]:
         """Forward pass through the layer with configurable behavior."""
         if self.input_reinjection and reinjection_embeddings is not None:
@@ -62,7 +63,7 @@ class SimpleLayer(LayerModule):
             q_val, k_val, v_val, attention_mask, sequence_length
         )
 
-        x = self._apply_update_to_residual(
+        x, layer_index = self._apply_update_to_residual(
             x,
             att_out,
             continue_mask,
@@ -73,8 +74,8 @@ class SimpleLayer(LayerModule):
 
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
 
-        x = self._apply_update_to_residual(
+        x, layer_index = self._apply_update_to_residual(
             x, ffn_out, continue_mask, layer_index, self.ffn_post, e
         )
 
-        return (x, (expert_sel_attn, expert_sel_ffn), None)
+        return (x, (expert_sel_attn, expert_sel_ffn), None, layer_index)

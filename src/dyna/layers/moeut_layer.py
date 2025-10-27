@@ -62,6 +62,7 @@ class MoEUTLayer(LayerModule):
         Float[Tensor, "batch seq d_model"],
         tuple,
         Float[Tensor, "batch seq"] | None,
+        int,
     ]:
         """Forward pass through the layer with configurable behavior."""
         if self.input_reinjection and reinjection_embeddings is not None:
@@ -75,7 +76,7 @@ class MoEUTLayer(LayerModule):
             q_val, k_val, v_val, attention_mask, sequence_length
         )
 
-        x = self._apply_update_to_residual(
+        x, layer_index = self._apply_update_to_residual(
             x,
             att_out,
             continue_mask,
@@ -90,7 +91,7 @@ class MoEUTLayer(LayerModule):
         if self.saturation_detector is not None:
             saturation_event = self.saturation_detector(ffn_out)
 
-        x = self._apply_update_to_residual(
+        x, layer_index = self._apply_update_to_residual(
             x,
             ffn_out,
             continue_mask,
@@ -99,4 +100,4 @@ class MoEUTLayer(LayerModule):
             e,
         )
 
-        return (x, (expert_sel_attn, expert_sel_ffn), saturation_event)
+        return (x, (expert_sel_attn, expert_sel_ffn), saturation_event, layer_index)

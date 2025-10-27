@@ -273,9 +273,9 @@ class DynaFormer(DynaPretrainedModel):
         if self.head_layers is None:
             return x, None, 0
         reinjection_embeddings = None
-        layer_index = 0
+        layer_index = 1
         for layer in self.head_layers:
-            x, expert_sel, _ = layer(
+            x, expert_sel, _, layer_index = layer(
                 x=x,
                 e=e,
                 layer_index=layer_index,
@@ -284,7 +284,6 @@ class DynaFormer(DynaPretrainedModel):
                 sequence_length=sequence_length,
                 continue_mask=None,
             )
-            layer_index += 1
 
             if self.gather_stats:
                 self.gather_stats_func(x, expert_sel)
@@ -308,7 +307,9 @@ class DynaFormer(DynaPretrainedModel):
         Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None, int
     ]:
         if layer_index is None:
-            layer_index = 0
+            layer_index = 1
+        layer_index = 1
+
         residual_embeddings = None
         continue_mask = None
         energy_per_sample = None
@@ -316,7 +317,8 @@ class DynaFormer(DynaPretrainedModel):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:
-                x_out, expert_sel, saturation_event = layer(
+                print("Layer in loop:", layer_index, flush=True)
+                x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
                     e=e,
                     layer_index=layer_index,
@@ -325,7 +327,6 @@ class DynaFormer(DynaPretrainedModel):
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
                 )
-                layer_index += 1
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(
                         x_out,
@@ -342,7 +343,8 @@ class DynaFormer(DynaPretrainedModel):
             if self.loop_normalization:
                 x = self.loop_norm(x)
             if self.loop_rebase:
-                self.update_inv_freq(self.rope_base * i)
+                print("Updating rope base to:", self.rope_base * (i + 1), flush=True)
+                self.update_inv_freq(self.rope_base * (i + 1))
             if self.repeat_residual:
                 residual_embeddings = x.clone()
             if not continue_processing:
@@ -423,7 +425,7 @@ class DynaFormer(DynaPretrainedModel):
         if self.tail_layers is None:
             return x
         for layer in self.tail_layers:
-            x, expert_sel, _ = layer(
+            x, expert_sel, _, layer_index = layer(
                 x=x,
                 e=e,
                 layer_index=layer_index,
@@ -432,7 +434,6 @@ class DynaFormer(DynaPretrainedModel):
                 sequence_length=sequence_length,
                 continue_mask=None,
             )
-            layer_index += 1
             if self.gather_stats:
                 self.gather_stats_func(x, expert_sel)
 

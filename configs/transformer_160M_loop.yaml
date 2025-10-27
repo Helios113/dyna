@@ -21,10 +21,11 @@ model_config:
     collect_reg_loss: False
     enable_early_exit: False
     norm_structure: pre
-    rescaling_method: none
+    rescaling_method: cum_avg_no_prot_emb
     total_depth_for_init: 12
-    loop_normalization: True
+    loop_normalization: False
     sample_iterations: True
+    loop_rebase: False
 
 train:
     max_duration: "3171ba"
@@ -33,7 +34,7 @@ train:
     device_train_batch_size: 1024
 
 trainer_config:
-    run_name: "loopTransformerDyn"
+    run_name: "loopTransformerDynRescNoLoopNorm"
     max_duration: ${train.max_duration}
     train_dataloader_label: "train"
     device_train_microbatch_size: 16
