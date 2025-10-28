@@ -82,6 +82,7 @@ class DynaConfig(PretrainedConfig):
         self.loop_normalization = kwargs.pop("loop_normalization", False)
         self.norms: NormConfig = NormConfig(**kwargs.pop("norms", {}))
         self.loop_rope_theta_rebase = kwargs.pop("loop_rope_theta_rebase", False)
+        self.transformer_type = kwargs.pop("transformer_type", "dyna")
 
         def to_dict(self):
             output = super().to_dict()

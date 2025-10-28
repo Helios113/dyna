@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 
-from dyna.config.enums import ExecutionMode, NormStructure, RescaleMethod
+from dyna.config.enums import (
+    ExecutionMode,
+    NormStructure,
+    RescaleMethod,
+    TransformerType,
+)
 from dyna.config.norm_config import NormConfig
 
 
@@ -8,6 +13,7 @@ from dyna.config.norm_config import NormConfig
 class ModelConfig:
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-1.7B"
     execution_mode: ExecutionMode = ExecutionMode.moe
+    transformer_type: TransformerType = TransformerType.dyna
     vocab_size: int = 49152
     max_seq_len: int = 2048
     d_model: int = 1024

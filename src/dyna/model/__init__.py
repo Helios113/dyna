@@ -5,13 +5,15 @@ from dyna.model.model import (
     _generate_attention_mask,
     _generate_source_len_mask,
 )
+from dyna.model.pass_through import PassThroughTransformer
 from dyna.model.transformer import DynaFormer
 
 __all__ = [
     "ComposerDynaModel",
-    "DynaLM",
     "DynaFormer",
+    "DynaLM",
     "DynaPretrainedModel",
-    "_generate_source_len_mask",
+    "PassThroughTransformer",
     "_generate_attention_mask",
+    "_generate_source_len_mask",
 ]

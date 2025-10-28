@@ -26,6 +26,7 @@ model_config:
     loop_normalization: False
     sample_iterations: True
     loop_rope_theta_rebase: False
+    transformer_type: pass_through
 
 train:
     max_duration: "3171ba"

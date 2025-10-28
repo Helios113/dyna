@@ -22,6 +22,7 @@ from dyna.config import (
     DynaConfig,
 )
 from dyna.model.base import DynaPretrainedModel
+from dyna.model.pass_through import PassThroughTransformer
 
 # Import directly from specific modules to avoid circular imports
 from dyna.model.transformer import DynaFormer
@@ -101,6 +102,12 @@ def _generate_source_len_mask(
     return position_mask
 
 
+TRANSFORMER_CLASSES = {
+    "dyna": DynaFormer,
+    "pass_through": PassThroughTransformer,
+}
+
+
 class DynaLM(DynaPretrainedModel):
     """Base Language model class.
 
@@ -118,7 +125,7 @@ class DynaLM(DynaPretrainedModel):
         super().__init__(config)
 
         # Core transformer
-        self.transformer = DynaFormer(config)
+        self.transformer = TRANSFORMER_CLASSES[config.transformer_type](config)
 
         # Model configuration
         self.n_repeats = config.n_repeats

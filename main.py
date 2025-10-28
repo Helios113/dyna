@@ -63,7 +63,6 @@ def main(cfg: DictConfig):
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     conf = DynaConfig(**cfg.model_config)
-    print(conf)
     torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
     print("model_structure  ", model, flush=True)
@@ -77,7 +76,6 @@ def main(cfg: DictConfig):
         model,
         ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
     )
-    print("param optimizer settings:\n", params, flush=True)
     optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None

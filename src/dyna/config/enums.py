@@ -31,3 +31,8 @@ class NormType(str, Enum):
     low_precision_rmsnorm = "low_precision_rmsnorm"
     dynamic_tanh = "dynamic_tanh"
     unit_norm = "unit_norm"
+
+
+class TransformerType(str, Enum):
+    dyna = "dyna"
+    pass_through = "pass_through"

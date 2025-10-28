@@ -4,7 +4,7 @@ import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 
-from dyna.model.transformer import DynaFormer
+from dyna.model import DynaPretrainedModel
 
 
 class CleanMetrics(Callback):
@@ -31,11 +31,13 @@ class CleanMetrics(Callback):
             else Time(interval, TimeUnit.BATCH)
         )
 
-    def find_transformer_module(self, module: torch.nn.Module) -> DynaFormer | None:
+    def find_transformer_module(
+        self, module: torch.nn.Module
+    ) -> DynaPretrainedModel | None:
         # Recursively search for a child named 'transformer'
         for name, child in module.named_children():
             if name == "transformer":
-                return cast(DynaFormer, child)
+                return cast(DynaPretrainedModel, child)
             result = self.find_transformer_module(child)
             if result is not None:
                 return result
