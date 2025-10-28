@@ -7,7 +7,6 @@ from dyna.config.norm_config import NormConfig
 from .enums import (
     ExecutionMode,
     NormStructure,
-    NormType,
     RescaleMethod,
 )
 

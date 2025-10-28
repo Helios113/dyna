@@ -313,9 +313,10 @@ class DynaFormer(DynaPretrainedModel):
         residual_embeddings = None
         continue_mask = None
         energy_per_sample = None
+        # multiple_out = None
         for i in range(repeats):
-            if residual_embeddings is not None:
-                x = x + residual_embeddings
+            if self.repeat_residual:
+                residual_embeddings = x.clone()
             for layer in self.body_layers:
                 x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
@@ -344,10 +345,12 @@ class DynaFormer(DynaPretrainedModel):
             if self.loop_rope_theta_rebase:
                 print("Updating rope base to:", self.rope_base * (i + 1), flush=True)
                 self.update_inv_freq(self.rope_base * (i + 1))
-            if self.repeat_residual:
-                residual_embeddings = x.clone()
+
+            if residual_embeddings is not None:
+                x = x + residual_embeddings
             if not continue_processing:
                 break
+            # multiple_out = multiple_out + x if multiple_out is not None else x
         return x, energy_per_sample, layer_index
 
     def update_inv_freq(self, base: int):
