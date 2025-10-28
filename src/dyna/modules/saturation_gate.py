@@ -7,7 +7,7 @@ from torch.nn import Module
 
 
 class SaturationGate(Module):
-    def __init__(self, d_model, init_bias=2.0):
+    def __init__(self, d_model, init_bias=0.0):
         """Initialize SaturationGate with configurable parameters."""
         super().__init__()
         self.linear = torch.nn.Sequential(
@@ -15,14 +15,13 @@ class SaturationGate(Module):
             torch.nn.ReLU(),
             torch.nn.Linear(d_model // 2, 1),  # Enable bias
         )
-        # Initialize with positive bias to encourage continuation
-        with torch.no_grad():
-            lin: torch.nn.Linear = cast(torch.nn.Linear, self.linear[-1])
-            lin.bias.fill_(init_bias)
 
     def forward(self, x):
+        print("SaturationGate: Forward", x, flush=True)
         z = self.linear(x.detach()).squeeze(-1)
         g_hard = (z > 0).float()
         g_soft = torch.sigmoid(z)
         g = g_hard + (g_soft - g_soft.detach())
+        print(f"SaturationGate: {g.mean().item():.4f}")
+        print(f"SaturationGate: {g_soft.mean().item():.4f}")
         return g

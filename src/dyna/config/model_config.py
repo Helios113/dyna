@@ -46,4 +46,4 @@ class ModelConfig:
     tail_size: int = 2
     head_size: int = 2
     loop_normalization: bool = False
-    loop_rebase: bool = False
+    loop_rope_theta_rebase: bool = False

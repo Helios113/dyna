@@ -76,7 +76,7 @@ class DynaFormer(DynaPretrainedModel):
         self.enable_early_exit = config.enable_early_exit
         self.execution_mode = config.execution_mode
         self.gather_stats = False
-        self.loop_rebase = config.loop_rebase
+        self.loop_rope_theta_rebase = config.loop_rope_theta_rebase
         self.rope_base = 10000
         # Layer configuration
         self.body_layers: ModuleList
@@ -317,7 +317,6 @@ class DynaFormer(DynaPretrainedModel):
             if residual_embeddings is not None:
                 x = x + residual_embeddings
             for layer in self.body_layers:
-                print("Layer in loop:", layer_index, flush=True)
                 x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
                     e=e,
@@ -342,7 +341,7 @@ class DynaFormer(DynaPretrainedModel):
                     self.gather_stats_func(x, expert_sel)
             if self.loop_normalization:
                 x = self.loop_norm(x)
-            if self.loop_rebase:
+            if self.loop_rope_theta_rebase:
                 print("Updating rope base to:", self.rope_base * (i + 1), flush=True)
                 self.update_inv_freq(self.rope_base * (i + 1))
             if self.repeat_residual:
@@ -399,7 +398,12 @@ class DynaFormer(DynaPretrainedModel):
                 energy_per_sample = saturation_event
                 # TODO PRINT ENERGY PER SAMPLE to check if it is correct
             continue_mask = self.mask_to_scatter_index(saturation_event)
-
+            print(
+                "saturation event vals: ",
+                saturation_event.min(),
+                saturation_event.max(),
+                flush=True,
+            )
             x = torch.scatter_reduce(
                 x.view(-1),
                 0,

@@ -118,7 +118,6 @@ class LayerModule(Module, ABC):
             update = norm_to_use(update_on_stream)
         update = self.drop(update)
         layer_index = layer_index + 1
-        print(f"Layer {layer_index}")
         match self.rescaling_method:
             case RescaleMethod.none:
                 if self.enable_early_exit and continue_mask is not None:

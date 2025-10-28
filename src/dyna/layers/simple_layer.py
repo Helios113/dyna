@@ -6,7 +6,7 @@ from torch import Tensor
 
 from dyna.attention import BasicAttn
 from dyna.config import DynaConfig
-from dyna.modules import LayerModule
+from dyna.modules import LayerModule, SaturationGate
 from dyna.transition import BasicFFN
 
 
@@ -33,6 +33,10 @@ class SimpleLayer(LayerModule):
             ),
         )
         self.input_reinjection = input_reinjection
+        if config.enable_early_exit:
+            self.saturation_detector = SaturationGate(config.d_model)
+        else:
+            self.saturation_detector = None
 
     def forward(
         self,
@@ -74,8 +78,11 @@ class SimpleLayer(LayerModule):
 
         ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
 
+        saturation_event = None
+        if self.saturation_detector is not None:
+            saturation_event = self.saturation_detector(ffn_out)
         x, layer_index = self._apply_update_to_residual(
             x, ffn_out, continue_mask, layer_index, self.ffn_post, e
         )
 
-        return (x, (expert_sel_attn, expert_sel_ffn), None, layer_index)
+        return (x, (expert_sel_attn, expert_sel_ffn), saturation_event, layer_index)
