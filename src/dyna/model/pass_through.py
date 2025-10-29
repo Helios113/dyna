@@ -79,7 +79,7 @@ class PassThroughTransformer(DynaPretrainedModel):
         self._residual_magnitudes.append([])
 
         if self.gather_stats:
-            self.gather_stats_func(x, None)
+            self.gather_stats_func(x, ((None, None), None))
 
         return x, None
 

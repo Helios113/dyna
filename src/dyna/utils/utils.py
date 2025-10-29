@@ -284,23 +284,36 @@ def build_full_concrete_config(cfg: DictConfig):
 
 
 def create_param_groups_with_conditional_wd(
-    model, no_decay_param_names, default_wd=1e-5
+    model, no_decay_param_names, default_wd=1e-5, frozen_param_names=None
 ):
     """
-    Creates parameter groups where specified parameters have zero weight decay.
+    Creates parameter groups where specified parameters have zero weight decay
+    and optionally freezes certain parameters from training.
 
     Args:
         model: The model whose parameters to group
         no_decay_param_names: List of parameter name substrings to exclude from weight decay
         default_wd: Default weight decay for other parameters
+        frozen_param_names: List of parameter name substrings to freeze (not train at all)
 
     Returns:
         List of parameter group dicts for optimizer
     """
+    if frozen_param_names is None:
+        frozen_param_names = []
+
     decay_params = []
     no_decay_params = []
+    frozen_count = 0
 
     for name, param in model.named_parameters():
+        # Check if parameter should be frozen
+        if any(frozen_name in name for frozen_name in frozen_param_names):
+            param.requires_grad = False
+            print(f"Frozen parameter: {name}")
+            frozen_count += 1
+            continue
+
         if not param.requires_grad:
             continue
 
@@ -314,6 +327,10 @@ def create_param_groups_with_conditional_wd(
         {"params": decay_params, "weight_decay": default_wd},
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
+
+    print(f"Frozen {frozen_count} parameter groups")
+    print(f"Training {len(decay_params)} params with weight decay")
+    print(f"Training {len(no_decay_params)} params without weight decay")
 
     return param_groups
 

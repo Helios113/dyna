@@ -1,6 +1,4 @@
-import json
 import os
-from dataclasses import asdict
 
 import hydra
 import torch
@@ -18,11 +16,12 @@ from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import (
     build_full_concrete_config,
+    condition_model,
+    create_param_groups_with_conditional_wd,
     get_callbacks,
     get_data_loader,
     get_scheduler,
     make_wandb_run_name,
-    create_param_groups_with_conditional_wd,
 )
 
 
@@ -47,6 +46,7 @@ def main(cfg: DictConfig):
 
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
+    os.environ["S3_ENDPOINT_URL"] = "http://128.232.115.19:9000"
 
     tmpdir = os.getenv("TMPDIR") or "/tmp_000"
     unique = tmpdir.split("_")[-1]
@@ -65,6 +65,11 @@ def main(cfg: DictConfig):
     conf = DynaConfig(**cfg.model_config)
     torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
+    condition_model(
+        model,
+        ["model.embedding.weight", "model.lm_head.weight", "model.out_norm.weight"],
+        "s3://loop-llm/dyna/1_baseTransformer_22oct25_X1Q0lJ_dim~768_d_ffn~3072_n_l~12_n_h~12_d_hd~64_ee~False_mode~transformer_norm~pre_rescale~none-ba3171.pt",
+    )
     print("model_structure  ", model, flush=True)
     train_dataloader = get_data_loader(
         cfg.data_config,
@@ -75,7 +80,18 @@ def main(cfg: DictConfig):
     params = create_param_groups_with_conditional_wd(
         model,
         ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+        frozen_param_names=[
+            "model.embedding.weight",
+            "model.lm_head.weight",
+            "model.out_norm.weight",
+        ],
     )
+
+    # params = create_param_groups_with_conditional_wd(
+    #     model,
+    #     ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+    #     frozen_param_names=[],
+    # )
     optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None

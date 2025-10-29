@@ -8,12 +8,12 @@ defaults:
 
 model_config:
     execution_mode: transformer
-    d_model: 768
-    d_ffn: 3072
+    d_model: 1024
+    d_ffn: 4096
     n_repeats: 1
-    n_heads: 12
-    d_head: 64
-    n_layers: 12
+    n_heads: 8
+    d_head: 512
+    n_layers: 9
     vocab_size: 50368
     max_seq_len: 1024
     n_expert_shared_attn: 0
@@ -22,23 +22,23 @@ model_config:
     enable_early_exit: False
     norm_structure: pre
     rescaling_method: none
-    total_depth_for_init: 12
+    total_depth_for_init: 9
     loop_normalization: False
     sample_iterations: False
     loop_rope_theta_rebase: False
     transformer_type: dyna
 
 train:
-    max_duration: "3171ba"
-    warmup: "634ba"
-    cooldown: "634ba"
+    max_duration: "6240ba"
+    warmup: "1248ba"
+    cooldown: "1248ba"
     device_train_batch_size: 1024
 
 trainer_config:
-    run_name: "fixedEmb"
+    run_name: "loopSmaller"
     max_duration: ${train.max_duration}
     train_dataloader_label: "train"
-    device_train_microbatch_size: 32
+    device_train_microbatch_size: auto
     precision: "amp_bf16"
     device: "gpu"
     save_folder: "s3://loop-llm/dyna/"
