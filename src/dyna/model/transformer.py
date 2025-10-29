@@ -1,3 +1,5 @@
+# encoding: pypreprocessor
+# ruff: noqa: I001
 import math
 import random
 from collections.abc import Callable
@@ -15,6 +17,13 @@ from dyna.config.enums import ExecutionMode
 from dyna.layers import MoEUTLayer, SimpleLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule
+
+# execute
+import os
+
+if "PYTEST_VERSION" in os.environ:
+    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
+# endexecute
 
 
 def calc_entropy(
@@ -218,6 +227,9 @@ class DynaFormer(DynaPretrainedModel):
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
         input_ids: Int[Tensor, "batch seq"] | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
         if input_ids is not None:
             _labels = torch.roll(input_ids, shifts=-1)
@@ -233,6 +245,16 @@ class DynaFormer(DynaPretrainedModel):
         x, reinjection_embeddings, layer_index = self.head(
             x, attention_mask, sequence_length, e
         )
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_head_output"] = x.clone()
+        collector["transformer_head_reinjection_embeddings"] = (
+            reinjection_embeddings.clone()  # pyright: ignore[reportOptionalMemberAccess]
+        )
+        collector["transformer_head_layer_index"] = layer_index
+        # endif
+
         x, energy_per_sample, layer_index = self.body(
             x,
             attention_mask,
@@ -242,7 +264,20 @@ class DynaFormer(DynaPretrainedModel):
             reinjection_embeddings,
             layer_index,
         )
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_body_output"] = x.clone()
+        collector["transformer_body_energy_per_sample"] = energy_per_sample.clone()  # pyright: ignore[reportOptionalMemberAccess]
+        collector["transformer_body_layer_index"] = layer_index
+        # endif
+
         x = self.tail(x, attention_mask, sequence_length, e, layer_index)
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_tail_output"] = x.clone()
+        # endif
 
         return x, energy_per_sample
 
@@ -349,11 +384,11 @@ class DynaFormer(DynaPretrainedModel):
                 residual_embeddings = x.clone()
             if not continue_processing:
                 break
-        return x, energy_per_sample, layer_index
+        return x, energy_per_sample, layer_index  # pyright: ignore[reportReturnType]
 
     def update_inv_freq(self, base: int):
         for layer in self.body_layers:
-            layer.update_inv_freq(base)
+            layer.update_inv_freq(base)  # pyright: ignore[reportCallIssue]
 
     def _apply_early_exit(
         self,

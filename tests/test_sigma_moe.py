@@ -8,13 +8,21 @@ from generate_standard_lm import generate_standard_lm
 from dyna.model import DynaLM
 from dyna.transition import SigmaMoE
 
-AFFINITY_HASH = "missing, unable to run the file to get hash"
-SELECTION_INDEX_HASH = "missing, unable to run the file to get hash"
-SELECTION_INDICES_HASH = "missing, unable to run the file to get hash"
-SCORES_PRE_ACTIVATION_HASH = "missing, unable to run the file to get hash"
-SCORES_POST_ACTIVATION_HASH = "missing, unable to run the file to get hash"
-OUTPUT_HASH = "missing, unable to run the file to get hash"
-FINAL_OUTPUT_HASH = "missing, unable to run the file to get hash"
+AFFINITY_HASH = "fbec379b5a8a89da07b6e91bb344b46525dad543b458bfd84a831a23da62e4eb"
+SELECTION_INDEX_HASH = (
+    "8a047be7bafefafa580491d2281cd66e0099db9b67dd47f79f1a4caf82c0a6b0"
+)
+SELECTION_INDICES_HASH = (
+    "e5fdb97a87aefdd320458deaa11c08235fd8ed53b714f7022463017a67948527"
+)
+SCORES_PRE_ACTIVATION_HASH = (
+    "a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484"
+)
+SCORES_POST_ACTIVATION_HASH = (
+    "a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484"
+)
+OUTPUT_HASH = "ae84a0f26a285161c3563d74a85227c66b72ec929eadfbef4079466f5b80a19e"
+FINAL_OUTPUT_HASH = "ae84a0f26a285161c3563d74a85227c66b72ec929eadfbef4079466f5b80a19e"
 
 
 def test_sigma_moe():
@@ -60,7 +68,7 @@ def test_sigma_moe():
         collector['sigma_moe_selection_index'].detach().numpy().tobytes()
     ).hexdigest()}\"")
     print(f"SELECTION_INDICES_HASH = \"{hashlib.sha256(
-        collector['sigma_moe_selection_indices'].detach().numpy().tobytes()
+        collector['sigma_moe_selection_indices'].sel.detach().numpy().tobytes()
     ).hexdigest()}\"")
     print(f"SCORES_PRE_ACTIVATION_HASH = \"{hashlib.sha256(
         collector['sigma_moe_scores_pre_activation'].detach().numpy().tobytes()
@@ -110,6 +118,13 @@ def test_sigma_moe():
     assert (
         final_output_hash == FINAL_OUTPUT_HASH
     ), f"Final Output Hash Mismatch: {final_output_hash}"
+
+    sel_indices_hash = hashlib.sha256(
+        collector["sigma_moe_selection_indices"].sel.detach().numpy().tobytes()
+    ).hexdigest()
+    assert (
+        sel_indices_hash == SELECTION_INDICES_HASH
+    ), f"Selection Indices Hash Mismatch: {sel_indices_hash}"
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:

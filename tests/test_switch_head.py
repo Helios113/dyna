@@ -1,4 +1,5 @@
 import hashlib
+import math
 import os
 
 import torch
@@ -9,48 +10,70 @@ from dyna.attention import SwitchHead
 from dyna.model import DynaLM
 
 # Hash for multiple experts scenario (n_experts_attn > 1)
-Q_VAL_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-K_VAL_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-V_SEL_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-V_SEL_R_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-V_SEL_INDEX_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-O_SEL_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-O_SEL_R_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-O_SEL_INDEX_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-V_VAL_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-Q_VAL_O_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-K_VAL_O_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-Q_VAL_O_AFTER_DROPOUT_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-RES_BEFORE_TRANSPOSE_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-RES_AFTER_TRANSPOSE_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-OUTPUT_MULTIPLE_HASH = "missing, unable to run the file to get hash"
-FINAL_OUTPUT_MULTIPLE_HASH = "missing, unable to run the file to get hash"
+Q_VAL_MULTIPLE_HASH = "ad61e918f9c5ec2e3a2706db4dcc0e2ca896ff6e9d38283e42c56ab4fc2321ce"
+K_VAL_MULTIPLE_HASH = "153a852d66754bf6a8917f258521e412d5ab585dd8e44ec32abc211dacb750fd"
+V_SEL_MULTIPLE_HASH = "82d1222ec44baa515a574a9ed67526e78461d3b6da113e4dda4647dcfb886639"
+V_SEL_R_MULTIPLE_HASH = (
+    "e9a918a344b560714908f8169d7163397a584b597f9968cb15932a23d2ad909a"
+)
+V_SEL_INDEX_MULTIPLE_HASH = (
+    "ca67880ea4dc6e3b17623e30b9456bdeb5f5337b6de47fe6a95e27e04eb86977"
+)
+O_SEL_MULTIPLE_HASH = "ba1456b5f6bc098979fd4f34455cc326d4e7b6bd1dbe2446fdc4bdc5ac16b46b"
+O_SEL_R_MULTIPLE_HASH = (
+    "80396dcfa7d0e345f6f6513f8bffc8326cab6e854468f6b52f4ada03667e3508"
+)
+O_SEL_INDEX_MULTIPLE_HASH = (
+    "00dedfc876c60d15d08d3eac38a7fb3892a47c2c0d4f6d91e3d204e3675bcef4"
+)
+V_VAL_MULTIPLE_HASH = "b311734b3a748332d2f2b28237e2833cfd5af66ec13cbdb42dfccdc20dc5909a"
+Q_VAL_O_MULTIPLE_HASH = (
+    "9d757a3dccf97a4cad8718b28d1d0ff365461e4d0bd7600077d03ee04aec1b55"
+)
+K_VAL_O_MULTIPLE_HASH = (
+    "3856c54a60ccb30f1a057b6b5216f19e62149b0308d2ca75ca115814a045dd56"
+)
+Q_VAL_O_AFTER_DROPOUT_MULTIPLE_HASH = (
+    "9d757a3dccf97a4cad8718b28d1d0ff365461e4d0bd7600077d03ee04aec1b55"
+)
+RES_BEFORE_TRANSPOSE_MULTIPLE_HASH = (
+    "3ba111b2a1d86c15b56290a93c5cb68f40990986f15b1412421b613f116c6783"
+)
+RES_AFTER_TRANSPOSE_MULTIPLE_HASH = (
+    "9d3bdb5149587482e3c04eefe1fb0e86db6d588141150852a6c07e0d5dbe151d"
+)
+OUTPUT_MULTIPLE_HASH = (
+    "6c502ec07fe97220f42d57ad573c60b20a127ad9adfc02a23b5b58e6bb34e426"
+)
+FINAL_OUTPUT_MULTIPLE_HASH = (
+    "6c502ec07fe97220f42d57ad573c60b20a127ad9adfc02a23b5b58e6bb34e426"
+)
 # Hash for single expert scenario (n_experts_attn = 1)
-Q_VAL_SINGLE_HASH = "43505304badea2bd6d5f3e8acf631b0f1b0dbff1e8073ac162e1a65fd0833cea"
-K_VAL_SINGLE_HASH = "2945689855996ed47e6cc4b8d9b42eb9709d5f18022273cda83768197addb40e"
-O_GATE_SINGLE_HASH = "6939c2f20c1e952a413331ad4f829ebe0e21aa7d2ba37f6f366351193bd17379"
-V_VAL_SINGLE_HASH = "438cc2034eabf6f5bdb4e9ad96af79807b38a29f76dfd7e00ddae3684aef478f"
-V_VAL_O_SINGLE_HASH = "1650875d996602bc3bf2454a4ea9b38860b989fa71520d7d70c88c1bdd045265"
-Q_VAL_O_SINGLE_HASH = "ce99e648c2488df6903bb6d36c5ec035dbf86a3ab6a0a578264b4da21647d99a"
-K_VAL_O_SINGLE_HASH = "a2a760b8854c0ae66d31009c7485e597b35849aebe121972641e50809734a5c9"
+Q_VAL_SINGLE_HASH = "c572c07882ed7b20efe1d52ea9fc59f1027d0bd025a51250412b5ef26b8f7694"
+K_VAL_SINGLE_HASH = "b51ce4dafb562c41d7d3b724fd4b257979acc443010282f9fef30914fa71b783"
+O_GATE_SINGLE_HASH = "60c01a825d89b2de40ddd3999e0a94c88fc5462a4cbef4f19dcb7d7c83a01448"
+V_VAL_SINGLE_HASH = "dfaaf6257ad7ba999fd5343c126f9e60e85a2a3c843b7cf2a85e5e7c58abd88d"
+V_VAL_O_SINGLE_HASH = "593ae6aeea1cb4746b5c8c5e9026913d35760747d3856fb4864058947bc00ad6"
+Q_VAL_O_SINGLE_HASH = "bba028d5a68e8957975c7154cc6339c487eac94fe864c045d51126a331df4b31"
+K_VAL_O_SINGLE_HASH = "919e641359655d4d95418e13a61faef095fe99daefbec2b9bde4ef5949d226a8"
 Q_VAL_O_AFTER_DROPOUT_SINGLE_HASH = (
-    "ce99e648c2488df6903bb6d36c5ec035dbf86a3ab6a0a578264b4da21647d99a"
+    "bba028d5a68e8957975c7154cc6339c487eac94fe864c045d51126a331df4b31"
 )
 RES_BEFORE_TRANSPOSE_SINGLE_HASH = (
-    "c662b2475da2710264dd36bfceed800035cc30546a18a24c9c8990e04be1a9db"
+    "2532c14458e772aaa9b49df3f78db8663bc4b688b1b3eec3d0c4ac84d0fe9a21"
 )
 RES_AFTER_TRANSPOSE_SINGLE_HASH = (
-    "31c9322264e6c7e26437554c7125b564643ef6f4c692a7034dc02bfb1bc78248"
+    "f0a59227df8bc8657ddf7268f4d01a86b86c2fcee8d5219cc9807fecfb811c43"
 )
 RES_AFTER_ELEMENT_MULTIPLICATION_SINGLE_HASH = (
-    "ad612fc93c83ab7c23b649563ff77fb351625081c9c1f7af6d6bfdf67814494f"
+    "84ef940caa6155e86d78a5bafc5c8f422f6e5a0bdcf3b61f2e18bb38878df736"
 )
 RES_AFTER_VIEW_SINGLE_HASH = (
-    "ad612fc93c83ab7c23b649563ff77fb351625081c9c1f7af6d6bfdf67814494f"
+    "84ef940caa6155e86d78a5bafc5c8f422f6e5a0bdcf3b61f2e18bb38878df736"
 )
-OUTPUT_SINGLE_HASH = "e92ef76fe06a93886a7433a9823044302d3428481a4fdd02b085f665b00263ef"
+OUTPUT_SINGLE_HASH = "04ad7ce85865733d414ecd83daff1d8fba118b1ac158afcfeea8c7f481475886"
 FINAL_OUTPUT_SINGLE_HASH = (
-    "e92ef76fe06a93886a7433a9823044302d3428481a4fdd02b085f665b00263ef"
+    "04ad7ce85865733d414ecd83daff1d8fba118b1ac158afcfeea8c7f481475886"
 )
 
 
@@ -68,7 +91,6 @@ def test_switch_head_multiple_experts():
     n_experts_attn = model.config.n_experts_attn
     k_attn = model.config.k_attn
     n_expert_shared_attn = model.config.n_expert_shared_attn
-    dropout_expert_attn = model.config.dropout_expert_attn
     torch.manual_seed(42)
 
     switch_head: SwitchHead = SwitchHead(
@@ -78,8 +100,16 @@ def test_switch_head_multiple_experts():
         n_experts_attn=n_experts_attn,
         k_attn=k_attn,
         n_expert_shared_attn=n_expert_shared_attn,
-        dropout_expert=dropout_expert_attn,
+        dropout_expert=0.0,
     )
+    # Ensure determinism for SwitchHead
+    scale = (
+        math.sqrt(2 / (model.config.n_repeats * model.config.total_depth_for_init))
+        if model.config.enable_early_exit
+        else math.sqrt(2 / model.config.total_depth_for_init)
+    )
+    switch_head.reset_parameters(scale)
+    switch_head.eval()
     collector = {}
     switch_head_output, _ = switch_head(
         q_src=embedding,
@@ -130,9 +160,7 @@ def test_switch_head_multiple_experts():
     print(
         f'V_SEL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_v_sel"]
-                .out_index.detach()
-                .numpy()
+                collector["switch_head_multiple_v_sel"].out_index.detach().numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -154,9 +182,7 @@ def test_switch_head_multiple_experts():
     print(
         f'O_SEL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_o_sel"]
-                .out_index.detach()
-                .numpy()
+                collector["switch_head_multiple_o_sel"].out_index.detach().numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -199,9 +225,7 @@ def test_switch_head_multiple_experts():
     print(
         f'Q_VAL_O_AFTER_DROPOUT_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_q_val_o_after_dropout"]
-                .detach()
-                .numpy()
+                collector["switch_head_multiple_q_val_o_after_dropout"].detach().numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -209,9 +233,7 @@ def test_switch_head_multiple_experts():
     print(
         f'RES_BEFORE_TRANSPOSE_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_res_before_transpose"]
-                .detach()
-                .numpy()
+                collector["switch_head_multiple_res_before_transpose"].detach().numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -219,9 +241,7 @@ def test_switch_head_multiple_experts():
     print(
         f'RES_AFTER_TRANSPOSE_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_res_after_transpose"]
-                .detach()
-                .numpy()
+                collector["switch_head_multiple_res_after_transpose"].detach().numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -372,6 +392,14 @@ def test_switch_head_single_expert():
         n_expert_shared_attn=0,
         dropout_expert=0.0,
     )
+    # Ensure determinism for SwitchHead
+    scale = (
+        math.sqrt(2 / (model.config.n_repeats * model.config.total_depth_for_init))
+        if model.config.enable_early_exit
+        else math.sqrt(2 / model.config.total_depth_for_init)
+    )
+    switch_head.reset_parameters(scale)
+    switch_head.eval()
     collector = {}
     switch_head_output, _ = switch_head(
         q_src=embedding,
@@ -418,7 +446,7 @@ def test_switch_head_single_expert():
         }"'
     )
     print(
-        f'O_GATE_HASH = "{
+        f'O_GATE_SINGLE_HASH = "{
             hashlib.sha256(
                 collector["switch_head_single_o_gate"].detach().numpy().tobytes()
             ).hexdigest()
