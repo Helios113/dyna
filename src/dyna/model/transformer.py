@@ -242,16 +242,22 @@ class DynaFormer(DynaPretrainedModel):
         self._seq_len.append([])
         self._residual_magnitudes.append([])
 
+        # ifdef PYTEST
+        child_collector: dict | None = {}
+        # endif
         x, reinjection_embeddings, layer_index = self.head(
-            x, attention_mask, sequence_length, e
+            x,
+            attention_mask,
+            sequence_length,
+            e,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
         )
 
         # ifdef PYTEST
         assert collector is not None
         collector["transformer_head_output"] = x.clone()
-        collector["transformer_head_reinjection_embeddings"] = (
-            reinjection_embeddings.clone()  # pyright: ignore[reportOptionalMemberAccess]
-        )
         collector["transformer_head_layer_index"] = layer_index
         # endif
 
@@ -263,16 +269,27 @@ class DynaFormer(DynaPretrainedModel):
             e,
             reinjection_embeddings,
             layer_index,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
         )
 
         # ifdef PYTEST
         assert collector is not None
         collector["transformer_body_output"] = x.clone()
-        collector["transformer_body_energy_per_sample"] = energy_per_sample.clone()  # pyright: ignore[reportOptionalMemberAccess]
         collector["transformer_body_layer_index"] = layer_index
         # endif
 
-        x = self.tail(x, attention_mask, sequence_length, e, layer_index)
+        x = self.tail(
+            x,
+            attention_mask,
+            sequence_length,
+            e,
+            layer_index,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
+        )
 
         # ifdef PYTEST
         assert collector is not None
@@ -300,6 +317,9 @@ class DynaFormer(DynaPretrainedModel):
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         None | Float[Tensor, "batch seq d_model"],
@@ -318,6 +338,9 @@ class DynaFormer(DynaPretrainedModel):
                 attention_mask=attention_mask,
                 sequence_length=sequence_length,
                 continue_mask=None,
+                # ifdef PYTEST
+                collector=collector,
+                # endif
             )
 
             if self.gather_stats:
@@ -338,6 +361,9 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         reinjection_embeddings: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None, int
     ]:
@@ -361,6 +387,9 @@ class DynaFormer(DynaPretrainedModel):
                     attention_mask=attention_mask,
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
+                    # ifdef PYTEST
+                    collector=collector,
+                    # endif
                 )
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(
@@ -454,6 +483,9 @@ class DynaFormer(DynaPretrainedModel):
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> Float[Tensor, "batch seq d_model"]:
         if layer_index is None:
             layer_index = 0
@@ -468,6 +500,9 @@ class DynaFormer(DynaPretrainedModel):
                 attention_mask=attention_mask,
                 sequence_length=sequence_length,
                 continue_mask=None,
+                # ifdef PYTEST
+                collector=collector,
+                # endif
             )
             if self.gather_stats:
                 self.gather_stats_func(x, expert_sel)

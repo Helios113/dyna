@@ -10,43 +10,43 @@ from dyna.attention import SwitchHead
 from dyna.model import DynaLM
 
 # Hash for multiple experts scenario (n_experts_attn > 1)
-Q_VAL_MULTIPLE_HASH = "ad61e918f9c5ec2e3a2706db4dcc0e2ca896ff6e9d38283e42c56ab4fc2321ce"
-K_VAL_MULTIPLE_HASH = "153a852d66754bf6a8917f258521e412d5ab585dd8e44ec32abc211dacb750fd"
-V_SEL_MULTIPLE_HASH = "82d1222ec44baa515a574a9ed67526e78461d3b6da113e4dda4647dcfb886639"
+Q_VAL_MULTIPLE_HASH = "87e53add7013a14ed1f14c9bf56810af03c26789a6c6e7ba100f5313342ba870"
+K_VAL_MULTIPLE_HASH = "e81d99a9d41cba5fa0eef50eecc1d1e881b9bcff0a957d7cc1dcee15a5ee83bf"
+V_SEL_MULTIPLE_HASH = "828dd92d72d5a9b1343a5319a91ab6d9436e5199b4ed5be89fa21f0bace5e3f4"
 V_SEL_R_MULTIPLE_HASH = (
-    "e9a918a344b560714908f8169d7163397a584b597f9968cb15932a23d2ad909a"
+    "764a64b47076d56f6a66a2f36521f586c5408bf03cfb516362dd79e29ee69c75"
 )
 V_SEL_INDEX_MULTIPLE_HASH = (
-    "ca67880ea4dc6e3b17623e30b9456bdeb5f5337b6de47fe6a95e27e04eb86977"
+    "5bc19dbdf34b3a3dd47821d222c13e8d044cd766ef7c35989beacf10639a32d0"
 )
-O_SEL_MULTIPLE_HASH = "ba1456b5f6bc098979fd4f34455cc326d4e7b6bd1dbe2446fdc4bdc5ac16b46b"
+O_SEL_MULTIPLE_HASH = "8f778c7ccd7c3ac695756f505119c7b6226e90d99e946432108f00fe131b0675"
 O_SEL_R_MULTIPLE_HASH = (
-    "80396dcfa7d0e345f6f6513f8bffc8326cab6e854468f6b52f4ada03667e3508"
+    "e0b43ff803c578ec0e7c445898dd238c35a4107578bb8fffc4ce8cfdb388cd6c"
 )
 O_SEL_INDEX_MULTIPLE_HASH = (
-    "00dedfc876c60d15d08d3eac38a7fb3892a47c2c0d4f6d91e3d204e3675bcef4"
+    "b2b98fed6cf0f1ac9bf3e179e0ccc94245e4e92acfe0fe2bc10d1c0b545a3f72"
 )
-V_VAL_MULTIPLE_HASH = "b311734b3a748332d2f2b28237e2833cfd5af66ec13cbdb42dfccdc20dc5909a"
+V_VAL_MULTIPLE_HASH = "d0225abc9939205a7e76dd296027510f47d94dba5da5eb2990b4aed62270e212"
 Q_VAL_O_MULTIPLE_HASH = (
-    "9d757a3dccf97a4cad8718b28d1d0ff365461e4d0bd7600077d03ee04aec1b55"
+    "9e4e7e5e35687b8f3aa1c88169e93699ef1a53f2048a87e3cd27bba8aa99146b"
 )
 K_VAL_O_MULTIPLE_HASH = (
-    "3856c54a60ccb30f1a057b6b5216f19e62149b0308d2ca75ca115814a045dd56"
+    "ecc30a14631d09dc2779b8f1a80142cf224d6e10e56f207fa979f37f986d7c5b"
 )
 Q_VAL_O_AFTER_DROPOUT_MULTIPLE_HASH = (
-    "9d757a3dccf97a4cad8718b28d1d0ff365461e4d0bd7600077d03ee04aec1b55"
+    "9e4e7e5e35687b8f3aa1c88169e93699ef1a53f2048a87e3cd27bba8aa99146b"
 )
 RES_BEFORE_TRANSPOSE_MULTIPLE_HASH = (
-    "3ba111b2a1d86c15b56290a93c5cb68f40990986f15b1412421b613f116c6783"
+    "c21cdf227e4b1ce2501da4b57ae1aab89c56e99b28a7fb4c045d1c3faf0398ac"
 )
 RES_AFTER_TRANSPOSE_MULTIPLE_HASH = (
-    "9d3bdb5149587482e3c04eefe1fb0e86db6d588141150852a6c07e0d5dbe151d"
+    "54144d1ef1d9b18ce98566ef379265118814a7e98708ff3a7019f9a924b20354"
 )
 OUTPUT_MULTIPLE_HASH = (
-    "6c502ec07fe97220f42d57ad573c60b20a127ad9adfc02a23b5b58e6bb34e426"
+    "cd9866ad86b76027c5b1251826d7d39630e568fcd72f12efda72b05971a6325e"
 )
 FINAL_OUTPUT_MULTIPLE_HASH = (
-    "6c502ec07fe97220f42d57ad573c60b20a127ad9adfc02a23b5b58e6bb34e426"
+    "cd9866ad86b76027c5b1251826d7d39630e568fcd72f12efda72b05971a6325e"
 )
 # Hash for single expert scenario (n_experts_attn = 1)
 Q_VAL_SINGLE_HASH = "c572c07882ed7b20efe1d52ea9fc59f1027d0bd025a51250412b5ef26b8f7694"
@@ -85,6 +85,10 @@ def test_switch_head_multiple_experts():
     embedding, attention_mask, sequence_length = model.embedding_stage(
         input, None, None, None
     )
+    embedding = embedding.to("cuda")
+    attention_mask = attention_mask.to("cuda")
+    sequence_length = sequence_length.to("cuda")
+
     d_model = model.config.d_model
     n_heads = model.config.n_heads
     d_head = model.config.d_head
@@ -101,7 +105,7 @@ def test_switch_head_multiple_experts():
         k_attn=k_attn,
         n_expert_shared_attn=n_expert_shared_attn,
         dropout_expert=0.0,
-    )
+    ).to("cuda")
     # Ensure determinism for SwitchHead
     scale = (
         math.sqrt(2 / (model.config.n_repeats * model.config.total_depth_for_init))
@@ -146,21 +150,24 @@ def test_switch_head_multiple_experts():
     print(
         f'Q_VAL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_q_val"].detach().numpy().tobytes()
+                collector["switch_head_q_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'K_VAL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_k_val"].detach().numpy().tobytes()
+                collector["switch_head_k_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'V_SEL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_v_sel"].out_index.detach().numpy()
+                collector["switch_head_multiple_v_sel"]
+                .out_index.detach()
+                .cpu()
+                .numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -168,21 +175,24 @@ def test_switch_head_multiple_experts():
     print(
         f'V_SEL_R_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_v_sel_r"].detach().numpy().tobytes()
+                collector["switch_head_multiple_v_sel_r"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'V_SEL_INDEX_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_v_sel_index"].detach().numpy().tobytes()
+                collector["switch_head_multiple_v_sel_index"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'O_SEL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_o_sel"].out_index.detach().numpy()
+                collector["switch_head_multiple_o_sel"]
+                .out_index.detach()
+                .cpu()
+                .numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -190,42 +200,45 @@ def test_switch_head_multiple_experts():
     print(
         f'O_SEL_R_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_o_sel_r"].detach().numpy().tobytes()
+                collector["switch_head_multiple_o_sel_r"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'O_SEL_INDEX_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_o_sel_index"].detach().numpy().tobytes()
+                collector["switch_head_multiple_o_sel_index"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'V_VAL_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_v_val"].detach().numpy().tobytes()
+                collector["switch_head_multiple_v_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'Q_VAL_O_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_q_val_o"].detach().numpy().tobytes()
+                collector["switch_head_multiple_q_val_o"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'K_VAL_O_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_k_val_o"].detach().numpy().tobytes()
+                collector["switch_head_multiple_k_val_o"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'Q_VAL_O_AFTER_DROPOUT_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_q_val_o_after_dropout"].detach().numpy()
+                collector["switch_head_multiple_q_val_o_after_dropout"]
+                .detach()
+                .cpu()
+                .numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -233,7 +246,10 @@ def test_switch_head_multiple_experts():
     print(
         f'RES_BEFORE_TRANSPOSE_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_res_before_transpose"].detach().numpy()
+                collector["switch_head_multiple_res_before_transpose"]
+                .detach()
+                .cpu()
+                .numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -241,7 +257,10 @@ def test_switch_head_multiple_experts():
     print(
         f'RES_AFTER_TRANSPOSE_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_res_after_transpose"].detach().numpy()
+                collector["switch_head_multiple_res_after_transpose"]
+                .detach()
+                .cpu()
+                .numpy()
                 .tobytes()
             ).hexdigest()
         }"'
@@ -249,82 +268,90 @@ def test_switch_head_multiple_experts():
     print(
         f'OUTPUT_MULTIPLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_multiple_output"].detach().numpy().tobytes()
+                collector["switch_head_multiple_output"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'FINAL_OUTPUT_MULTIPLE_HASH = "{
-            hashlib.sha256(switch_head_output.detach().numpy().tobytes()).hexdigest()
+            hashlib.sha256(switch_head_output.detach().cpu().numpy().tobytes()).hexdigest()
         }"'
     )
 
     q_val_hash = hashlib.sha256(
-        collector["switch_head_q_val"].detach().numpy().tobytes()
+        collector["switch_head_q_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert q_val_hash == Q_VAL_MULTIPLE_HASH, f"Query Value Hash Mismatch: {q_val_hash}"
 
     k_val_hash = hashlib.sha256(
-        collector["switch_head_k_val"].detach().numpy().tobytes()
+        collector["switch_head_k_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert k_val_hash == K_VAL_MULTIPLE_HASH, f"Key Value Hash Mismatch: {k_val_hash}"
 
     v_sel_hash = hashlib.sha256(
-        collector["switch_head_multiple_v_sel"].out_index.detach().numpy().tobytes()
+        collector["switch_head_multiple_v_sel"]
+        .out_index.detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert (
         v_sel_hash == V_SEL_MULTIPLE_HASH
     ), f"Value Selection Hash Mismatch: {v_sel_hash}"
 
     v_sel_r_hash = hashlib.sha256(
-        collector["switch_head_multiple_v_sel_r"].detach().numpy().tobytes()
+        collector["switch_head_multiple_v_sel_r"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         v_sel_r_hash == V_SEL_R_MULTIPLE_HASH
     ), f"Value Selection Raw Hash Mismatch: {v_sel_r_hash}"
 
     v_sel_index_hash = hashlib.sha256(
-        collector["switch_head_multiple_v_sel_index"].detach().numpy().tobytes()
+        collector["switch_head_multiple_v_sel_index"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         v_sel_index_hash == V_SEL_INDEX_MULTIPLE_HASH
     ), f"Value Selection Index Hash Mismatch: {v_sel_index_hash}"
 
     o_sel_hash = hashlib.sha256(
-        collector["switch_head_multiple_o_sel"].out_index.detach().numpy().tobytes()
+        collector["switch_head_multiple_o_sel"]
+        .out_index.detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert (
         o_sel_hash == O_SEL_MULTIPLE_HASH
     ), f"Output Selection Hash Mismatch: {o_sel_hash}"
 
     o_sel_r_hash = hashlib.sha256(
-        collector["switch_head_multiple_o_sel_r"].detach().numpy().tobytes()
+        collector["switch_head_multiple_o_sel_r"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         o_sel_r_hash == O_SEL_R_MULTIPLE_HASH
     ), f"Output Selection Raw Hash Mismatch: {o_sel_r_hash}"
 
     o_sel_index_hash = hashlib.sha256(
-        collector["switch_head_multiple_o_sel_index"].detach().numpy().tobytes()
+        collector["switch_head_multiple_o_sel_index"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         o_sel_index_hash == O_SEL_INDEX_MULTIPLE_HASH
     ), f"Output Selection Index Hash Mismatch: {o_sel_index_hash}"
 
     v_val_hash = hashlib.sha256(
-        collector["switch_head_multiple_v_val"].detach().numpy().tobytes()
+        collector["switch_head_multiple_v_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert v_val_hash == V_VAL_MULTIPLE_HASH, f"Value Hash Mismatch: {v_val_hash}"
 
     q_val_o_hash = hashlib.sha256(
-        collector["switch_head_multiple_q_val_o"].detach().numpy().tobytes()
+        collector["switch_head_multiple_q_val_o"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         q_val_o_hash == Q_VAL_O_MULTIPLE_HASH
     ), f"Query Value Output Hash Mismatch: {q_val_o_hash}"
 
     k_val_o_hash = hashlib.sha256(
-        collector["switch_head_multiple_k_val_o"].detach().numpy().tobytes()
+        collector["switch_head_multiple_k_val_o"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         k_val_o_hash == K_VAL_O_MULTIPLE_HASH
@@ -333,6 +360,7 @@ def test_switch_head_multiple_experts():
     q_val_o_after_dropout_hash = hashlib.sha256(
         collector["switch_head_multiple_q_val_o_after_dropout"]
         .detach()
+        .cpu()
         .numpy()
         .tobytes()
     ).hexdigest()
@@ -343,6 +371,7 @@ def test_switch_head_multiple_experts():
     res_before_transpose_hash = hashlib.sha256(
         collector["switch_head_multiple_res_before_transpose"]
         .detach()
+        .cpu()
         .numpy()
         .tobytes()
     ).hexdigest()
@@ -351,19 +380,23 @@ def test_switch_head_multiple_experts():
     ), f"Result Before Transpose Hash Mismatch: {res_before_transpose_hash}"
 
     res_after_transpose_hash = hashlib.sha256(
-        collector["switch_head_multiple_res_after_transpose"].detach().numpy().tobytes()
+        collector["switch_head_multiple_res_after_transpose"]
+        .detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert (
         res_after_transpose_hash == RES_AFTER_TRANSPOSE_MULTIPLE_HASH
     ), f"Result After Transpose Hash Mismatch: {res_after_transpose_hash}"
 
     output_hash = hashlib.sha256(
-        collector["switch_head_multiple_output"].detach().numpy().tobytes()
+        collector["switch_head_multiple_output"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert output_hash == OUTPUT_MULTIPLE_HASH, f"Output Hash Mismatch: {output_hash}"
 
     final_output_hash = hashlib.sha256(
-        switch_head_output.detach().numpy().tobytes()
+        switch_head_output.detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         final_output_hash == FINAL_OUTPUT_MULTIPLE_HASH
@@ -434,49 +467,49 @@ def test_switch_head_single_expert():
     print(
         f'Q_VAL_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_q_val"].detach().numpy().tobytes()
+                collector["switch_head_q_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'K_VAL_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_k_val"].detach().numpy().tobytes()
+                collector["switch_head_k_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'O_GATE_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_o_gate"].detach().numpy().tobytes()
+                collector["switch_head_single_o_gate"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'V_VAL_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_v_val"].detach().numpy().tobytes()
+                collector["switch_head_single_v_val"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'V_VAL_O_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_v_val_o"].detach().numpy().tobytes()
+                collector["switch_head_single_v_val_o"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'Q_VAL_O_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_q_val_o"].detach().numpy().tobytes()
+                collector["switch_head_single_q_val_o"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'K_VAL_O_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_k_val_o"].detach().numpy().tobytes()
+                collector["switch_head_single_k_val_o"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
@@ -485,6 +518,7 @@ def test_switch_head_single_expert():
             hashlib.sha256(
                 collector["switch_head_single_q_val_o_after_dropout"]
                 .detach()
+                .cpu()
                 .numpy()
                 .tobytes()
             ).hexdigest()
@@ -495,6 +529,7 @@ def test_switch_head_single_expert():
             hashlib.sha256(
                 collector["switch_head_single_res_before_transpose"]
                 .detach()
+                .cpu()
                 .numpy()
                 .tobytes()
             ).hexdigest()
@@ -505,6 +540,7 @@ def test_switch_head_single_expert():
             hashlib.sha256(
                 collector["switch_head_single_res_after_transpose"]
                 .detach()
+                .cpu()
                 .numpy()
                 .tobytes()
             ).hexdigest()
@@ -515,6 +551,7 @@ def test_switch_head_single_expert():
             hashlib.sha256(
                 collector["switch_head_single_res_after_element_multiplication"]
                 .detach()
+                .cpu()
                 .numpy()
                 .tobytes()
             ).hexdigest()
@@ -525,6 +562,7 @@ def test_switch_head_single_expert():
             hashlib.sha256(
                 collector["switch_head_single_res_after_view"]
                 .detach()
+                .cpu()
                 .numpy()
                 .tobytes()
             ).hexdigest()
@@ -533,67 +571,71 @@ def test_switch_head_single_expert():
     print(
         f'OUTPUT_SINGLE_HASH = "{
             hashlib.sha256(
-                collector["switch_head_single_output"].detach().numpy().tobytes()
+                collector["switch_head_single_output"].detach().cpu().numpy().tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'FINAL_OUTPUT_SINGLE_HASH = "{
-            hashlib.sha256(switch_head_output.detach().numpy().tobytes()).hexdigest()
+            hashlib.sha256(switch_head_output.detach().cpu().numpy().tobytes()).hexdigest()
         }"'
     )
 
     q_val_single_hash = hashlib.sha256(
-        collector["switch_head_q_val"].detach().numpy().tobytes()
+        collector["switch_head_q_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         q_val_single_hash == Q_VAL_SINGLE_HASH
     ), f"Query Value Single Hash Mismatch: {q_val_single_hash}"
 
     k_val_single_hash = hashlib.sha256(
-        collector["switch_head_k_val"].detach().numpy().tobytes()
+        collector["switch_head_k_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         k_val_single_hash == K_VAL_SINGLE_HASH
     ), f"Key Value Single Hash Mismatch: {k_val_single_hash}"
 
     o_gate_hash = hashlib.sha256(
-        collector["switch_head_single_o_gate"].detach().numpy().tobytes()
+        collector["switch_head_single_o_gate"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         o_gate_hash == O_GATE_SINGLE_HASH
     ), f"Output Gate Hash Mismatch: {o_gate_hash}"
 
     v_val_single_hash = hashlib.sha256(
-        collector["switch_head_single_v_val"].detach().numpy().tobytes()
+        collector["switch_head_single_v_val"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         v_val_single_hash == V_VAL_SINGLE_HASH
     ), f"Value Single Hash Mismatch: {v_val_single_hash}"
 
     v_val_o_single_hash = hashlib.sha256(
-        collector["switch_head_single_v_val_o"].detach().numpy().tobytes()
+        collector["switch_head_single_v_val_o"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         v_val_o_single_hash == V_VAL_O_SINGLE_HASH
     ), f"Value Output Single Hash Mismatch: {v_val_o_single_hash}"
 
     q_val_o_single_hash = hashlib.sha256(
-        collector["switch_head_single_q_val_o"].detach().numpy().tobytes()
+        collector["switch_head_single_q_val_o"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         q_val_o_single_hash == Q_VAL_O_SINGLE_HASH
     ), f"Query Value Output Single Hash Mismatch: {q_val_o_single_hash}"
 
     k_val_o_single_hash = hashlib.sha256(
-        collector["switch_head_single_k_val_o"].detach().numpy().tobytes()
+        collector["switch_head_single_k_val_o"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         k_val_o_single_hash == K_VAL_O_SINGLE_HASH
     ), f"Key Value Output Single Hash Mismatch: {k_val_o_single_hash}"
 
     q_val_o_after_dropout_single_hash = hashlib.sha256(
-        collector["switch_head_single_q_val_o_after_dropout"].detach().numpy().tobytes()
+        collector["switch_head_single_q_val_o_after_dropout"]
+        .detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert q_val_o_after_dropout_single_hash == Q_VAL_O_AFTER_DROPOUT_SINGLE_HASH, (
         f"Query Value Output After Dropout Single Hash Mismatch: "
@@ -601,7 +643,11 @@ def test_switch_head_single_expert():
     )
 
     res_before_transpose_single_hash = hashlib.sha256(
-        collector["switch_head_single_res_before_transpose"].detach().numpy().tobytes()
+        collector["switch_head_single_res_before_transpose"]
+        .detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert res_before_transpose_single_hash == RES_BEFORE_TRANSPOSE_SINGLE_HASH, (
         f"Result Before Transpose Single Hash Mismatch: "
@@ -609,7 +655,11 @@ def test_switch_head_single_expert():
     )
 
     res_after_transpose_single_hash = hashlib.sha256(
-        collector["switch_head_single_res_after_transpose"].detach().numpy().tobytes()
+        collector["switch_head_single_res_after_transpose"]
+        .detach()
+        .cpu()
+        .numpy()
+        .tobytes()
     ).hexdigest()
     assert (
         res_after_transpose_single_hash == RES_AFTER_TRANSPOSE_SINGLE_HASH
@@ -630,21 +680,21 @@ def test_switch_head_single_expert():
     )
 
     res_after_view_hash = hashlib.sha256(
-        collector["switch_head_single_res_after_view"].detach().numpy().tobytes()
+        collector["switch_head_single_res_after_view"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         res_after_view_hash == RES_AFTER_VIEW_SINGLE_HASH
     ), f"Result After View Hash Mismatch: {res_after_view_hash}"
 
     output_single_hash = hashlib.sha256(
-        collector["switch_head_single_output"].detach().numpy().tobytes()
+        collector["switch_head_single_output"].detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         output_single_hash == OUTPUT_SINGLE_HASH
     ), f"Output Single Hash Mismatch: {output_single_hash}"
 
     final_output_single_hash = hashlib.sha256(
-        switch_head_output.detach().numpy().tobytes()
+        switch_head_output.detach().cpu().numpy().tobytes()
     ).hexdigest()
     assert (
         final_output_single_hash == FINAL_OUTPUT_SINGLE_HASH
