@@ -16,7 +16,7 @@ from dyna.config import (
 from dyna.config.enums import ExecutionMode
 from dyna.layers import MoEUTLayer, SimpleLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
-from dyna.modules import AttentionModule, DynaModule
+from dyna.modules import AttentionModule, DynaModule, LayerModule
 
 # execute
 import os
@@ -369,7 +369,6 @@ class DynaFormer(DynaPretrainedModel):
     ]:
         if layer_index is None:
             layer_index = 1
-        layer_index = 1
 
         residual_embeddings = None
         continue_mask = None
@@ -415,10 +414,13 @@ class DynaFormer(DynaPretrainedModel):
             if not continue_processing:
                 break
             # multiple_out = multiple_out + x if multiple_out is not None else x
+        assert layer_index is not None
+
         return x, energy_per_sample, layer_index
 
     def update_inv_freq(self, base: int):
-        for layer in self.body_layers:
+        layer: LayerModule
+        for layer in self.body_layers:  # pyright: ignore[reportAssignmentType]
             layer.update_inv_freq(base)
 
     def _apply_early_exit(
