@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import glob
 import os
 import secrets
 import string
+import subprocess
 import time
 from typing import cast
 
@@ -286,19 +285,6 @@ def build_full_concrete_config(cfg: DictConfig):
 def create_param_groups_with_conditional_wd(
     model, no_decay_param_names, default_wd=1e-5, frozen_param_names=None
 ):
-    """
-    Creates parameter groups where specified parameters have zero weight decay
-    and optionally freezes certain parameters from training.
-
-    Args:
-        model: The model whose parameters to group
-        no_decay_param_names: List of parameter name substrings to exclude from weight decay
-        default_wd: Default weight decay for other parameters
-        frozen_param_names: List of parameter name substrings to freeze (not train at all)
-
-    Returns:
-        List of parameter group dicts for optimizer
-    """
     if frozen_param_names is None:
         frozen_param_names = []
 
@@ -335,12 +321,18 @@ def create_param_groups_with_conditional_wd(
     return param_groups
 
 
-# # Usage:
-# no_decay_list = ['bias', 'LayerNorm', 'layernorm']  # Example: common parameters to exclude
-# param_groups = create_param_groups_with_conditional_wd(
-#     model,
-#     no_decay_list,
-#     default_wd=0.01
-# )
+# To get a shortened hash (e.g., 7 characters), use 'git rev-parse --short HEAD'
+def get_current_git_short_hash(repo_path=".") -> str:
+    """Retrieves the abbreviated Git commit hash of the current repository HEAD."""
+    # The logic is similar, but with the '--short' flag
+    short_hash = (
+        subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_path,
+            stderr=subprocess.STDOUT,
+        )
+        .decode("ascii")
+        .strip()
+    )
 
-# optimizer = DecoupledAdamW(param_groups, lr=cfg.optimizer_config.lr)
+    return short_hash

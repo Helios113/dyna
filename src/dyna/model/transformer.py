@@ -14,12 +14,16 @@ from dyna.config import (
     GEIPING_METHODS,
 )
 from dyna.config.enums import ExecutionMode
-from dyna.layers import MoEUTLayer, SimpleLayer
+from dyna.layers import MoEUTLayer, SimpleLayer, DirectLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule, LayerModule
 
+LAYER_TYPES = {"moeut": MoEUTLayer, "simple": SimpleLayer, "direct": DirectLayer}
+
+MOE_LAYER_TYPES = [MoEUTLayer]
+
 # execute
-import os
+import os  # noqa: E402
 
 if "PYTEST_VERSION" in os.environ:
     defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
@@ -103,61 +107,66 @@ class DynaFormer(DynaPretrainedModel):
         body layers can have input re-injection,
         which is the boolen parameter in the init.
         """
+        layer_to_use = LAYER_TYPES[config.layer_type]
         match config.execution_mode:
             # MOE
             case ExecutionMode.moe:
+                if layer_to_use not in MOE_LAYER_TYPES:
+                    raise TypeError("Layer type not suitable for MoEs")
                 self.body_layers = ModuleList(
-                    [MoEUTLayer(config) for _ in range(config.n_layers)]
+                    [layer_to_use(config) for _ in range(config.n_layers)]
                 )
             # Transformer
             case ExecutionMode.transformer:
                 self.body_layers = ModuleList(
-                    [SimpleLayer(config) for _ in range(config.n_layers)]
+                    [layer_to_use(config) for _ in range(config.n_layers)]
                 )
             # Geiping
             case ExecutionMode.geiping_std:
                 assert self.head_size > 0
                 assert self.tail_size > 0
                 self.head_layers = ModuleList(
-                    [SimpleLayer(config) for _ in range(self.head_size)]
+                    [layer_to_use(config) for _ in range(self.head_size)]
                 )
                 self.body_layers = ModuleList(
                     [
-                        SimpleLayer(config, input_reinjection=True)
+                        layer_to_use(config, input_reinjection=True)
                         for _ in range(config.n_layers)
                     ]
                 )
                 self.tail_layers = ModuleList(
-                    [SimpleLayer(config) for _ in range(self.tail_size)]
+                    [layer_to_use(config) for _ in range(self.tail_size)]
                 )
             # Arbit
             case ExecutionMode.arbit:
                 assert self.head_size > 0
                 assert self.tail_size > 0
                 self.head_layers = ModuleList(
-                    [SimpleLayer(config) for _ in range(self.head_size)]
+                    [layer_to_use(config) for _ in range(self.head_size)]
                 )
                 self.body_layers = ModuleList(
-                    [SimpleLayer(config, True) for _ in range(config.n_layers)]
+                    [layer_to_use(config, True) for _ in range(config.n_layers)]
                 )
                 self.tail_layers = ModuleList(
-                    [SimpleLayer(config) for _ in range(self.tail_size)]
+                    [layer_to_use(config) for _ in range(self.tail_size)]
                 )
             # Geiping MOE
             case ExecutionMode.geiping_moe:
+                if layer_to_use not in MOE_LAYER_TYPES:
+                    raise TypeError("Layer type not suitable for MoEs")
                 assert self.head_size > 0
                 assert self.tail_size > 0
                 self.head_layers = ModuleList(
-                    [MoEUTLayer(config) for _ in range(self.head_size)]
+                    [layer_to_use(config) for _ in range(self.head_size)]
                 )
                 self.body_layers = ModuleList(
                     [
-                        MoEUTLayer(config, input_reinjection=True)
+                        layer_to_use(config, input_reinjection=True)
                         for _ in range(config.n_layers)
                     ]
                 )
                 self.tail_layers = ModuleList(
-                    [MoEUTLayer(config) for _ in range(self.tail_size)]
+                    [layer_to_use(config) for _ in range(self.tail_size)]
                 )
 
             case _:

@@ -11,7 +11,7 @@ from dyna.modules import LayerModule, SaturationGate
 from dyna.transition import BasicFFN
 
 
-class SimpleLayer(LayerModule):
+class DirectLayer(LayerModule):
     def __init__(self, config: DynaConfig, input_reinjection: bool = False):
         """Initialize SimpleLayer with configurable parameters."""
         super().__init__(
@@ -77,19 +77,9 @@ class SimpleLayer(LayerModule):
             collector=collector,
             # endif
         )
-
-        x, layer_index = self._apply_update_to_residual(
-            x,
-            att_out,
-            continue_mask,
-            layer_index,
-            self.attn_post,
-            e,
-        )
-
-        ffn_inputs = self._apply_pre_norm_ffn(x)
         ffn_out, expert_sel_ffn = self.ffn(
-            *ffn_inputs,
+            att_out,
+            att_out,
             # ifdef PYTEST
             collector=collector,
             # endif

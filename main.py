@@ -16,9 +16,9 @@ from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import (
     build_full_concrete_config,
-    condition_model,
     create_param_groups_with_conditional_wd,
     get_callbacks,
+    get_current_git_short_hash,
     get_data_loader,
     get_scheduler,
     make_wandb_run_name,
@@ -43,6 +43,7 @@ def safe_clean_stale_shared_memory():
 @hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
 def main(cfg: DictConfig):
     safe_clean_stale_shared_memory()
+    print(get_current_git_short_hash())
 
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
@@ -89,7 +90,8 @@ def main(cfg: DictConfig):
 
     params = create_param_groups_with_conditional_wd(
         model,
-        ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+        # ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+        [],
         frozen_param_names=[],
     )
     optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)

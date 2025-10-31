@@ -27,7 +27,8 @@ model_config:
     sample_iterations: False
     loop_rope_theta_rebase: False
     transformer_type: dyna
-    layer_type: direct
+    layer_type: simple
+    use_embedding_norm: True
     # norms:
     #     norm_type: dynamic_tanh
     #     attn_eps: 3.0

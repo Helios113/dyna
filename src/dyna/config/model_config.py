@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 from dyna.config.enums import (
     ExecutionMode,
+    LayerType,
     NormStructure,
     RescaleMethod,
     TransformerType,
@@ -40,6 +41,7 @@ class ModelConfig:
     rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
     norm_structure: NormStructure = NormStructure.peri
     norms: NormConfig = field(default_factory=NormConfig)
+    layer_type: LayerType = LayerType.simple
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False

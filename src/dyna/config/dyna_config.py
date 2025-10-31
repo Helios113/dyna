@@ -4,11 +4,7 @@ from transformers import PretrainedConfig
 
 from dyna.config.norm_config import NormConfig
 
-from .enums import (
-    ExecutionMode,
-    NormStructure,
-    RescaleMethod,
-)
+from .enums import ExecutionMode, LayerType, NormStructure, RescaleMethod
 
 
 class DynaConfig(PretrainedConfig):
@@ -50,7 +46,11 @@ class DynaConfig(PretrainedConfig):
             self.rescaling_method = RescaleMethod[rescaling_method_val]
         else:
             self.rescaling_method = rescaling_method_val
-
+        layer_type = kwargs.pop("layer_type", "simple")
+        if isinstance(layer_type, str):
+            self.layer_type = LayerType[layer_type]
+        else:
+            self.layer_type = rescaling_method_val
         # Parameters with defaults
         self.n_layers = kwargs.pop("n_layers", 2)
         self.k_ffn = kwargs.pop("k_ffn", 12)

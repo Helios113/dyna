@@ -33,6 +33,12 @@ class NormType(str, Enum):
     unit_norm = "unit_norm"
 
 
+class LayerType(str, Enum):
+    moeut = "moeut"
+    simple = "simple"
+    direct = "direct"
+
+
 class TransformerType(str, Enum):
     dyna = "dyna"
     pass_through = "pass_through"

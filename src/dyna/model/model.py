@@ -244,8 +244,6 @@ class DynaLM(DynaPretrainedModel):
                 src_len_mask = _generate_source_len_mask(attention_mask)
         if self.embedding_norm is not None:
             x = self.embedding_norm(x)
-        elif self.embedding_norm is None:
-            x = x
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
         return x, attention_mask, src_len_mask
