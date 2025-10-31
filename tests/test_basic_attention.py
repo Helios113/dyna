@@ -27,7 +27,6 @@ def test_basic_attention():
         input, None, None, None
     )
 
-    print(hashlib.sha256(embedding.detach().numpy().tobytes()), flush=True)
     torch.manual_seed(42)
     attention = model.transformer.body_layers[0].attention
     collector = {}
