@@ -35,7 +35,7 @@ train:
     device_train_batch_size: 1024
 
 trainer_config:
-    run_name: "fixedEmb"
+    run_name: "stdAgain"
     max_duration: ${train.max_duration}
     train_dataloader_label: "train"
     device_train_microbatch_size: 32

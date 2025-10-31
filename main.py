@@ -65,11 +65,11 @@ def main(cfg: DictConfig):
     conf = DynaConfig(**cfg.model_config)
     torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
-    condition_model(
-        model,
-        ["model.embedding.weight", "model.lm_head.weight", "model.out_norm.weight"],
-        "s3://loop-llm/dyna/1_baseTransformer_22oct25_X1Q0lJ_dim~768_d_ffn~3072_n_l~12_n_h~12_d_hd~64_ee~False_mode~transformer_norm~pre_rescale~none-ba3171.pt",
-    )
+    # condition_model(
+    #     model,
+    #     ["model.embedding.weight", "model.lm_head.weight", "model.out_norm.weight"],
+    #     "s3://loop-llm/dyna/1_baseTransformer_22oct25_X1Q0lJ_dim~768_d_ffn~3072_n_l~12_n_h~12_d_hd~64_ee~False_mode~transformer_norm~pre_rescale~none-ba3171.pt",
+    # )
     print("model_structure  ", model, flush=True)
     train_dataloader = get_data_loader(
         cfg.data_config,
@@ -77,21 +77,21 @@ def main(cfg: DictConfig):
         device_train_batch_size=cfg.train.device_train_batch_size,
     )
     # Make optimizer
-    params = create_param_groups_with_conditional_wd(
-        model,
-        ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
-        frozen_param_names=[
-            "model.embedding.weight",
-            "model.lm_head.weight",
-            "model.out_norm.weight",
-        ],
-    )
-
     # params = create_param_groups_with_conditional_wd(
     #     model,
     #     ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
-    #     frozen_param_names=[],
+    #     frozen_param_names=[
+    #         "model.embedding.weight",
+    #         "model.lm_head.weight",
+    #         "model.out_norm.weight",
+    #     ],
     # )
+
+    params = create_param_groups_with_conditional_wd(
+        model,
+        ["attn_pre", "attn_post", "ffn_pre", "ffn_post", "out_norm"],
+        frozen_param_names=[],
+    )
     optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
