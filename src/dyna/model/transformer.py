@@ -1,3 +1,5 @@
+# encoding: pypreprocessor
+# ruff: noqa: I001
 import math
 import random
 from collections.abc import Callable
@@ -15,6 +17,13 @@ from dyna.config.enums import ExecutionMode
 from dyna.layers import MoEUTLayer, SimpleLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule
+
+# execute
+import os
+
+if "PYTEST_VERSION" in os.environ:
+    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
+# endexecute
 
 
 def calc_entropy(
@@ -218,6 +227,9 @@ class DynaFormer(DynaPretrainedModel):
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
         input_ids: Int[Tensor, "batch seq"] | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
         if input_ids is not None:
             _labels = torch.roll(input_ids, shifts=-1)
@@ -230,9 +242,25 @@ class DynaFormer(DynaPretrainedModel):
         self._seq_len.append([])
         self._residual_magnitudes.append([])
 
+        # ifdef PYTEST
+        child_collector: dict | None = {}
+        # endif
         x, reinjection_embeddings, layer_index = self.head(
-            x, attention_mask, sequence_length, e
+            x,
+            attention_mask,
+            sequence_length,
+            e,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
         )
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_head_output"] = x.clone()
+        collector["transformer_head_layer_index"] = layer_index
+        # endif
+
         x, energy_per_sample, layer_index = self.body(
             x,
             attention_mask,
@@ -241,8 +269,32 @@ class DynaFormer(DynaPretrainedModel):
             e,
             reinjection_embeddings,
             layer_index,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
         )
-        x = self.tail(x, attention_mask, sequence_length, e, layer_index)
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_body_output"] = x.clone()
+        collector["transformer_body_layer_index"] = layer_index
+        # endif
+
+        x = self.tail(
+            x,
+            attention_mask,
+            sequence_length,
+            e,
+            layer_index,
+            # ifdef PYTEST
+            collector=child_collector,
+            # endif
+        )
+
+        # ifdef PYTEST
+        assert collector is not None
+        collector["transformer_tail_output"] = x.clone()
+        # endif
 
         return x, energy_per_sample
 
@@ -265,6 +317,9 @@ class DynaFormer(DynaPretrainedModel):
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         None | Float[Tensor, "batch seq d_model"],
@@ -283,6 +338,9 @@ class DynaFormer(DynaPretrainedModel):
                 attention_mask=attention_mask,
                 sequence_length=sequence_length,
                 continue_mask=None,
+                # ifdef PYTEST
+                collector=collector,
+                # endif
             )
 
             if self.gather_stats:
@@ -303,6 +361,9 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         reinjection_embeddings: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None, int
     ]:
@@ -326,6 +387,9 @@ class DynaFormer(DynaPretrainedModel):
                     attention_mask=attention_mask,
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
+                    # ifdef PYTEST
+                    collector=collector,
+                    # endif
                 )
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(
@@ -426,6 +490,9 @@ class DynaFormer(DynaPretrainedModel):
         sequence_length: Int[Tensor, "batch seq"],
         e: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> Float[Tensor, "batch seq d_model"]:
         if layer_index is None:
             layer_index = 0
@@ -440,6 +507,9 @@ class DynaFormer(DynaPretrainedModel):
                 attention_mask=attention_mask,
                 sequence_length=sequence_length,
                 continue_mask=None,
+                # ifdef PYTEST
+                collector=collector,
+                # endif
             )
             if self.gather_stats:
                 self.gather_stats_func(x, expert_sel)

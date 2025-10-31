@@ -58,6 +58,9 @@ class MoEUTLayer(LayerModule):
         attention_mask: None | Bool[Tensor, "batch 1 seq seq"],
         sequence_length: None | Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
+        # ifdef PYTEST
+        collector: dict | None = None,
+        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
@@ -73,7 +76,14 @@ class MoEUTLayer(LayerModule):
         q_val, k_val, v_val = self._apply_pre_norm_attn(x)
 
         att_out, expert_sel_attn = self.attention(
-            q_val, k_val, v_val, attention_mask, sequence_length
+            q_val,
+            k_val,
+            v_val,
+            attention_mask,
+            sequence_length,
+            # ifdef PYTEST
+            collector=collector,
+            # endif
         )
 
         x, layer_index = self._apply_update_to_residual(
@@ -85,7 +95,13 @@ class MoEUTLayer(LayerModule):
             e,
         )
 
-        ffn_out, expert_sel_ffn = self.ffn(*self._apply_pre_norm_ffn(x))
+        ffn_inputs = self._apply_pre_norm_ffn(x)
+        ffn_out, expert_sel_ffn = self.ffn(
+            *ffn_inputs,
+            # ifdef PYTEST
+            collector=collector,
+            # endif
+        )
 
         saturation_event = None
         if self.saturation_detector is not None:

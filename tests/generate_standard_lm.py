@@ -13,9 +13,9 @@ DEFAULT_HASH = "574a5e521fd9a27bba31cc276c203da9f7e20a6abad882281378579b7d2f389b
 
 
 def generate_standard_lm():
-    with initialize(version_base=None, config_path="../configs/tests"):
+    with initialize(version_base=None, config_path="../configs"):
         # config is relative to a module
-        cfg = compose(config_name="transformer")
+        cfg = compose(config_name="pytest_transformer")
         OmegaConf.resolve(cfg)
         # Model Config
         model_schema = OmegaConf.structured(ModelConfig)
