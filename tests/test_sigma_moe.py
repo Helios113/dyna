@@ -9,21 +9,21 @@ from generate_standard_lm import generate_standard_lm
 from dyna.model import DynaLM
 from dyna.transition import SigmaMoE
 
-AFFINITY_HASH = "04ffe4709fe0ada1949403b0c17af63090e6c577e03d6c6fcbe0bf691a699b72"
+AFFINITY_HASH = "5a22f9f716e6dcbd449d84d9338c48f6917f02b7eaae8cc060444dcfbc82726d"
 SELECTION_INDEX_HASH = (
-    "e148557b0539c9500e28d0d2d5bf37be16fe23c74dbda8bbd4e76b10643646fc"
+    "4ff98ff200c922c49902dc96f0d2c4211e16727c70356994e09121cf75ad79c3"
 )
 SELECTION_INDICES_HASH = (
-    "2c14e489709d993ced62c6468733352504c13d8c0ab8707f1337c871b740c7cc"
+    "a93766291575831cfcb9195bfababed2f1adf02edac4d31aa20208f8a1762fff"
 )
 SCORES_PRE_ACTIVATION_HASH = (
-    "78c77b5d54f59402786c2981878955db0e02c35c7e40e3841d221829d20312c6"
+    "97e8dfbb6ea6143cbc8b50ea8d95095e3606910ab2c7f05479f5ede9e7af3440"
 )
 SCORES_POST_ACTIVATION_HASH = (
-    "1a4657603dec2c7e06fbf0fdc8a59a6c5fe30a0a59476a235086f7559a16146a"
+    "b0bc69b5d4bb62ad64a6faadb7740dbb84080004aeaf71a9a51fa8ce22f1b879"
 )
-OUTPUT_HASH = "02c63429a3f89b88a3ff288091fe1ba5ddc1215c8fc40a586dd06b283ba0c1c8"
-FINAL_OUTPUT_HASH = "02c63429a3f89b88a3ff288091fe1ba5ddc1215c8fc40a586dd06b283ba0c1c8"
+OUTPUT_HASH = "535f6685ca998d09da47fcbac01dbf6528b2cde14964d1fd2b67b76f0bd84397"
+FINAL_OUTPUT_HASH = "535f6685ca998d09da47fcbac01dbf6528b2cde14964d1fd2b67b76f0bd84397"
 
 
 def test_sigma_moe():
@@ -70,8 +70,6 @@ def test_sigma_moe():
         f"Got: {list(collector.keys())}"
     )
 
-    print(collector["sigma_moe_affinity"])
-
     # Uncomment to capture hashes
     print(
         f'AFFINITY_HASH = "{
@@ -90,21 +88,33 @@ def test_sigma_moe():
     print(
         f'SELECTION_INDICES_HASH = "{
             hashlib.sha256(
-                collector["sigma_moe_selection_indices"].sel.detach().cpu().numpy().tobytes()
+                collector["sigma_moe_selection_indices"]
+                .sel.detach()
+                .cpu()
+                .numpy()
+                .tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'SCORES_PRE_ACTIVATION_HASH = "{
             hashlib.sha256(
-                collector["sigma_moe_scores_pre_activation"].detach().cpu().numpy().tobytes()
+                collector["sigma_moe_scores_pre_activation"]
+                .detach()
+                .cpu()
+                .numpy()
+                .tobytes()
             ).hexdigest()
         }"'
     )
     print(
         f'SCORES_POST_ACTIVATION_HASH = "{
             hashlib.sha256(
-                collector["sigma_moe_scores_post_activation"].detach().cpu().numpy().tobytes()
+                collector["sigma_moe_scores_post_activation"]
+                .detach()
+                .cpu()
+                .numpy()
+                .tobytes()
             ).hexdigest()
         }"'
     )

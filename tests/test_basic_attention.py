@@ -5,19 +5,18 @@ import torch
 from generate_standard_inputs import generate_standard_inputs
 from generate_standard_lm import generate_standard_lm
 
-from dyna.attention import BasicAttn
 from dyna.model import DynaLM
 
-Q_PROJ_HASH = "43505304badea2bd6d5f3e8acf631b0f1b0dbff1e8073ac162e1a65fd0833cea"
-K_PROJ_HASH = "2945689855996ed47e6cc4b8d9b42eb9709d5f18022273cda83768197addb40e"
-V_PROJ_HASH = "e571cf64614697d4317f4e2f3e5e881eee10381647332e15e3c2580e7d12e3ad"
-Q_RESHAPED_HASH = "ce99e648c2488df6903bb6d36c5ec035dbf86a3ab6a0a578264b4da21647d99a"
-K_RESHAPED_HASH = "a2a760b8854c0ae66d31009c7485e597b35849aebe121972641e50809734a5c9"
-V_RESHAPED_HASH = "3c608ba93e6575952957ae7f72ce2ab14d3bcf359984d3853bbe5be80008d572"
+Q_PROJ_HASH = "df0e53257db633db3201ac1c46157608b33986d2bc2e06637bdffe0f9450c5ee"
+K_PROJ_HASH = "b88408082ae62e071ab43eb2ba92f3c4b999cc77eb147b07cb26fd8f16587d20"
+V_PROJ_HASH = "d208218c47de320a55de6ca17fde4ea80840465c2495fe3b36e7dd50972d32ef"
+Q_RESHAPED_HASH = "b8ee31164d94c161a02e31d951e473e1855bb6c0a406c99f790857655886b744"
+K_RESHAPED_HASH = "ecebf74aacd032e4c6bf1c652ae9d562c89ec607882539125d6dc9a3ab371eb5"
+V_RESHAPED_HASH = "7baa6945f3b30def6bd05dcee722623ed723cbeb8b1f7b10bf16457672002f25"
 ATTENTION_OUTPUT_HASH = (
-    "dd35f81e96bda94b3ce392215508243fc51929434de37ac211e175c550c87d52"
+    "a8a3974ef8a881e05111afa6763ea1c9bfbee93ecdfdb4045e6e3a81cb3e6bed"
 )
-OUTPUT_PROJ_HASH = "bb5c017a52f2e5363bf42091a47b05c8f9f14a2d86c851a95d9b22b8eadc03b6"
+OUTPUT_PROJ_HASH = "6fcb5539e9ed8deb1b363ade922cd568dbcacb5b01d6f86c9c890bdbe243e5a9"
 
 
 def test_basic_attention():
@@ -27,12 +26,10 @@ def test_basic_attention():
     embedding, attention_mask, sequence_length = model.embedding_stage(
         input, None, None, None
     )
-    d_model = model.config.d_model
-    n_heads = model.config.n_heads
-    d_head = model.config.d_head
-    torch.manual_seed(42)
 
-    attention: BasicAttn = BasicAttn(d_model, n_heads, d_head)
+    print(hashlib.sha256(embedding.detach().numpy().tobytes()), flush=True)
+    torch.manual_seed(42)
+    attention = model.transformer.body_layers[0].attention
     collector = {}
     attention_output, _ = attention(
         q_src=embedding,
@@ -57,34 +54,6 @@ def test_basic_attention():
         f"Collector keys mismatch.\nExpected: {EXPECTED_KEYS}\n"
         f"Got: {list(collector.keys())}"
     )
-
-    # print(f"Q_PROJ_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_q_proj'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"K_PROJ_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_k_proj'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"V_PROJ_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_v_proj'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"Q_RESHAPED_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_q_reshaped'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"K_RESHAPED_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_k_reshaped'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"V_RESHAPED_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_v_reshaped'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"ATTENTION_OUTPUT_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_attention_output'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"OUTPUT_PROJ_HASH = \"{hashlib.sha256(
-    #     collector['basic_attn_output_proj'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f'FINAL_OUTPUT_HASH = "{hashlib.sha256(
-    #     attention_output.detach().numpy().tobytes()
-    # ).hexdigest()}")
 
     q_proj_hash = hashlib.sha256(
         collector["basic_attn_q_proj"].detach().numpy().tobytes()

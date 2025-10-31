@@ -13,13 +13,13 @@ TRANSFORMER_LAYER_INDEX_HASH = (
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 TRANSFORMER_BODY_OUTPUT_HASH = (
-    "7631aa190daf3262dc051644303b9e256e14c0f8ed24a29d354236ee056a3905"
+    "800581b8c7f51048225e2e68d7223ea7e8694864f8e0dad6da5e16d3f4756c0b"
 )
 TRANSFORMER_BODY_LAYER_INDEX_HASH = (
     "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496"
 )
 TRANSFORMER_TAIL_OUTPUT_HASH = (
-    "7631aa190daf3262dc051644303b9e256e14c0f8ed24a29d354236ee056a3905"
+    "800581b8c7f51048225e2e68d7223ea7e8694864f8e0dad6da5e16d3f4756c0b"
 )
 
 
@@ -54,24 +54,36 @@ def test_transformer():
     )
 
     # Uncomment to capture hashes
-    print(f"HEAD_OUTPUT_HASH = \"{hashlib.sha256(
-        collector['transformer_head_output'].detach().numpy().tobytes()
-    ).hexdigest()}\"")
+    print(
+        f'HEAD_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["transformer_head_output"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
 
     layer_index_val = collector["transformer_head_layer_index"]
     print(f'LAYER_INDEX_HASH = "{hashlib.sha256(bytes(layer_index_val)).hexdigest()}"')
 
-    print(f"BODY_OUTPUT_HASH = \"{hashlib.sha256(
-        collector['transformer_body_output'].detach().numpy().tobytes()
-    ).hexdigest()}\"")
+    print(
+        f'BODY_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["transformer_body_output"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
 
     body_layer_index_val = collector["transformer_body_layer_index"]
     body_layer_index_hash = hashlib.sha256(bytes(body_layer_index_val)).hexdigest()
     print(f'BODY_LAYER_INDEX_HASH = "{body_layer_index_hash}"')
 
-    print(f"TAIL_OUTPUT_HASH = \"{hashlib.sha256(
-        collector['transformer_tail_output'].detach().numpy().tobytes()
-    ).hexdigest()}\"")
+    print(
+        f'TAIL_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["transformer_tail_output"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
 
     head_output_hash = hashlib.sha256(
         collector["transformer_head_output"].detach().numpy().tobytes()

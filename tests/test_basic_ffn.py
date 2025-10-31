@@ -6,13 +6,12 @@ from generate_standard_inputs import generate_standard_inputs
 from generate_standard_lm import generate_standard_lm
 
 from dyna.model import DynaLM
-from dyna.transition import BasicFFN
 
-UP_OUTPUT_HASH = "92f694384f5bb74086f8413d3c9f3e380cde3f316e99d7c2b618f9c342fcef23"
+UP_OUTPUT_HASH = "cdc08b3d40261b542d47a0f18df3f44a528ce212a71f5ab7afb922ebb41acdc5"
 ACTIVATION_OUTPUT_HASH = (
-    "56306a193b0e8130896b92522ce9eae8599ebc2e8b49d73ea0c3b9164f33d57b"
+    "f30e8073d7ddf123da6a855267a35379a5de3300fe1aaa250e487d55e84bdbba"
 )
-DOWN_OUTPUT_HASH = "df6e86bd9de4b5e8ac2d34bd1b32c6ea3aa1bae39de0f8264716e6460ef685cc"
+DOWN_OUTPUT_HASH = "bdeb2c34d2b809420535b75dcc614f030bd4a2b0b1c023c09ccdadc3cafe8e62"
 
 
 def test_basic_ffn():
@@ -20,11 +19,8 @@ def test_basic_ffn():
     model: DynaLM = generate_standard_lm()
 
     embedding, _, _ = model.embedding_stage(input, None, None, None)
-    d_model = model.config.d_model
-    d_ffn = model.config.d_ffn
     torch.manual_seed(42)
-
-    ffn: BasicFFN = BasicFFN(d_model, d_ffn)
+    ffn = model.transformer.body_layers[0].ffn
     collector = {}
     ffn_output, _ = ffn(embedding, None, collector)
 
@@ -38,15 +34,27 @@ def test_basic_ffn():
         f"Got: {list(collector.keys())}"
     )
 
-    # print(f"UP_OUTPUT_HASH = \"{hashlib.sha256(
-    #     collector['basic_ffn_proj_up'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"ACTIVATION_OUTPUT_HASH = \"{hashlib.sha256(
-    #     collector['basic_ffn_activation'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
-    # print(f"DOWN_OUTPUT_HASH = \"{hashlib.sha256(
-    #     collector['basic_ffn_proj_down'].detach().numpy().tobytes()
-    # ).hexdigest()}\"")
+    print(
+        f'UP_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["basic_ffn_proj_up"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
+    print(
+        f'ACTIVATION_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["basic_ffn_activation"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
+    print(
+        f'DOWN_OUTPUT_HASH = "{
+            hashlib.sha256(
+                collector["basic_ffn_proj_down"].detach().numpy().tobytes()
+            ).hexdigest()
+        }"'
+    )
 
     # No non-deterministic operations so hashing will work
     up_output_hash = hashlib.sha256(
