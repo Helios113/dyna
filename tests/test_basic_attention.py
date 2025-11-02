@@ -27,7 +27,6 @@ def test_basic_attention():
         v_src=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     # Load the goal graph

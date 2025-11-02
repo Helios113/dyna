@@ -175,9 +175,6 @@ class SigmaMoE(DynaModule):
         self,
         token_stream: Float[Tensor, "batch seq d_model"],
         selection_input: Float[Tensor, "batch seq d_model"],
-        # ifdef PYTEST
-        collector: dict | None = None,
-        # endif
     ) -> tuple[Float[Tensor, "batch seq d_model"], Int[Tensor, "batch seq k_experts"]]:
         """Forward pass through the MoE layer."""
         # Get expert selection
@@ -186,35 +183,14 @@ class SigmaMoE(DynaModule):
             self.sel_hist.append(affinity.unsqueeze(2))
         # Detach to avoid storing gradients
 
-        # ifdef PYTEST
-        assert collector is not None
-        collector["sigma_moe_affinity"] = affinity.clone()
-        collector["sigma_moe_selection_index"] = selection_index.clone()
-        # endif
-
         # Prepare selection indices for CVMM operations
         selection_indices = cvmm_prepare_sel2(selection_index.int())
-
-        # ifdef PYTEST
-        assert collector is not None
-        collector["sigma_moe_selection_indices"] = selection_indices.clone()
-        # endif
 
         scores: Float[Tensor, "batch seq k_experts d_expert"] = cvmm(  # type: ignore[assignment]
             token_stream, selection_indices, self.keys
         )
 
-        # ifdef PYTEST
-        assert collector is not None
-        collector["sigma_moe_scores_pre_activation"] = scores.clone()
-        # endif
-
         scores = self.activation(scores)
-
-        # ifdef PYTEST
-        assert collector is not None
-        collector["sigma_moe_scores_post_activation"] = scores.clone()
-        # endif
 
         # Down-projection: scores * expert_values
         selection_indices.reduction_weight = affinity
@@ -222,11 +198,6 @@ class SigmaMoE(DynaModule):
         selection_indices.out_index = None
 
         out = cvmm(scores, selection_indices, self.values)  # type: ignore[assignment]
-
-        # ifdef PYTEST
-        assert collector is not None
-        collector["sigma_moe_output"] = out.clone()  # type: ignore[union-attr]
-        # endif
 
         # Clean up intermediate tensors to prevent memory leak
         del scores, selection_indices

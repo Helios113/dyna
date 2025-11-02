@@ -38,7 +38,6 @@ def test_switch_head_multiple_experts():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     # Load the goal graph
@@ -82,7 +81,6 @@ def test_switch_head_single_expert():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     # Load the goal graph

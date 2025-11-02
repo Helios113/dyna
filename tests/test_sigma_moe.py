@@ -28,7 +28,6 @@ def test_sigma_moe():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     # Load the goal graph

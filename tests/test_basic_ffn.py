@@ -19,7 +19,7 @@ def test_basic_ffn():
     torch.manual_seed(42)
     ffn = model.transformer.body_layers[0].ffn
 
-    ffn_output, _ = ffn(embedding, None, {})
+    ffn_output, _ = ffn(embedding, None)
 
     # Load the goal graph
     with open("graph_jsons/standard_basic_ffn_graph.json") as f:

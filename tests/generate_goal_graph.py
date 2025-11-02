@@ -35,7 +35,6 @@ def get_basic_attention_tensor():
         v_src=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
     return attention_output
 
@@ -45,7 +44,7 @@ def get_basic_ffn_tensor():
     torch.manual_seed(42)
 
     ffn = model.transformer.body_layers[0].ffn
-    ffn_output, _ = ffn(embedding, None, {})
+    ffn_output, _ = ffn(embedding, None)
 
     return ffn_output
 
@@ -62,7 +61,6 @@ def get_sigma_moe_tensor():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     return sigma_moe_output
@@ -93,7 +91,6 @@ def get_switch_head_multiple_experts_tensor():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     return switch_head_output
@@ -124,7 +121,6 @@ def get_switch_head_single_expert_tensor():
         reinjection_embeddings=embedding,
         attention_mask=attention_mask,
         sequence_length=sequence_length,
-        collector={},
     )
 
     return switch_head_output
@@ -140,7 +136,6 @@ def get_transformer_tensor():
         sequence_length=sequence_length,
         e=embedding.clone(),
         input_ids=generate_standard_inputs(),
-        collector={},
     )
 
     return transformer_output

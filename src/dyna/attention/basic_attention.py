@@ -73,9 +73,6 @@ class BasicAttn(AttentionModule):
         v_src: Float[Tensor, "batch seq d_model"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        # ifdef PYTEST
-        collector: dict | None = None,
-        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[None, None],
@@ -85,25 +82,11 @@ class BasicAttn(AttentionModule):
         k: Float[Tensor, "batch seq nd_head"] = self.k(k_src)
         v: Float[Tensor, "batch seq nd_head"] = self.v(v_src)
 
-        # ifdef PYTEST
-        assert collector is not None
-        collector["basic_attn_q_proj"] = q.clone()
-        collector["basic_attn_k_proj"] = k.clone()
-        collector["basic_attn_v_proj"] = v.clone()
-        # endif
-
         # Project to attention format
 
         q = self.project_to_torch_order(q)
         k = self.project_to_torch_order(k)
         v = self.project_to_torch_order(v)
-
-        # ifdef PYTEST
-        assert collector is not None
-        collector["basic_attn_q_reshaped"] = q.clone()
-        collector["basic_attn_k_reshaped"] = k.clone()
-        collector["basic_attn_v_reshaped"] = v.clone()
-        # endif
 
         # Apply dropout
         q = self.dropout(q)
@@ -111,21 +94,11 @@ class BasicAttn(AttentionModule):
         # Apply attention
         res = self.attend(v, k, q, attention_mask, sequence_length)
 
-        # ifdef PYTEST
-        assert collector is not None
-        collector["basic_attn_attention_output"] = res.clone()
-        # endif
-
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)
 
         # Apply output projection
         out = self.o(res)
-
-        # ifdef PYTEST
-        assert collector is not None
-        collector["basic_attn_output_proj"] = out.clone()
-        # endif
 
         return out, (None, None)
 

@@ -248,9 +248,6 @@ class LayerModule(Module, ABC):
         sequence_length: None | Int[Tensor, "batch seq"],
         layer_index: int,
         continue_mask: None | Int[Tensor, " size"] = None,
-        # ifdef PYTEST
-        collector: dict | None = None,
-        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
