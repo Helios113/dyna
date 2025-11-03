@@ -3,7 +3,6 @@ import os
 import hydra
 import torch
 import torch.distributed as dist
-from beartype import beartype
 from composer import Trainer
 from composer.algorithms import GradientClipping
 from composer.loggers import WandBLogger
@@ -12,7 +11,7 @@ from omegaconf import DictConfig, OmegaConf
 from streaming.base.util import clean_stale_shared_memory
 from transformers import AutoTokenizer
 
-from dyna.config import DynaConfig
+from dyna.config import DynaConfig, SweepConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import (
     build_full_concrete_config,
@@ -39,9 +38,22 @@ def safe_clean_stale_shared_memory():
         return clean_stale_shared_memory()
 
 
-@beartype
 @hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
 def main(cfg: DictConfig):
+    # Model Config
+    sweep_schema = OmegaConf.structured(SweepConfig)
+    sweep_config = OmegaConf.merge(sweep_schema, cfg.sweep_config)
+
+    execute_config = cfg.execute_config
+    print(execute_config)
+    print(sweep_config)
+
+
+if __name__ == "__main__":
+    main()
+
+
+def execute_train(cfg: DictConfig):
     safe_clean_stale_shared_memory()
     print(get_current_git_short_hash())
 
@@ -118,7 +130,3 @@ def main(cfg: DictConfig):
     )
 
     trainer.fit()
-
-
-if __name__ == "__main__":
-    main()

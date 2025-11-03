@@ -42,3 +42,8 @@ class LayerType(str, Enum):
 class TransformerType(str, Enum):
     dyna = "dyna"
     pass_through = "pass_through"
+
+
+class SweepType(str, Enum):
+    continious = "continious"
+    category = "category"

@@ -4,6 +4,7 @@ from .enums import ExecutionMode, NormStructure, RescaleMethod
 from .fsdp_config import FSDPConfig
 from .model_config import ModelConfig
 from .scheduler_config import SchedulerConfig
+from .sweep_config import SweepConfig
 from .trainer_config import TrainerConfig
 
 CROSS_ENTROPY_IGNORE_INDEX = -100
@@ -33,20 +34,21 @@ PROT_EMB_RESCALING_METHODS = [
 __all__ = [
     # Constants
     "CROSS_ENTROPY_IGNORE_INDEX",
-    "LATENT_RECURSION_METHODS",
-    "GEIPING_METHODS",
     "DEFAULT_CAUSAL_LM_TRAIN_METRICS",
+    "GEIPING_METHODS",
+    "LATENT_RECURSION_METHODS",
     "PROT_EMB_RESCALING_METHODS",
     "DataConfig",
     "DatasetConfig",
+    "DynaConfig",
     "ExecutionMode",
+    "FSDPConfig",
+    "ModelConfig",
     "NormStructure",
     "RescaleMethod",
-    "FSDPConfig",
-    "TrainerConfig",
     "SchedulerConfig",
-    "DynaConfig",
-    "ModelConfig",
+    "SweepConfig",
+    "TrainerConfig",
 ]
 """Config submodule for Dyna project.
 
