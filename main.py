@@ -1,4 +1,7 @@
 import os
+from collections.abc import Generator, Iterator
+from copy import copy
+from typing import Any, cast
 
 import hydra
 import torch
@@ -38,19 +41,43 @@ def safe_clean_stale_shared_memory():
         return clean_stale_shared_memory()
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
-def main(cfg: DictConfig):
-    # Model Config
-    sweep_schema = OmegaConf.structured(SweepConfig)
-    sweep_config = OmegaConf.merge(sweep_schema, cfg.sweep_config)
+def generate_param(cfg: DictConfig) -> Iterator[tuple[str, Any]]:
+    # Returns an executre config for training
 
-    execute_config = cfg.execute_config
-    print(execute_config)
-    print(sweep_config)
+    sweeps = cfg.sweeps
+    for i in sweeps:
+        min_val = sweeps[i].min_val
+        max_val = sweeps[i].max_val
+        step_size = sweeps[i].step_size
+        param = sweeps[i].name
+        count = 0
+        local_steps = torch.arange(min_val, max_val, step_size)
+        print(local_steps)
+        while count < len(local_steps):
+            print("val updated to", local_steps[count].item())
+            yield (param, local_steps[count].item())
+            count += 1
 
 
-if __name__ == "__main__":
-    main()
+def rebase_config(cfg_subtree: DictConfig) -> DictConfig:
+    # Convert to YAML string (preserves interpolations)
+    yaml_str = OmegaConf.to_yaml(cfg_subtree, resolve=False)
+
+    # Create a fresh DictConfig from the YAML
+    # This makes it a new root with no parent references
+    rebased = cast(DictConfig, OmegaConf.create(yaml_str))
+
+    return rebased
+
+
+def handle_params(sweep_config, execute_config) -> Generator[DictConfig]:
+    for i in generate_param(sweep_config):
+        run_confg = copy.deepcopy(execute_config)
+        param_name, param_value = i
+
+        OmegaConf.update(run_confg, param_name, param_value, merge=False)
+
+        yield run_confg
 
 
 def execute_train(cfg: DictConfig):
@@ -130,3 +157,21 @@ def execute_train(cfg: DictConfig):
     )
 
     trainer.fit()
+
+
+@hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
+def main(cfg: DictConfig):
+    # Model Config
+    sweep_schema = OmegaConf.structured(SweepConfig)
+    # Set the parent to None to make it act as root
+    execute_config = rebase_config(cfg.execute_config)
+
+    sweep_config = OmegaConf.merge(sweep_schema, cfg.sweep_config)
+    for i in handle_params(sweep_config, execute_config):
+        print(i)
+        execute_train(i)
+        # print(i)
+
+
+if __name__ == "__main__":
+    main()

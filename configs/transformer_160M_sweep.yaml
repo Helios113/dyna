@@ -7,10 +7,14 @@ defaults:
     - execute_config/fsdp_config: null
 
 sweep_config:
-    - name: "lr"
-      min_val: 1
-      max_val: 10
-      step_size: 1
+    sweeps:
+        param1:
+            name: "optimizer_config.lr"
+            min_val: 1e-3
+            max_val: 1e-2
+            step_size: 1e-3
+            type: "continious"
+    run_steps: 10
 execute_config:
     model_config:
         execution_mode: transformer
@@ -40,13 +44,12 @@ execute_config:
         #     ffn_eps: 3.0
 
     train:
-        max_duration: "3171ba"
+        max_duration: "400ba"
         warmup: "634ba"
         cooldown: "634ba"
         device_train_batch_size: 1024
-
     trainer_config:
-        run_name: "direct"
+        run_name: "sweepWandb"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 16

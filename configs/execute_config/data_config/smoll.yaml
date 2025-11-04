@@ -1,0 +1,4 @@
+path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configs/execute_config/streams"
+dataset:
+    max_seq_len: ${model_config.max_seq_len}
+num_workers: 8
