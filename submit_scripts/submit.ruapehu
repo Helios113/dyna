@@ -15,7 +15,7 @@ export TMPDIR=$unique_name
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=new_geipping_160M
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_nope
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_360M_loop
-HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_loop
+HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_sweep
 
 
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=TODOgeiping_160M

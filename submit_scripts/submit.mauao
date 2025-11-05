@@ -18,7 +18,7 @@ ulimit -n 4096
 # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_loop
 # # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=transformer_160M_dyt
 # # HYDRA_FULL_ERROR=1 uv run python -B main.py --config-name=TODOgeiping_160M
-uv run python test.py --config-file config.json --tokenizer gpt2 --max-samples 20000
+uv run python test.py --config-file config.json
 status=$?
 if [ $status -eq 0 ]; then
    # Add notification after job completion
