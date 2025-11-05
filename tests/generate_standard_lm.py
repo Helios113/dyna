@@ -28,7 +28,7 @@ def generate_standard_lm():
         # config is relative to a module
         cfg = compose(config_name="pytest_transformer")
         cfg = rebase_config(cfg.execute_config)
-        OmegaConf.resolve(cfg.execute_config)
+        OmegaConf.resolve(cfg)
         # Model Config
         model_schema = OmegaConf.structured(ModelConfig)
         model_config: dict[str, object] = cast(
