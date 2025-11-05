@@ -4,7 +4,7 @@ from typing import cast
 
 import torch
 from hydra import compose, initialize
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from dyna.config import DynaConfig, ModelConfig
 from dyna.model import DynaLM
@@ -12,11 +12,23 @@ from dyna.model import DynaLM
 DEFAULT_HASH = "574a5e521fd9a27bba31cc276c203da9f7e20a6abad882281378579b7d2f389b"
 
 
+def rebase_config(cfg_subtree: DictConfig) -> DictConfig:
+    # Convert to YAML string (preserves interpolations)
+    yaml_str = OmegaConf.to_yaml(cfg_subtree, resolve=False)
+
+    # Create a fresh DictConfig from the YAML
+    # This makes it a new root with no parent references
+    rebased = cast(DictConfig, OmegaConf.create(yaml_str))
+
+    return rebased
+
+
 def generate_standard_lm():
     with initialize(version_base=None, config_path="../configs"):
         # config is relative to a module
         cfg = compose(config_name="pytest_transformer")
-        OmegaConf.resolve(cfg)
+        cfg = rebase_config(cfg.execute_config)
+        OmegaConf.resolve(cfg.execute_config)
         # Model Config
         model_schema = OmegaConf.structured(ModelConfig)
         model_config: dict[str, object] = cast(
