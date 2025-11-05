@@ -1,6 +1,6 @@
 import hashlib
 
-from generate_standard_inputs import generate_standard_inputs
+from .generate_standard_inputs import generate_standard_inputs
 
 DEFAULT_HASH = "f2c792f21615cfde8830e3f2f45e638cd26f80a583d5b29d24ae51cf5dd8e716"
 

@@ -9,7 +9,7 @@ from tests.generate_switch_head_lm import (
     generate_switch_head_lm_single_expert,
     generate_switch_head_multiple_experts_lm,
 )
-from tests.graph_utils import get_computation_graph
+from tests.graph_utils import generate_computation_graph
 
 
 def test_switch_head_multiple_experts():
@@ -48,7 +48,7 @@ def test_switch_head_multiple_experts():
     with open(graph_path) as f:
         goal_graph = json.load(f)
 
-    graph = get_computation_graph(switch_head_output)
+    graph = generate_computation_graph(switch_head_output)
 
     assert (
         graph == goal_graph
@@ -91,7 +91,7 @@ def test_switch_head_single_expert():
     with open(graph_path) as f:
         goal_graph = json.load(f)
 
-    graph = get_computation_graph(switch_head_output)
+    graph = generate_computation_graph(switch_head_output)
 
     assert graph == goal_graph, (
         "SwitchHead (single expert) computation graph does not match "

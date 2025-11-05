@@ -1,16 +1,14 @@
-import argparse
 import json
 import os
 
 import torch
-
-from tests.generate_standard_inputs import generate_standard_inputs
-from tests.generate_standard_lm import generate_standard_lm
-from tests.generate_switch_head_lm import (
+from generate_standard_inputs import generate_standard_inputs
+from generate_standard_lm import generate_standard_lm
+from generate_switch_head_lm import (
     generate_switch_head_lm_single_expert,
     generate_switch_head_multiple_experts_lm,
 )
-from tests.graph_utils import get_computation_graph
+from graph_utils import generate_computation_graph
 
 
 def _setup_model_and_inputs(lm_generator=generate_standard_lm):
@@ -142,14 +140,6 @@ def get_transformer_tensor():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate graphs for model components."
-    )
-    parser.add_argument(
-        "component", type=str, help="The component to generate the graph for."
-    )
-    args = parser.parse_args()
-
     tensor_generators = {
         "basic_attention": get_basic_attention_tensor,
         "basic_ffn": get_basic_ffn_tensor,
@@ -159,30 +149,22 @@ def main():
         "transformer": get_transformer_tensor,
     }
 
-    if args.component in tensor_generators:
-        output_tensor = tensor_generators[args.component]()
+    for i in tensor_generators:
+        output_tensor = tensor_generators[i]()
 
-        graph = get_computation_graph(output_tensor)
+        graph = generate_computation_graph(output_tensor)
 
         script_dir = os.path.dirname(__file__)
         output_dir = os.path.join(script_dir, "graph_jsons")
         os.makedirs(output_dir, exist_ok=True)
 
-        file_name = f"standard_{args.component}_graph.json"
+        file_name = f"standard_{i}_graph.json"
         output_path = os.path.join(output_dir, file_name)
 
         with open(output_path, "w") as f:
             json.dump(graph, f, indent=2)
 
-        print(
-            f"Successfully generated and saved the {args.component} "
-            f"computation graph to {output_path}."
-        )
-    else:
-        print(
-            f"Error: Unknown component '{args.component}'. "
-            f"Supported components are: {list(tensor_generators.keys())}"
-        )
+        print(f"Successfully generated and saved {i} graph to {output_path}.")
 
 
 if __name__ == "__main__":

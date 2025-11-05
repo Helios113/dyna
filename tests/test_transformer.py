@@ -6,7 +6,7 @@ import torch
 from dyna.model import DynaLM
 from tests.generate_standard_inputs import generate_standard_inputs
 from tests.generate_standard_lm import generate_standard_lm
-from tests.graph_utils import get_computation_graph
+from tests.graph_utils import generate_computation_graph
 
 
 def test_transformer():
@@ -33,7 +33,7 @@ def test_transformer():
     with open(graph_path) as f:
         goal_graph = json.load(f)
 
-    graph = get_computation_graph(transformer_output)
+    graph = generate_computation_graph(transformer_output)
 
     assert (
         graph == goal_graph

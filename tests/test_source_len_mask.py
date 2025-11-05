@@ -1,9 +1,10 @@
 import os
 
 import torch
-from generate_standard_inputs import generate_standard_inputs
 
 from dyna.model import _generate_attention_mask, _generate_source_len_mask
+
+from .generate_standard_inputs import generate_standard_inputs
 
 
 def test_source_len_mask():

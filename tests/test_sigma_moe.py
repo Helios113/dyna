@@ -4,9 +4,10 @@ import os
 import torch
 
 from dyna.model import DynaLM
-from tests.generate_standard_inputs import generate_standard_inputs
-from tests.generate_standard_lm import generate_standard_lm
-from tests.graph_utils import get_computation_graph
+
+from .generate_standard_inputs import generate_standard_inputs
+from .generate_standard_lm import generate_standard_lm
+from .graph_utils import generate_computation_graph, verify_same_computation
 
 
 def test_sigma_moe():
@@ -36,9 +37,9 @@ def test_sigma_moe():
     with open(graph_path) as f:
         goal_graph = json.load(f)
 
-    graph = get_computation_graph(moe_out)
+    graph = generate_computation_graph(moe_out)
 
-    assert graph == goal_graph, "SigmaMoE graph does not match the goal graph."
+    assert verify_same_computation(graph, goal_graph)
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:

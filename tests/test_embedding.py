@@ -1,10 +1,10 @@
 import hashlib
 import os
 
-from generate_standard_inputs import generate_standard_inputs
-from generate_standard_lm import generate_standard_lm
-
 from dyna.model import DynaLM
+
+from .generate_standard_inputs import generate_standard_inputs
+from .generate_standard_lm import generate_standard_lm
 
 DEFAULT_HASH = "8d1444d6de976930727c016b5f0782b35a3aaefe6fa1cedfb4d994c586d6f433"
 

@@ -4,9 +4,10 @@ import os
 import torch
 
 from dyna.model import DynaLM
-from tests.generate_standard_inputs import generate_standard_inputs
-from tests.generate_standard_lm import generate_standard_lm
-from tests.graph_utils import get_computation_graph
+
+from .generate_standard_inputs import generate_standard_inputs
+from .generate_standard_lm import generate_standard_lm
+from .graph_utils import generate_computation_graph, verify_same_computation
 
 
 def test_basic_ffn():
@@ -20,14 +21,14 @@ def test_basic_ffn():
     ffn = model.transformer.body_layers[0].ffn
 
     ffn_output, _ = ffn(embedding, None)
-
+    script_dir = os.path.dirname(__file__)
+    graph_path = os.path.join(script_dir, "graph_jsons/standard_basic_ffn_graph.json")
     # Load the goal graph
-    with open("graph_jsons/standard_basic_ffn_graph.json") as f:
+    with open(graph_path) as f:
         goal_graph = json.load(f)
 
-    graph = get_computation_graph(ffn_output)
-
-    assert graph == goal_graph, "Basic FFN graph does not match the goal graph."
+    graph = generate_computation_graph(ffn_output)
+    assert verify_same_computation(graph, goal_graph)
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:
