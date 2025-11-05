@@ -3,7 +3,7 @@ name = "dyna"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "mosaicml[streaming, wandb]==0.32.1",
     # "flash-attn==2.8.1",  # Commented out due to GLIBC compatibility issues
@@ -111,7 +111,7 @@ docstring-code-format = true
 
 [tool.basedpyright]
 # Add the path to your site-packages or source code directory
-extraPaths = ["src", ".venv/lib/python3.12/site-packages"]
+extraPaths = ["src", ".venv/lib/python3.13/site-packages"]
 reportAny = "none"
 typeCheckingMode = "basic"
 exclude = [
