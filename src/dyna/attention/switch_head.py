@@ -259,9 +259,6 @@ class SwitchHead(AttentionModule):
         v_src: Float[Tensor, "batch seq d_model"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        # ifdef PYTEST
-        collector: dict | None = None,
-        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple[
@@ -276,35 +273,15 @@ class SwitchHead(AttentionModule):
         v_sel_index = None
         o_sel_index = None
 
-        # ifdef PYTEST
-        assert collector is not None
-        collector["switch_head_q_val"] = q_val
-        collector["switch_head_k_val"] = k_val
-        # endif
-
         # Handle expert routing for values and outputs
         if self.n_experts_attn > 1:
             v_sel, v_sel_r, v_sel_index = self._get_expert_selection(
                 k_src, self.sel_v, self.bias_v
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_v_sel"] = v_sel
-            collector["switch_head_multiple_v_sel_r"] = v_sel_r
-            collector["switch_head_multiple_v_sel_index"] = v_sel_index
-            # endif
-
             o_sel, o_sel_r, o_sel_index = self._get_expert_selection(  # pyright: ignore[reportUnusedVariable]
                 q_src, self.sel_o, self.bias_o
             )
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_o_sel"] = o_sel
-            collector["switch_head_multiple_o_sel_r"] = o_sel_r
-            collector["switch_head_multiple_o_sel_index"] = o_sel_index
-            # endif
 
             # Commented for mem reduction
             if self.training:
@@ -313,11 +290,6 @@ class SwitchHead(AttentionModule):
                 v_src, v_sel, self.v
             ).transpose(-2, -3)  # type: ignore[reportOptionalMemberAccess]
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_v_val"] = v_val
-            # endif
-
             # Clean up intermediate tensors
             del v_sel_r, v_sel
             # Project to attention format
@@ -325,30 +297,15 @@ class SwitchHead(AttentionModule):
                 self.project_to_torch_order(q_val)
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_q_val_o"] = q_val_o
-            # endif
-
             del q_val
             k_val_o: Float[Tensor, "batch n_heads seq d_head"] = (  # pyright: ignore[reportRedeclaration]
                 self.project_to_torch_order(k_val)
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_k_val_o"] = k_val_o
-            # endif
-
             del k_val
 
             # Apply dropout and attention
             q_val_o = self.dropout(q_val_o)
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_q_val_o_after_dropout"] = q_val_o
-            # endif
 
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(  # pyright: ignore[reportRedeclaration]
                 v_val,
@@ -359,17 +316,7 @@ class SwitchHead(AttentionModule):
                 manual_scale=self.manual_scale,
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_res_before_transpose"] = res
-            # endif
-
             res = res.transpose(-2, -3)
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_res_after_transpose"] = res
-            # endif
 
             assert o_sel.out_index is not None
             assert o_sel.reduction_weight is not None
@@ -378,26 +325,12 @@ class SwitchHead(AttentionModule):
             o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
             out: Float[Tensor, "batch seq d_model"] = cvmm(res, o_sel, self.o)  # type: ignore[reportAssignmentType]
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_multiple_output"] = out
-            # endif
         else:
             o_gate: Float[Tensor, "batch seq d_model"] = torch.nn.functional.sigmoid(
                 torch.nn.functional.linear(q_src, self.sel_o)
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_o_gate"] = o_gate
-            # endif
-
             v_val = torch.einsum("bsd,ndh->bsnh", v_src, self.v)
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_v_val"] = v_val
-            # endif
 
             v_val_o = self.project_to_torch_order(
                 v_val.reshape(v_val.shape[0], v_val.shape[1], -1)
@@ -405,12 +338,6 @@ class SwitchHead(AttentionModule):
             q_val_o: Float[Tensor, "batch n_heads seq d_head"] = (
                 self.project_to_torch_order(q_val)
             )
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_v_val_o"] = v_val_o
-            collector["switch_head_single_q_val_o"] = q_val_o
-            # endif
 
             del q_val
             k_val_o: Float[Tensor, "batch n_heads seq d_head"] = (
@@ -420,12 +347,6 @@ class SwitchHead(AttentionModule):
             # Apply dropout and attention
             q_val_o = self.dropout(q_val_o)
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_k_val_o"] = k_val_o
-            collector["switch_head_single_q_val_o_after_dropout"] = q_val_o
-            # endif
-
             res: Float[Tensor, "batch n_heads seq d_head"] = self.attend(
                 v_val_o,
                 k_val_o,
@@ -434,24 +355,9 @@ class SwitchHead(AttentionModule):
                 sequence_length,
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_res_before_transpose"] = res
-            # endif
-
             res = res.transpose(-2, -3)
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_res_after_transpose"] = res
-            # endif
-
             res = res * o_gate[..., None]
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_res_after_element_multiplication"] = res
-            # endif
 
             res = res.view(
                 res.shape[0],
@@ -460,17 +366,7 @@ class SwitchHead(AttentionModule):
                 self.d_head,
             )
 
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_res_after_view"] = res
-            # endif
-
             out = torch.einsum("bsnh,nhd->bsd", res, self.o)
-
-            # ifdef PYTEST
-            assert collector is not None
-            collector["switch_head_single_output"] = out
-            # endif
 
             v_sel_index = torch.zeros_like(res, dtype=torch.int32)
             o_sel_index = torch.zeros_like(res, dtype=torch.int32)

@@ -111,10 +111,9 @@ docstring-code-format = true
 
 [tool.basedpyright]
 # Add the path to your site-packages or source code directory
-extraPaths = ["src", ".venv/lib/python3.13/site-packages"]
+extraPaths = ["src", ".venv/lib/python3.12/site-packages"]
 reportAny = "none"
 typeCheckingMode = "basic"
-
 exclude = [
     "tools/",
     "src/dyna/kernel"
