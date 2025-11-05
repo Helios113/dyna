@@ -44,7 +44,7 @@ execute_config:
         #     ffn_eps: 3.0
 
     train:
-        max_duration: "400ba"
+        max_duration: "4ba"
         warmup: "634ba"
         cooldown: "634ba"
         device_train_batch_size: 1024
