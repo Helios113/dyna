@@ -1,5 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
 import math
 
 import torch
@@ -7,13 +5,6 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from dyna.modules import AttentionModule
-
-# execute
-import os
-
-if "PYTEST_VERSION" in os.environ:
-    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
-# endexecute
 
 
 class BasicAttn(AttentionModule):

@@ -38,5 +38,5 @@ class DataConfig:
     name: str = "text"
     drop_last: bool = True
     num_workers: int = 1
-    pin_memory: bool = True
+    pin_memory: bool = False
     device_batch_size: int = 1024

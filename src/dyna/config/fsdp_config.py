@@ -6,13 +6,11 @@ class FSDPConfig:
     activation_checkpointing: bool = False
     activation_checkpointing_reentrant: bool = True
     activation_cpu_offload: bool = False
-    backward_prefetch: str = (
-        "BACKWARD_POST"  # 'BACKWARD_PRE' | 'BACKWARD_POST' | 'NONE'
-    )
+    backward_prefetch: str = "NONE"  # 'BACKWARD_PRE' | 'BACKWARD_POST' | 'NONE'
     cpu_offload: bool = False  # cpu_offload not supported yet
     data_parallel_shard_degree: int = -1
     data_parallel_replicate_degree: int = 1
-    forward_prefetch: bool = False
+    forward_prefetch = None
     ignored_modules = None
     keep_low_precision_grads: bool = False
     limit_all_gathers: bool = False

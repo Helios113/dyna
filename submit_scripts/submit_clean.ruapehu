@@ -1,0 +1,102 @@
+#!/bin/bash
+#SBATCH -J dyna
+#SBATCH -w ruapehu
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=24
+#SBATCH --gres=gpu:1
+#SBATCH --time=12:00:00
+#SBATCH --partition=normal
+#SBATCH --output=slurm_outputs/%x.%j.log
+
+ulimit -n 4096
+
+# Create unique temp directory
+unique_name=$(mktemp -d /home/pa511/dyna_XXXXXX)
+echo "Created temp dir $unique_name"
+
+# Export temp directory
+export TMPDIR=$unique_name
+export TEMP=$unique_name
+export TMP=$unique_name
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    echo ""
+    echo "=========================================="
+    echo "Starting cleanup of temp directory: $unique_name"
+
+    # Force kill any remaining processes using the temp dir
+    if command -v lsof &> /dev/null; then
+        echo "Killing processes holding files in temp dir..."
+        lsof +D "$unique_name" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u | xargs -r kill -9 2>/dev/null || true
+    fi
+
+    # Wait for processes to die
+    sleep 2
+
+    # Remove the temp directory
+    if [ -d "$unique_name" ]; then
+        echo "Removing temp directory..."
+        rm -rf "$unique_name" 2>/dev/null || {
+            echo "Warning: Initial cleanup failed. Attempting force removal..."
+            find "$unique_name" -type f -delete 2>/dev/null || true
+            find "$unique_name" -type d -delete 2>/dev/null || true
+        }
+
+        # Check if cleanup was successful
+        if [ ! -d "$unique_name" ]; then
+            echo "Temp directory successfully removed"
+        else
+            echo "Warning: Could not completely remove $unique_name"
+        fi
+    fi
+
+    echo "Cleanup complete"
+    echo "=========================================="
+
+    # Return original exit code
+    return $exit_code
+}
+
+# Trap all exit signals to ensure cleanup runs
+trap cleanup EXIT INT TERM QUIT HUP
+
+# Run the main command
+echo "=========================================="
+echo "Starting experiment"
+echo "=========================================="
+
+CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_sweep
+
+# Capture exit status
+status=$?
+
+echo "=========================================="
+echo "Experiment finished with status: $status"
+echo "=========================================="
+
+# Send notification based on status
+if [ $status -eq 0 ]; then
+    echo "Sending success notification..."
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment finished" \
+    --form-string "sound=experiment" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json > /dev/null
+else
+    echo "Sending failure notification..."
+    curl -s \
+    --form-string "token=aqt9f38kehjkjprmaeyanqf51hocc7" \
+    --form-string "user=uauwff78iiahyk7usm3whn658myqhw" \
+    --form-string "message=experiment failed with exit code $status" \
+    --form-string "sound=experiment_failed" \
+    --form-string "priority=1" \
+    https://api.pushover.net/1/messages.json > /dev/null
+fi
+
+# Exit with the original status
+exit $status
