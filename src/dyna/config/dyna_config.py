@@ -33,7 +33,6 @@ class DynaConfig(PretrainedConfig):
         )  # Default based on typical transformer sizing
         self.head_size = kwargs.pop("head_size", 0)
         self.tail_size = kwargs.pop("tail_size", 0)
-        self.total_depth_for_init = kwargs.pop("total_depth_for_init", 0)
         # Handle enums properly
         norm_structure_val = kwargs.pop("norm_structure", "moeut")
         if isinstance(norm_structure_val, str):
@@ -83,6 +82,12 @@ class DynaConfig(PretrainedConfig):
         self.norms: NormConfig = NormConfig(**kwargs.pop("norms", {}))
         self.loop_rope_theta_rebase = kwargs.pop("loop_rope_theta_rebase", False)
         self.transformer_type = kwargs.pop("transformer_type", "dyna")
+        self.loop_hyper_params: bool = kwargs.pop("loop_hyper_params", False)
+        self.base_depth: int = kwargs.pop("base_depth", 12)
+        self.current_depth: int = kwargs.pop("current_depth", 12)
+        self.base_width: int = kwargs.pop("base_width", 12)
+        self.current_width: int = kwargs.pop("current_width", 12)
+        self.cp_alpha: float = kwargs.pop("cp_alpha", 1.0)
 
         def to_dict(self):
             output = super().to_dict()

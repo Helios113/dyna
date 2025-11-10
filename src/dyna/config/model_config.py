@@ -47,7 +47,6 @@ class ModelConfig:
     repeat_residual: bool = False
     perfiery_size: int = 2
     nope_pos: bool = False
-    total_depth_for_init: int = 12
     use_reg_loss: bool = False
     use_embedding_norm: bool = False
     manual_scale: bool = False
@@ -55,3 +54,15 @@ class ModelConfig:
     head_size: int = 2
     loop_normalization: bool = False
     loop_rope_theta_rebase: bool = False
+
+    # old name
+    # total_depth_for_init: int = 12
+
+    # new names
+    # names for
+    base_depth: int = 12
+    current_depth: int = 12
+    base_width: int = 12
+    current_width: int = 12
+    loop_hyper_params: bool = False
+    cp_alpha: float = 1.0

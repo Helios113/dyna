@@ -72,7 +72,6 @@ class DynaFormer(DynaPretrainedModel):
         self.n_repeats = config.n_repeats
         self.repeat_residual = config.repeat_residual
         self.min_loop_layers = self.n_repeats
-        self.total_depth_for_init = config.total_depth_for_init
         self.loop_normalization = config.loop_normalization
         if self.loop_normalization:
             self.loop_norm = torch.nn.LayerNorm(config.d_model)
@@ -176,9 +175,10 @@ class DynaFormer(DynaPretrainedModel):
     def reset_parameters(self) -> None:
         """Initialize all model parameters."""
         if self.enable_early_exit:
-            scale = math.sqrt(2 / (self.n_repeats * self.total_depth_for_init))
+            scale = math.sqrt(2 / (self.n_repeats * 12))
         else:
-            scale = math.sqrt(2 / self.total_depth_for_init)
+            # TODO add the proper init from complete P
+            scale = math.sqrt(2 / 12)
 
         # Initialize tracking variables
         self._seq_len = []
@@ -240,6 +240,8 @@ class DynaFormer(DynaPretrainedModel):
             _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
 
         # logging data containers
+        # !!! if we provide and e, we expect that x is zeros
+
         self._expert_sel.append([])
         self._exit_logits.append([])
         self._latent_vectors.append([])

@@ -282,16 +282,34 @@ def build_full_concrete_config(cfg: DictConfig):
     return cfg
 
 
-def create_param_groups_with_conditional_wd(
-    model, no_decay_param_names, default_wd=1e-5, frozen_param_names=None
+def create_param_groups(
+    model,
+    eps,
+    base_depth,
+    current_depth,
+    base_width,
+    current_width,
+    cp_alpha,
+    default_wd=1e-5,
+    frozen_param_names=None,
 ):
     if frozen_param_names is None:
         frozen_param_names = []
+    depth_lr_scaling = (current_depth / base_depth) ** (-cp_alpha - 1)
+    width_lr_scaling = (current_width / base_width) ** (-1)
+    emb_params = []
+    hidden_ln_params = []
+    hidden_weight_params = []
+    hidden_bias_params = []
+    final_ln_params = []
+    lm_head_params = []
 
-    decay_params = []
-    no_decay_params = []
     frozen_count = 0
-
+    adam_eps = (
+        eps
+        * (current_width / base_width) ** (-1)
+        * (current_depth / base_depth) ** (-cp_alpha)
+    )
     for name, param in model.named_parameters():
         # Check if parameter should be frozen
         if any(frozen_name in name for frozen_name in frozen_param_names):
@@ -299,26 +317,63 @@ def create_param_groups_with_conditional_wd(
             print(f"Frozen parameter: {name}")
             frozen_count += 1
             continue
-
-        if not param.requires_grad:
-            continue
-
-        # Check if parameter name contains any of the no-decay strings
-        if any(nd_name in name for nd_name in no_decay_param_names):
-            no_decay_params.append(param)
-        else:
-            decay_params.append(param)
-
-    param_groups = [
-        {"params": decay_params, "weight_decay": default_wd},
-        {"params": no_decay_params, "weight_decay": 0.0},
-    ]
+        if name == "model.embedding.weight":
+            emb_params.append(param)
+        elif "transformer" in name:
+            if "pre" in name or "post" in name:
+                # print("norm name", name, flush=True)
+                hidden_ln_params.append(param)
+            elif "weight" in name:
+                # print("weight name", name, flush=True)
+                hidden_weight_params.append(param)
+            elif "bias" in name:
+                # print("bias name", name, flush=True)
+                hidden_bias_params.append(param)
+        elif name == "model.out_norm.weight":
+            final_ln_params.append(param)
+        elif name == "model.lm_head":
+            lm_head_params.append(param)
 
     print(f"Frozen {frozen_count} parameter groups")
-    print(f"Training {len(decay_params)} params with weight decay")
-    print(f"Training {len(no_decay_params)} params without weight decay")
-
-    return param_groups
+    optim_groups = [
+        {
+            "params": emb_params,
+            "weight_decay": default_wd,
+            "lr_scale": 1.0,
+            "eps": eps,
+        },
+        {
+            "params": hidden_ln_params,
+            "weight_decay": 0.0,
+            "lr_scale": depth_lr_scaling,
+            "eps": adam_eps,
+        },
+        {
+            "params": hidden_weight_params,
+            "weight_decay": default_wd / width_lr_scaling,
+            "lr_scale": width_lr_scaling * depth_lr_scaling,
+            "eps": adam_eps,
+        },
+        {
+            "params": hidden_bias_params,
+            "weight_decay": 0.0,
+            "lr_scale": depth_lr_scaling,
+            "eps": adam_eps,
+        },
+        {
+            "params": final_ln_params,
+            "weight_decay": 0.0,
+            "lr_scale": 1.0,
+            "eps": adam_eps,
+        },
+        {
+            "params": lm_head_params,
+            "weight_decay": default_wd,
+            "lr_scale": 1.0,
+            "eps": eps,
+        },
+    ]
+    return optim_groups
 
 
 # To get a shortened hash (e.g., 7 characters), use 'git rev-parse --short HEAD'

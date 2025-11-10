@@ -189,7 +189,11 @@ class DynaLM(DynaPretrainedModel):
         assert src_len_mask is not None
 
         # Prepare protected embeddings if enabled
-        e = x.clone() if self.rescaling_method in PROT_EMB_RESCALING_METHODS else None
+        if self.rescaling_method in PROT_EMB_RESCALING_METHODS:
+            e = x.clone()
+            x = torch.zeros_like(x)
+        else:
+            e = None
 
         # Run the transformer model
         x, energy_per_sample = self.transformer(

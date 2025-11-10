@@ -59,7 +59,7 @@ class DirectLayer(LayerModule):
             # Project back to original d_model dimension
             x = self.input_projection(x)
 
-        q_val, k_val, v_val = self._apply_pre_norm_attn(x)
+        q_val, k_val, v_val = self._apply_pre_norm_attn(x + e if e is not None else x)
 
         att_out, expert_sel_attn = self.attention(
             q_val,

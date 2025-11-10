@@ -29,6 +29,7 @@ PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.sqrt_prot_emb,
     RescaleMethod.sqrt_scale_prot_emb,
     RescaleMethod.avg_prot_emb,
+    RescaleMethod.complete_p_dyn,
 ]
 
 __all__ = [

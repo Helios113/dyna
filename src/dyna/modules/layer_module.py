@@ -67,7 +67,12 @@ class LayerModule(Module, ABC):
         self.norm_structure = config.norm_structure
 
         # Use the the inint block length for this value
-        self.base_val = 12
+        self.base_depth = config.base_depth
+        self.current_depth = config.current_depth
+        self.base_width = config.base_width
+        self.current_width = config.current_width
+        self.loop_hyper_params = config.loop_hyper_params
+        self.cp_alpha = config.cp_alpha
 
     def update_inv_freq(self, base: int):
         self.attention.update_inv_freq(base)
@@ -133,15 +138,15 @@ class LayerModule(Module, ABC):
                 else:
                     residual_stream = residual_stream + update
             case RescaleMethod.cum_avg_prot_emb | RescaleMethod.cum_avg_no_prot_emb:
-                if e is not None:
-                    residual_stream = residual_stream - e
                 if (
                     self.enable_early_exit
                     and cum_sum is not None
                     and continue_mask is not None
                 ):
                     scale_factor = (layer_index - 1) / layer_index
-                    update_factor = cum_sum[continue_mask].unsqueeze(1) / layer_index
+                    update_factor: Tensor = (  # pyright: ignore[reportAssignmentType,reportRedeclaration]
+                        cum_sum[continue_mask].unsqueeze(1) / layer_index
+                    )
 
                     residual_stream[continue_mask] = (
                         scale_factor * residual_stream[continue_mask]
@@ -154,10 +159,10 @@ class LayerModule(Module, ABC):
                     residual_stream = (
                         scale_factor * residual_stream + update / layer_index
                     )
-                if e is not None:
-                    residual_stream = residual_stream + e
             case RescaleMethod.complete_p:
-                scale_factor = 1 / self.base_val
+                scale_factor = (self.current_depth / self.base_depth) ** (
+                    -self.cp_alpha
+                )
 
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
@@ -170,18 +175,31 @@ class LayerModule(Module, ABC):
                     residual_stream = residual_stream + scale_factor * update
 
             case RescaleMethod.complete_p_dyn:
-                scale_factor = 1 / self.base_val
+                if (
+                    self.enable_early_exit
+                    and cum_sum is not None
+                    and continue_mask is not None
+                ):
+                    scale_factor = layer_index / (layer_index - 1) ** (-self.cp_alpha)
+                    update_factor: float = cum_sum[continue_mask].unsqueeze(1) * (  # pyright: ignore[reportRedeclaration]
+                        layer_index / self.base_depth
+                    ) ** (-self.cp_alpha)
 
-                if self.enable_early_exit and continue_mask is not None:
-                    residual_stream = torch.scatter_add(
-                        residual_stream.view(-1),
-                        0,
-                        continue_mask,
-                        scale_factor * update.view(-1)[continue_mask],
-                    ).reshape_as(residual_stream)
+                    residual_stream[continue_mask] = (
+                        scale_factor * residual_stream[continue_mask]
+                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+                        * update_factor
+                    )
                 else:
-                    residual_stream = residual_stream + scale_factor * update
+                    # Apply to all tokens when early exit is disabled
 
+                    scale_factor = layer_index / (layer_index - 1) ** (-self.cp_alpha)
+                    update_factor: float = (layer_index / self.base_depth) ** (
+                        -self.cp_alpha
+                    )
+                    residual_stream = (
+                        scale_factor * residual_stream + update * update_factor
+                    )
             # case (
             #     RescaleMethod.sqrt_prot_emb |
             # RescaleMethod.sqrt_no_prot_emb
