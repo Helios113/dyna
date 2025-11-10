@@ -95,6 +95,14 @@ class DynaFormer(DynaPretrainedModel):
 
         self._construct_layers(config)
 
+        # Use the the inint block length for this value
+        self.base_depth = config.base_depth
+        self.current_depth = config.current_depth
+        self.base_width = config.base_width
+        self.current_width = config.current_width
+        self.loop_hyper_params = config.loop_hyper_params
+        self.cp_alpha = config.cp_alpha
+
     def _construct_layers(self, config):
         """Constructs the layers of the transformer model.
 
@@ -174,11 +182,7 @@ class DynaFormer(DynaPretrainedModel):
     @torch.no_grad
     def reset_parameters(self) -> None:
         """Initialize all model parameters."""
-        if self.enable_early_exit:
-            scale = math.sqrt(2 / (self.n_repeats * 12))
-        else:
-            # TODO add the proper init from complete P
-            scale = math.sqrt(2 / 12)
+        scale = math.sqrt(2 / self.base_depth)
 
         # Initialize tracking variables
         self._seq_len = []
