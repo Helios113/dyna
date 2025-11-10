@@ -1,7 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
-from __future__ import annotations
-
 import math
 
 import torch
@@ -10,13 +6,6 @@ from torch import Tensor
 
 from dyna.kernel import CVMMSel, cvmm, cvmm_prepare_sel2
 from dyna.modules import AttentionModule, entropy_reg
-
-# execute
-import os
-
-if "PYTEST_VERSION" in os.environ:
-    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
-# endexecute
 
 
 class SwitchHead(AttentionModule):

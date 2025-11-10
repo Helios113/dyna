@@ -1,18 +1,9 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
 import math
 from collections.abc import Callable
 
 import torch
 
 from dyna.modules import DynaModule
-
-# execute
-import os
-
-if "PYTEST_VERSION" in os.environ:
-    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
-# endexecute
 
 
 class BasicFFN(DynaModule):
@@ -23,7 +14,7 @@ class BasicFFN(DynaModule):
         activation: Callable[[torch.Tensor], torch.Tensor] = torch.nn.functional.gelu,
     ):
         """Initialize BasicFFN with configurable parameters."""
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        super().__init__()
         self.d_model = d_model
         self.d_expert_ffn = d_expert_ffn
         self.activation = activation

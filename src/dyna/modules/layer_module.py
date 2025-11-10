@@ -66,6 +66,9 @@ class LayerModule(Module, ABC):
         self.rescaling_method = config.rescaling_method
         self.norm_structure = config.norm_structure
 
+        # Use the the inint block length for this value
+        self.base_val = 12
+
     def update_inv_freq(self, base: int):
         self.attention.update_inv_freq(base)
 
@@ -148,12 +151,37 @@ class LayerModule(Module, ABC):
                 else:
                     # Apply to all tokens when early exit is disabled
                     scale_factor = (layer_index - 1) / layer_index
-                    print(f"scale_factor: {scale_factor}", flush=True)
                     residual_stream = (
                         scale_factor * residual_stream + update / layer_index
                     )
                 if e is not None:
                     residual_stream = residual_stream + e
+            case RescaleMethod.complete_p:
+                scale_factor = 1 / self.base_val
+
+                if self.enable_early_exit and continue_mask is not None:
+                    residual_stream = torch.scatter_add(
+                        residual_stream.view(-1),
+                        0,
+                        continue_mask,
+                        scale_factor * update.view(-1)[continue_mask],
+                    ).reshape_as(residual_stream)
+                else:
+                    residual_stream = residual_stream + scale_factor * update
+
+            case RescaleMethod.complete_p_dyn:
+                scale_factor = 1 / self.base_val
+
+                if self.enable_early_exit and continue_mask is not None:
+                    residual_stream = torch.scatter_add(
+                        residual_stream.view(-1),
+                        0,
+                        continue_mask,
+                        scale_factor * update.view(-1)[continue_mask],
+                    ).reshape_as(residual_stream)
+                else:
+                    residual_stream = residual_stream + scale_factor * update
+
             # case (
             #     RescaleMethod.sqrt_prot_emb |
             # RescaleMethod.sqrt_no_prot_emb

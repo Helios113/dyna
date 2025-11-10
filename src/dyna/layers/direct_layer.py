@@ -1,6 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
-
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -48,9 +45,6 @@ class DirectLayer(LayerModule):
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
-        # ifdef PYTEST
-        collector: dict | None = None,
-        # endif
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
@@ -73,16 +67,10 @@ class DirectLayer(LayerModule):
             v_val,
             attention_mask,
             sequence_length,
-            # ifdef PYTEST
-            collector=collector,
-            # endif
         )
         ffn_out, expert_sel_ffn = self.ffn(
             att_out,
             att_out,
-            # ifdef PYTEST
-            collector=collector,
-            # endif
         )
 
         saturation_event = None

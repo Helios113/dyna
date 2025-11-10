@@ -9,7 +9,10 @@
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
 
-ulimit -n 4096
+ulimit -n 65535
+ulimit -u 65535
+ulimit -s 65535
+ulimit -l 65535
 
 # Create unique temp directory
 unique_name=$(mktemp -d /home/pa511/dyna_XXXXXX)

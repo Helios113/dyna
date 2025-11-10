@@ -10,6 +10,8 @@ class NormStructure(str, Enum):
 
 class RescaleMethod(str, Enum):
     none = "none"
+    complete_p = "complete_p"
+    complete_p_dyn = "complete_p_dyn"
     cum_avg_prot_emb = "cum_avg_prot_emb"
     cum_avg_no_prot_emb = "cum_avg_no_prot_emb"
     sqrt_prot_emb = "sqrt_prot_emb"

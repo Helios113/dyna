@@ -1,5 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
 import math
 from collections.abc import Callable
 
@@ -10,13 +8,6 @@ from torch import Tensor
 from dyna.kernel.cvmm import cvmm, cvmm_prepare_sel2
 from dyna.modules import entropy_reg
 from dyna.modules.dyna_module import DynaModule
-
-# execute
-import os
-
-if "PYTEST_VERSION" in os.environ:
-    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
-# endexecute
 
 
 class SigmaMoE(DynaModule):

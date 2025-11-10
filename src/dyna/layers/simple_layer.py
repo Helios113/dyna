@@ -1,6 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
-
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor

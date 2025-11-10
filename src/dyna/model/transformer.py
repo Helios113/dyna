@@ -1,5 +1,3 @@
-# encoding: pypreprocessor
-# ruff: noqa: I001
 import math
 import random
 from collections.abc import Callable
@@ -14,20 +12,13 @@ from dyna.config import (
     GEIPING_METHODS,
 )
 from dyna.config.enums import ExecutionMode
-from dyna.layers import MoEUTLayer, SimpleLayer, DirectLayer
+from dyna.layers import DirectLayer, MoEUTLayer, SimpleLayer
 from dyna.model.base import DynaConfig, DynaPretrainedModel
 from dyna.modules import AttentionModule, DynaModule, LayerModule
 
 LAYER_TYPES = {"moeut": MoEUTLayer, "simple": SimpleLayer, "direct": DirectLayer}
 
 MOE_LAYER_TYPES = [MoEUTLayer]
-
-# execute
-import os  # noqa: E402
-
-if "PYTEST_VERSION" in os.environ:
-    defines.add("PYTEST")  # pyright: ignore[reportUndefinedVariable] # noqa: F821
-# endexecute
 
 
 def calc_entropy(
