@@ -5,6 +5,16 @@ defaults:
     - execute_config/data_config: smoll
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
+sweep_config:
+    method: bayesian
+    metric:
+        name: loss/train/total
+        goal: minimize
+    parameters:
+        lr:
+            distribution: log_uniform
+            min: 1e-5
+            max: 1e-3
 execute_config:
     model_config:
         execution_mode: transformer
@@ -42,7 +52,7 @@ execute_config:
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "SweepCompleteP"
+        run_name: "validatonNoCompleteP"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32

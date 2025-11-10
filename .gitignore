@@ -8,7 +8,7 @@
 !submit_scripts/**
 !tests/
 !tests/**
-!main.py
+!main_sweep.py
 !.pre-commit-config.yaml
 !pyproject.toml
 !README.md

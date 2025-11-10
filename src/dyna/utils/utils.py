@@ -303,13 +303,16 @@ def create_param_groups(
     hidden_bias_params = []
     final_ln_params = []
     lm_head_params = []
-
+    print("scaling factors:", depth_lr_scaling, width_lr_scaling)
     frozen_count = 0
     adam_eps = (
         eps
         * (current_width / base_width) ** (-1)
         * (current_depth / base_depth) ** (-cp_alpha)
     )
+    total_params = sum(1 for _ in model.parameters())
+    total_named_params = sum(1 for _ in model.named_parameters())
+    assigned_params = 0
     for name, param in model.named_parameters():
         # Check if parameter should be frozen
         if any(frozen_name in name for frozen_name in frozen_param_names):
@@ -319,20 +322,29 @@ def create_param_groups(
             continue
         if name == "model.embedding.weight":
             emb_params.append(param)
+            assigned_params += 1
         elif "transformer" in name:
             if "pre" in name or "post" in name:
                 # print("norm name", name, flush=True)
                 hidden_ln_params.append(param)
+                assigned_params += 1
             elif "weight" in name:
                 # print("weight name", name, flush=True)
                 hidden_weight_params.append(param)
+                assigned_params += 1
             elif "bias" in name:
                 # print("bias name", name, flush=True)
                 hidden_bias_params.append(param)
+                assigned_params += 1
         elif name == "model.out_norm.weight":
             final_ln_params.append(param)
-        elif name == "model.lm_head":
+            assigned_params += 1
+        elif "model.lm_head" in name:
             lm_head_params.append(param)
+            assigned_params += 1
+    print(f"Assigned {assigned_params} parameters")
+    print(f"Total parameters: {total_params}")
+    print(f"Total named parameters: {total_named_params}")
 
     print(f"Frozen {frozen_count} parameter groups")
     optim_groups = [

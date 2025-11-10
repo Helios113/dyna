@@ -6,15 +6,6 @@ defaults:
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
 
-sweep_config:
-    sweeps:
-        param1:
-            name: "optimizer_config.lr"
-            min_val: 1e-3
-            max_val: 1e-2
-            step_size: 1e-3
-            type: "continious"
-    run_steps: 10
 execute_config:
     model_config:
         execution_mode: transformer
