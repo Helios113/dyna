@@ -1,0 +1,34 @@
+lr_monitor: {}
+lr_scale_callback: {}
+clean_metrics:
+    interval: 100
+speed_monitor:
+    window_size: 1
+    gpu_flops_available:
+        fp64: 67e12,
+        fp32: 67e12,
+        tf32: 989e12 / 2,
+        fp16: 1.979e15 / 2,
+        amp_fp16: 1.979e15 / 2,
+        bf16: 1.979e15 / 2,
+        amp_bf16: 1.979e15 / 2,
+        fp8: 3.958e15 / 2,
+        amp_fp8: 3.958e15 / 2,
+        int8: 3.958e15 / 2,
+memory_monitor: {}
+runtime_estimator: {}
+optimizer_monitor: {}
+entropy_callback:
+    log_interval: 100
+residual_magnitude:
+    log_interval: 100
+# loop_number_callback:
+#   lower_bound: 1
+#   upper_bound: ${model_config.n_repeats}
+#   warm_up: 0.2
+#   cool_down: 0.5
+#   log_interval: 50
+#   total_training_duration: ${train.max_duration}
+# layer_usage_monitor:
+#   log_interval: 20
+# # # activation_monitor_c: {}

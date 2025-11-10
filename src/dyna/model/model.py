@@ -129,6 +129,8 @@ class DynaLM(DynaPretrainedModel):
 
         # Model configuration
         self.n_repeats = config.n_repeats
+        self.n_layers = config.n_repeats
+
         self.d_model = config.d_model
         self.eos_token_id = eos_token_id
         self.rescaling_method = config.rescaling_method
@@ -152,13 +154,17 @@ class DynaLM(DynaPretrainedModel):
             eps=config.norms.ffn_eps,
             normalized_shape=config.d_model,
         )
-        self.lm_head_scale = (config.current_depth / config.base_depth) ** (-1)
+        self.lm_head_scale = (config.current_width / config.base_width) ** (-1)
         # Provide LM head to transformer for entropy computation
         # The LM head cannot be used with no grad as
         # all gradients for that step are discarded
         self.transformer._temp_lm_head = lambda x: self.lm_head_scale * self.lm_head(
             self.out_norm(x)
         )
+        self.base_depth = config.base_depth
+        self.head_size = config.head_size
+        self.tail_size = config.tail_size
+        self.n_layers = config.n_layers
 
     @torch.no_grad
     def reset_parameters(self):

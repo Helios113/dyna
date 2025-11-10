@@ -6,6 +6,7 @@ from dyna.callbacks.entropy_callback import ShannonEntropyCallback
 from dyna.callbacks.expert_selection_callback import ExpertSelectionCallback
 from dyna.callbacks.layer_usage_monitor import LayerUsageMonitor
 from dyna.callbacks.loop_number_callback import LoopNumberCallback
+from dyna.callbacks.lr_scale import LrScaleCallback
 from dyna.callbacks.residual_stream_mag_callback import ResidualMagnitudeCallback
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "ResidualMagnitudeCallback",
     "LoopNumberCallback",
     "AbbieNumberCallback",
+    "LrScaleCallback",
 ]
 
 
@@ -29,3 +31,4 @@ callbacks.register("clean_metrics", func=CleanMetrics)
 callbacks.register("residual_magnitude", func=ResidualMagnitudeCallback)
 callbacks.register("loop_number_callback", func=LoopNumberCallback)
 callbacks.register("abbie_number_callback", func=AbbieNumberCallback)
+callbacks.register("lr_scale_callback", func=LrScaleCallback)

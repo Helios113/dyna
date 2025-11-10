@@ -1,8 +1,8 @@
 defaults:
     - _self_
     - execute_config/scheduler_config: wsld
-    - execute_config/callbacks: default_100
-    - execute_config/data_config: smoll
+    - execute_config/callbacks: test_lr
+    - execute_config/data_config: smoll_fast
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
 execute_config:
@@ -42,7 +42,7 @@ execute_config:
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "SweepCompleteP"
+        run_name: "LrTest"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32
