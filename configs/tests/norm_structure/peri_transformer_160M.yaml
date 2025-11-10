@@ -16,7 +16,6 @@ model_config:
     enable_early_exit: False
     norm_structure: peri
     rescaling_method: none
-    total_depth_for_init: ${model_config.n_layers}
     norm_type: low_precision_rmsnorm
 
 train:

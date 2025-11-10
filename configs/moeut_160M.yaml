@@ -29,7 +29,6 @@ model_config:
     rescaling_method: none
     repeat_residual: false
     use_reg_loss: False
-    total_depth_for_init: 12
     manual_scale: True
 
 train:

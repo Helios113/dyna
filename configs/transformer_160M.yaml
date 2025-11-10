@@ -22,7 +22,6 @@ model_config:
     enable_early_exit: False
     norm_structure: pre
     rescaling_method: none
-    total_depth_for_init: ${model_config.n_layers}
 
 train:
     max_duration: "3171ba"

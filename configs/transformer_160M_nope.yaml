@@ -23,7 +23,6 @@ model_config:
     norm_structure: pre
     rescaling_method: none
     nope_pos: True
-    total_depth_for_init: ${model_config.n_layers}
 
 train:
     max_duration: "3171ba"

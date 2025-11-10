@@ -23,7 +23,6 @@ model_config:
     rescaling_method: none
     repeat_residual: false
     use_reg_loss: True
-    total_depth_for_init: 12
 
 train:
     max_duration: "3171ba"

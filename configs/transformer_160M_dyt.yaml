@@ -26,7 +26,6 @@ model_config:
         norm_type: dynamic_tanh
         attn_eps: 3.0
         ffn_eps: 3.0
-    total_depth_for_init: ${model_config.n_layers}
 
 train:
     max_duration: "3171ba"

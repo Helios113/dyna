@@ -32,7 +32,6 @@ execute_config:
         enable_early_exit: False
         norm_structure: pre
         rescaling_method: none
-        total_depth_for_init: 12
         loop_normalization: False
         sample_iterations: False
         loop_rope_theta_rebase: False
