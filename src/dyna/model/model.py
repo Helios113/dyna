@@ -152,11 +152,13 @@ class DynaLM(DynaPretrainedModel):
             eps=config.norms.ffn_eps,
             normalized_shape=config.d_model,
         )
-
+        self.lm_head_scale = (config.current_depth / config.base_depth) ** (-1)
         # Provide LM head to transformer for entropy computation
         # The LM head cannot be used with no grad as
         # all gradients for that step are discarded
-        self.transformer._temp_lm_head = lambda x: self.lm_head(self.out_norm(x))
+        self.transformer._temp_lm_head = lambda x: self.lm_head_scale * self.lm_head(
+            self.out_norm(x)
+        )
 
     @torch.no_grad
     def reset_parameters(self):
@@ -201,7 +203,7 @@ class DynaLM(DynaPretrainedModel):
         )
 
         # Apply output projection
-        logits = self.lm_head(self.out_norm(x))
+        logits = self.lm_head_scale * self.lm_head(self.out_norm(x))
 
         # Calculate the loss
         loss = None
