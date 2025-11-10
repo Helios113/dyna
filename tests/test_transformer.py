@@ -35,9 +35,7 @@ def test_transformer():
 
     graph = generate_computation_graph(transformer_output)
 
-    assert (
-        graph == goal_graph
-    ), "Transformer computation graph does not match the goal graph."
+    assert graph == goal_graph, f"grph {graph} \n goal {goal_graph}"
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:

@@ -50,9 +50,7 @@ def test_switch_head_multiple_experts():
 
     graph = generate_computation_graph(switch_head_output)
 
-    assert (
-        graph == goal_graph
-    ), "SwitchHead (multiple experts) graph does not match the goal graph."
+    assert graph == goal_graph, f"grph {graph} \n goal {goal_graph}"
 
 
 def test_switch_head_single_expert():
@@ -93,10 +91,7 @@ def test_switch_head_single_expert():
 
     graph = generate_computation_graph(switch_head_output)
 
-    assert graph == goal_graph, (
-        "SwitchHead (single expert) computation graph does not match "
-        "the goal graph graph."
-    )
+    assert graph == goal_graph, f"grph {graph} \n goal {goal_graph}"
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:

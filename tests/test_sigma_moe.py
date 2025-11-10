@@ -39,7 +39,9 @@ def test_sigma_moe():
 
     graph = generate_computation_graph(moe_out)
 
-    assert verify_same_computation(graph, goal_graph)
+    assert verify_same_computation(
+        graph, goal_graph
+    ), f"grph {graph} \n goal {goal_graph}"
 
 
 if __name__ == "__main__" and "PYTEST_VERSION" not in os.environ:

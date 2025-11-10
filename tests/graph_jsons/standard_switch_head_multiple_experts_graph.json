@@ -20,6 +20,8 @@
     "ViewBackward0",
     "MulBackward0",
     "MulBackward0",
+    "AddBackward0",
+    "CloneBackward0",
     "RsqrtBackward0",
     "AddBackward1",
     "MeanBackward1",
@@ -64,6 +66,7 @@
     "ViewBackward0",
     "MulBackward0",
     "MulBackward0",
+    "AddBackward0",
     "RsqrtBackward0",
     "AddBackward1",
     "MeanBackward1",
@@ -88,12 +91,28 @@
       2
     ],
     [
-      17,
+      18,
       2
     ],
     [
-      21,
+      19,
       2
+    ],
+    [
+      18,
+      19
+    ],
+    [
+      17,
+      18
+    ],
+    [
+      22,
+      18
+    ],
+    [
+      21,
+      22
     ],
     [
       20,
@@ -104,12 +123,8 @@
       20
     ],
     [
-      18,
-      19
-    ],
-    [
       17,
-      18
+      19
     ],
     [
       16,
@@ -324,12 +339,24 @@
       9
     ],
     [
-      12,
+      13,
       1
     ],
     [
+      13,
+      19
+    ],
+    [
+      12,
+      13
+    ],
+    [
+      17,
+      13
+    ],
+    [
       16,
-      1
+      17
     ],
     [
       15,
@@ -340,12 +367,8 @@
       15
     ],
     [
-      13,
-      14
-    ],
-    [
       12,
-      13
+      14
     ],
     [
       11,
