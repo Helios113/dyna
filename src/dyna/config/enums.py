@@ -6,6 +6,7 @@ class NormStructure(str, Enum):
     pre = "pre"
     post = "post"
     moeut = "moeut"
+    sandwich = "sandwich"
 
 
 class RescaleMethod(str, Enum):

@@ -37,10 +37,16 @@ class LayerModule(Module, ABC):
         )
         self.attn_pre.requires_grad_(
             config.norm_structure
-            in [NormStructure.peri, NormStructure.pre, NormStructure.moeut]
+            in [
+                NormStructure.peri,
+                NormStructure.pre,
+                NormStructure.moeut,
+                NormStructure.sandwich,
+            ]
         )
         self.attn_post.requires_grad_(
-            config.norm_structure in [NormStructure.peri, NormStructure.post]
+            config.norm_structure
+            in [NormStructure.peri, NormStructure.post, NormStructure.sandwich]
         )
         self.ffn_pre = build_norm(
             name=config.norms.norm_type,
@@ -49,7 +55,12 @@ class LayerModule(Module, ABC):
         )
         self.ffn_pre.requires_grad_(
             config.norm_structure
-            in [NormStructure.peri, NormStructure.pre, NormStructure.moeut]
+            in [
+                NormStructure.peri,
+                NormStructure.pre,
+                NormStructure.moeut,
+                NormStructure.sandwich,
+            ]
         )
         self.ffn_post = build_norm(
             name=config.norms.norm_type,
@@ -57,7 +68,8 @@ class LayerModule(Module, ABC):
             normalized_shape=config.d_model,
         )
         self.ffn_post.requires_grad_(
-            config.norm_structure in [NormStructure.peri, NormStructure.post]
+            config.norm_structure
+            in [NormStructure.peri, NormStructure.post, NormStructure.sandwich]
         )
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
@@ -89,6 +101,7 @@ class LayerModule(Module, ABC):
         if (
             self.norm_structure == NormStructure.peri
             or self.norm_structure == NormStructure.pre
+            or self.norm_structure == NormStructure.sandwich
         ):
             # Peri, Pre
             residual_stream_normed = self.attn_pre(residual_stream)
@@ -258,7 +271,10 @@ class LayerModule(Module, ABC):
             #         residual_stream = residual_stream / 2 + update
 
             #     residual_stream = residual_stream + e
-        if self.norm_structure == NormStructure.post:
+        if (
+            self.norm_structure == NormStructure.post
+            or self.norm_structure == NormStructure.sandwich
+        ):
             residual_stream = norm_to_use(residual_stream)
 
         return residual_stream, layer_index
@@ -267,6 +283,7 @@ class LayerModule(Module, ABC):
         if (
             self.norm_structure == NormStructure.peri
             or self.norm_structure == NormStructure.pre
+            or self.norm_structure == NormStructure.sandwich
         ):
             # Peri, Pre
             residual_stream_normed = self.ffn_pre(residual_stream)
