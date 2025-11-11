@@ -28,14 +28,12 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
-        # norms:
-        #     norm_type: ln_norm
         base_depth: 12
-        current_depth: 24
-        base_width: 256
+        current_depth: 12
+        base_width: 768
         current_width: 768
         cp_alpha: 1
-        sqrt_attention_scale: True
+        sqrt_attention_scale: False
         # use_embedding_norm: true
     train:
         max_duration: "3171ba"

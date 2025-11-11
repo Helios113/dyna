@@ -168,12 +168,12 @@ class AttentionModule(DynaModule):
 
     def attend(
         self,
-        v: Float[Tensor, "batch n_heads seq d_head"],
-        k: Float[Tensor, "batch n_heads seq d_head"],
         q: Float[Tensor, "batch n_heads seq d_head"],
+        k: Float[Tensor, "batch n_heads seq d_head"],
+        v: Float[Tensor, "batch n_heads seq d_head"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        sqrt_attention_scale: bool = False,
+        sqrt_attention_scale: bool = True,
         scale_qk: bool = False,
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
@@ -198,18 +198,18 @@ class AttentionModule(DynaModule):
             q, k = self._apply_rope(q, k, sequence_length)
         if sqrt_attention_scale:
             scale = 1 / torch.sqrt(torch.tensor(self.d_head, device=self.device))
-        elif scale_qk == False:
+        elif not scale_qk:
             scale = 1 / self.d_head
         else:
             scale = 1
 
-        return custom_scaled_dot_product_attention(
+        return torch.nn.functional.scaled_dot_product_attention(
             q,
             k,
             v,
-            attention_mask=attention_mask,
+            attn_mask=attention_mask,
+            dropout_p=0,
             scale=scale,
-            custom_softmax_fn=self.softmax_fn,
         )
 
     def update_inv_freq(self, base: int) -> None:

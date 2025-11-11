@@ -76,10 +76,10 @@ class BasicAttn(AttentionModule):
         v = self.project_to_torch_order(v)
 
         # Apply dropout
-        q = self.dropout(q)
+        # q = self.dropout(q)
 
         # Apply attention
-        res = self.attend(v, k, q, attention_mask, sequence_length)
+        res = self.attend(q, k, v, attention_mask, sequence_length)
 
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)

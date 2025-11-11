@@ -38,7 +38,7 @@ class ModelConfig:
     n_expert_shared_ffn: int = 2
     collect_reg_loss: bool = False
     enable_early_exit: bool = True
-    rescaling_method: RescaleMethod = RescaleMethod.cum_avg_prot_emb
+    rescaling_method: RescaleMethod = RescaleMethod.none
     norm_structure: NormStructure = NormStructure.peri
     norms: NormConfig = field(default_factory=NormConfig)
     layer_type: LayerType = LayerType.simple

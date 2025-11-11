@@ -45,18 +45,21 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
+        # norms:
+        #     norm_type: ln_norm
         base_depth: 2
         current_depth: 2
         base_width: 256
         current_width: 256
         cp_alpha: 1
+        sqrt_attention_scale: False
     train:
         max_duration: "521ba"
         warmup: "100ba"
         cooldown: "100ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "sweepMain"
+        run_name: "sweep_new"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 64
