@@ -148,6 +148,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     del trainer
     del grad_clipping
     del callbacks
+    del params
     del scheduler
     del optimizer
     del eval_dataloader

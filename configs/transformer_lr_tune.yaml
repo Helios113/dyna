@@ -2,35 +2,36 @@ defaults:
     - _self_
     - execute_config/scheduler_config: wsld
     - execute_config/callbacks: default_100
-    - execute_config/data_config: smoll
+    - execute_config/data_config: smoll_tune
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
-# sweep_config:
-#     method: bayesian
-#     metric:
-#         name: loss/train/total
-#         goal: minimize
-#     parameters:
-#         execute_config.optimizer_config.lr:
-#             distribution: q_uniform
-#             q: 1e-4
-#             min: 1e-3
-#             max: 1e-2
-#     early_terminate:
-#         type: hyperband
-#         s: 2
-#         eta: 3
-#         max_iter: 27
+sweep_config:
+    method: bayes
+    metric:
+        name: loss/train/total
+        goal: minimize
+    parameters:
+        execute_config.optimizer_config.lr:
+            distribution: q_uniform
+            q: 1e-4
+            min: 1e-3
+            max: 1e-2
+    early_terminate:
+        type: hyperband
+        s: 2
+        eta: 3
+        max_iter: 521
+        min_iter: 100
 
 execute_config:
     model_config:
         execution_mode: transformer
-        d_model: 768
-        d_ffn: 3072
+        d_model: 256
+        d_ffn: 1024
         n_repeats: 1
-        n_heads: 12
+        n_heads: 4
         d_head: 64
-        n_layers: 12
+        n_layers: 2
         vocab_size: 50368
         max_seq_len: 1024
         n_expert_shared_attn: 0
@@ -44,24 +45,21 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
-        # norms:
-        #     norm_type: ln_norm
-        base_depth: 12
-        current_depth: 12
-        base_width: 768
-        current_width: 768
+        base_depth: 2
+        current_depth: 2
+        base_width: 256
+        current_width: 256
         cp_alpha: 1
-        # use_embedding_norm: true
     train:
-        max_duration: "500ba"
-        warmup: "634ba"
-        cooldown: "634ba"
+        max_duration: "521ba"
+        warmup: "100ba"
+        cooldown: "100ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "validatonNoCompleteP"
+        run_name: "sweepMain"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
-        device_train_microbatch_size: 32
+        device_train_microbatch_size: 64
         precision: "amp_bf16"
         device: "gpu"
         # save_folder: "s3://loop-llm/dyna/"

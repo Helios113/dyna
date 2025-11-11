@@ -37,7 +37,7 @@ def calc_entropy(
     """
     # entropy = 0
     # for logits in chunks:
-    logits = chunks
+    logits = chunks.cpu()
     probs = torch.softmax(logits / temperature, dim=-1)
     log_probs = torch.log(probs + 1e-8)
     entropy = -torch.sum(probs * log_probs, dim=-1).detach()

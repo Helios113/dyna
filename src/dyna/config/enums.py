@@ -33,6 +33,8 @@ class NormType(str, Enum):
     low_precision_rmsnorm = "low_precision_rmsnorm"
     dynamic_tanh = "dynamic_tanh"
     unit_norm = "unit_norm"
+    rms_norm = "rms_norm"
+    ln_norm = "ln_norm"
 
 
 class LayerType(str, Enum):
