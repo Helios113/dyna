@@ -1,4 +1,3 @@
-import math
 from collections.abc import Callable
 
 import torch
@@ -66,15 +65,15 @@ class SigmaMoE(DynaModule):
 
         self.sel_hist = []
 
-    def reset_parameters(self, std_scale: float) -> None:
+    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         """Initialize parameters with proper scaling."""
-        torch.nn.init.normal_(self.keys, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.keys, 0, ffn_scale)
         torch.nn.init.normal_(
             self.values,
             0,
-            std_scale / math.sqrt(self.n_experts_ffn * self.d_expert_ffn),
+            ffn_scale,
         )
-        torch.nn.init.normal_(self.expert_sel, 0, std_scale / math.sqrt(self.d_model))
+        torch.nn.init.normal_(self.expert_sel, 0, ffn_scale)
         self.renorm_keep_std(self.expert_sel, dim=1)
 
     def renorm_keep_std(self, weight: torch.Tensor, dim: int = 0) -> None:

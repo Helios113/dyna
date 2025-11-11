@@ -1,4 +1,3 @@
-import math
 from collections.abc import Callable
 
 import torch
@@ -31,15 +30,11 @@ class BasicFFN(DynaModule):
         down_output = self.projection_down(activation_output)
         return (down_output, None)
 
-    def reset_parameters(self, std_scale: float) -> None:
+    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         with torch.no_grad():
             """Initialize parameters with proper scaling."""
-            torch.nn.init.normal_(
-                self.projection_up.weight, 0, std_scale / math.sqrt(self.d_model)
-            )
-            torch.nn.init.normal_(
-                self.projection_down.weight, 0, std_scale / math.sqrt(self.d_expert_ffn)
-            )
+            torch.nn.init.normal_(self.projection_up.weight, 0, ffn_scale)
+            torch.nn.init.normal_(self.projection_down.weight, 0, ffn_scale)
             torch.nn.init.zeros_(self.projection_up.bias)
             torch.nn.init.zeros_(self.projection_down.bias)
 

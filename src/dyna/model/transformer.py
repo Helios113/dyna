@@ -181,9 +181,10 @@ class DynaFormer(DynaPretrainedModel):
 
     @torch.no_grad
     def reset_parameters(self) -> None:
+        init_std = 0.002
         """Initialize all model parameters."""
-        scale = math.sqrt(2 / self.base_depth)
-
+        scale_ffn = init_std / math.sqrt(2 * self.base_depth)
+        scale_attn = init_std / math.sqrt(self.current_depth / self.base_depth)
         # Initialize tracking variables
         self._seq_len = []
         self._latent_vectors = []
@@ -196,7 +197,7 @@ class DynaFormer(DynaPretrainedModel):
             if isinstance(layer, DynaFormer):
                 continue
             elif isinstance(layer, DynaModule):
-                layer.reset_parameters(scale)
+                layer.reset_parameters(scale_ffn, scale_attn)
             elif hasattr(layer, "reset_parameters"):
                 assert isinstance(layer.reset_parameters, Callable)
                 layer.reset_parameters()

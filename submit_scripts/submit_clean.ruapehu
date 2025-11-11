@@ -71,7 +71,7 @@ echo "=========================================="
 echo "Starting experiment"
 echo "=========================================="
 
-CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_lr_tune
+CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey
 
 # Capture exit status
 status=$?

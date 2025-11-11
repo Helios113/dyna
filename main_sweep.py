@@ -7,7 +7,6 @@ import hydra
 import torch
 import wandb
 from composer import Trainer
-from composer.algorithms import GradientClipping
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW
 from omegaconf import DictConfig, OmegaConf
@@ -119,7 +118,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         current_width=cfg.model_config.current_width,
         cp_alpha=cfg.model_config.cp_alpha,
     )
-    optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
+    optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 
@@ -127,7 +126,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     callbacks = get_callbacks(cfg.callbacks)
 
     clipping_type = cfg.optimizer_config.clipping_type
-    grad_clipping = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
+    # grad_clipping = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
 
     trainer = Trainer(
         model=model,
@@ -138,7 +137,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         schedulers=scheduler,
         parallelism_config={"fsdp_config": cfg.get("fsdp_config", {})},
         loggers=loggers,
-        algorithms=[grad_clipping],
+        algorithms=[],
         **cfg.trainer_config,
     )
 

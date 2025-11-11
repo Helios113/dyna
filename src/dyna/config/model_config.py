@@ -49,7 +49,8 @@ class ModelConfig:
     nope_pos: bool = False
     use_reg_loss: bool = False
     use_embedding_norm: bool = False
-    manual_scale: bool = False
+    sqrt_attention_scale: bool = False
+    scale_qk: bool = False
     tail_size: int = 2
     head_size: int = 2
     loop_normalization: bool = False

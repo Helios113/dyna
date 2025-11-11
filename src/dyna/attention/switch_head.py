@@ -28,7 +28,8 @@ class SwitchHead(AttentionModule):
         rope_base: int = 10000,
         nope_pos: bool = False,
         use_bias: bool = True,
-        manual_scale: bool = False,
+        sqrt_attention_scale: bool = False,
+        scale_qk: bool = False,
     ):
         """Initialize SwitchHead with expert routing configuration."""
         super().__init__(
@@ -55,7 +56,7 @@ class SwitchHead(AttentionModule):
         self.k_attn = k_attn
         self.n_expert_shared_attn = min(n_expert_shared_attn, n_experts_attn)
         self.n_expert_routed_attn = n_experts_attn - self.n_expert_shared_attn
-        self.manual_scale = manual_scale
+        self.sqrt_attention_scale = sqrt_attention_scale
         # Bias tracking
         self.bias_update_lr = 0.001
 
@@ -75,17 +76,11 @@ class SwitchHead(AttentionModule):
             ),
         )
 
-        # Attention scale
-        self.register_buffer(
-            "scale",
-            torch.full([1], 1.0 / math.sqrt(self.d_head)),
-            persistent=False,
-        )
-
         # Tracking variables for visualization
         self.selections_to_visualize = {}
         self.sel_hist: list[tuple[Tensor, Tensor]] = []
         self.call_h = 0
+        self.scale_qk = scale_qk
 
     def _init_expert_parameters(self) -> None:
         """Initialize expert-specific parameters."""
@@ -113,26 +108,22 @@ class SwitchHead(AttentionModule):
             torch.zeros(self.n_experts_attn), requires_grad=False
         )
 
-    def reset_parameters(self, std_scale: float) -> None:
+    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         with torch.no_grad():
             """Initialize all parameters with proper scaling."""
             # Initialize selection parameters
             if self.n_experts_attn > 1:
-                torch.nn.init.normal_(
-                    self.sel_v, 0, std_scale / math.sqrt(self.d_model)
-                )
+                torch.nn.init.normal_(self.sel_v, 0, attn_scale)
                 self.renorm_rows(self.sel_v)
 
-            torch.nn.init.normal_(self.sel_o, 0, std_scale / math.sqrt(self.d_model))
+            torch.nn.init.normal_(self.sel_o, 0, attn_scale)
             self.renorm_rows(self.sel_o)
 
             # Initialize projection parameters
-            torch.nn.init.normal_(self.k.weight, 0, std_scale / math.sqrt(self.d_model))
-            torch.nn.init.normal_(self.q.weight, 0, std_scale / math.sqrt(self.d_model))
-            torch.nn.init.normal_(self.v, 0, std_scale / math.sqrt(self.d_model))
-            torch.nn.init.normal_(
-                self.o, 0, std_scale / math.sqrt(self.n_heads * self.d_head)
-            )
+            torch.nn.init.normal_(self.k.weight, 0, attn_scale)
+            torch.nn.init.normal_(self.q.weight, 0, attn_scale)
+            torch.nn.init.normal_(self.v, 0, attn_scale)
+            torch.nn.init.normal_(self.o, 0, attn_scale)
 
     def renorm_rows(self, x: torch.Tensor) -> None:
         """Renormalize rows while preserving standard deviation."""
@@ -259,6 +250,18 @@ class SwitchHead(AttentionModule):
         # Apply scaling to queries and keys
         q_val: Float[Tensor, "batch seq d_model"] = self.q(q_src)
         k_val: Float[Tensor, "batch seq d_model"] = self.k(k_src)
+
+        # Should we apply scaling individually to queries and keys?
+        # some sort of if_statement
+        # scale should be some sort of variable -- sqrt_attention_scale
+        if self.scale_qk:
+            if self.sqrt_attention_scale:
+                q_val = q_val / math.sqrt(self.d_model)
+                k_val = k_val / math.sqrt(self.d_model)
+            else:
+                q_val = q_val / self.d_model
+                k_val = k_val / self.d_model
+
         v_sel_index = None
         o_sel_index = None
 
@@ -302,7 +305,8 @@ class SwitchHead(AttentionModule):
                 q_val_o,
                 attention_mask,
                 sequence_length,
-                manual_scale=self.manual_scale,
+                sqrt_attention_scale=self.sqrt_attention_scale,
+                scale_qk=self.scale_qk,
             )
 
             res = res.transpose(-2, -3)

@@ -176,7 +176,6 @@ class LayerModule(Module, ABC):
                 scale_factor = (self.current_depth / self.base_depth) ** (
                     -self.cp_alpha
                 )
-
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
                         residual_stream.view(-1),

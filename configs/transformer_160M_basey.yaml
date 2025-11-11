@@ -5,22 +5,6 @@ defaults:
     - execute_config/data_config: smoll
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
-# sweep_config:
-#     method: bayesian
-#     metric:
-#         name: loss/train/total
-#         goal: minimize
-#     parameters:
-#         execute_config.optimizer_config.lr:
-#             distribution: q_uniform
-#             q: 1e-4
-#             min: 1e-3
-#             max: 1e-2
-#     early_terminate:
-#         type: hyperband
-#         s: 2
-#         eta: 3
-#         max_iter: 27
 
 execute_config:
     model_config:
@@ -47,18 +31,19 @@ execute_config:
         # norms:
         #     norm_type: ln_norm
         base_depth: 12
-        current_depth: 12
-        base_width: 768
+        current_depth: 24
+        base_width: 256
         current_width: 768
         cp_alpha: 1
+        sqrt_attention_scale: True
         # use_embedding_norm: true
     train:
-        max_duration: "500ba"
+        max_duration: "3171ba"
         warmup: "634ba"
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "validatonNoCompleteP"
+        run_name: "validation_transformer_complete_p"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32

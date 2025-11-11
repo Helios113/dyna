@@ -161,7 +161,6 @@ class DynaLM(DynaPretrainedModel):
         self.transformer._temp_lm_head = lambda x: self.lm_head_scale * self.lm_head(
             self.out_norm(x)
         )
-        self.base_depth = config.base_depth
         self.head_size = config.head_size
         self.tail_size = config.tail_size
         self.n_layers = config.n_layers

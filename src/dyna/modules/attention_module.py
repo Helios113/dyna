@@ -1,8 +1,128 @@
+from collections.abc import Callable
+
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from . import DynaModule
+
+
+def custom_softmax(x, dim=-1):
+    """Custom softmax implementation with numerical stability.
+
+    Args:
+        x: Input tensor
+        dim: Dimension along which to apply softmax
+
+    Returns:
+        Softmax probabilities
+    """
+    # Subtract max for numerical stability
+    x_max, _ = torch.max(x, dim=dim, keepdim=True)
+    x_exp = torch.exp((x - x_max).to(torch.float32)).to(x.dtype)
+
+    x_sum = torch.sum(x_exp, dim=dim, keepdim=True)
+    out = x_exp / x_sum
+    if out.isnan().any():
+        print("NaN detected in output", flush=True)
+
+        # Find locations of NaNs
+        nan_mask = out.isnan()
+        nan_indices = torch.nonzero(nan_mask, as_tuple=False)
+
+        print(f"\nNumber of NaN values: {nan_mask.sum()}", flush=True)
+        print(f"NaN locations (first 10): {nan_indices[:10]}", flush=True)
+
+        # For each NaN location, print the corresponding x_exp and x_sum values
+        for i, idx in enumerate(nan_indices[:10]):  # Print first 10 cases
+            idx_tuple = tuple(idx.tolist())
+            print(f"\n--- NaN case {i + 1} at index {idx_tuple} ---", flush=True)
+            print(f"out value: {out[idx_tuple]}", flush=True)
+            print(f"x_exp value: {x_exp[idx_tuple]}", flush=True)
+
+            # Get the corresponding x_sum (which is summed along dim)
+            # Create index for x_sum (which has keepdim=True)
+            sum_idx = list(idx_tuple)
+            sum_idx[dim] = 0  # x_sum has size 1 along the summed dimension
+            sum_idx_tuple = tuple(sum_idx)
+            print(f"x_sum value: {x_sum[sum_idx_tuple]}", flush=True)
+
+            # Also print the original x values along that dimension
+            slice_idx = list(idx_tuple)
+            slice_idx[dim] = slice(None)  # Get all values along dim
+            print(f"x values along dim: {x[tuple(slice_idx)]}", flush=True)
+            print(f"x_exp values along dim: {x_exp[tuple(slice_idx)]}", flush=True)
+
+        exit()
+    return out
+
+
+def custom_scaled_dot_product_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale: float = 1.0,
+    training: bool = True,
+    custom_softmax_fn: Callable[[torch.Tensor, int], torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Custom implementation of scaled dot product attention.
+
+    Args:
+        query: Query tensor of shape (batch, num_heads, seq_len_q, head_dim)
+        key: Key tensor of shape (batch, num_heads, seq_len_k, head_dim)
+        value: Value tensor of shape (batch, num_heads, seq_len_k, head_dim)
+        attention_mask: Optional attention mask. Can be 2D or 4D.
+                        Use float('-inf') for positions to mask out.
+        dropout_p: Dropout probability (default: 0.0)
+        is_causal: If True, applies causal (lower triangular) masking
+        training: Whether in training mode (affects dropout)
+        custom_softmax_fn: Custom softmax function to use
+
+    Returns:
+        Output tensor of shape (batch, num_heads, seq_len_q, head_dim)
+    """
+    if custom_softmax_fn is None:
+        return torch.nn.functional.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=attention_mask,
+            dropout_p=dropout_p,
+            scale=scale,
+        )
+
+    # Get dimensions
+    batch_size, num_heads, seq_len_q, head_dim = query.shape
+    seq_len_k = key.shape[2]
+
+    attn_scores = torch.matmul(query, key.transpose(-2, -1)) * scale
+
+    # Apply causal mask if specified
+    if attention_mask is not None:
+        attn_scores = attn_scores.masked_fill(attention_mask, float("-inf"))
+    elif is_causal:
+        causal_mask = torch.triu(
+            torch.ones(seq_len_q, seq_len_k, dtype=torch.bool, device=query.device),
+            diagonal=1,
+        )
+        attn_scores = attn_scores.masked_fill(causal_mask, float("-inf"))
+
+    # Apply additional attention mask if provided
+
+    # Apply custom softmax
+    attn_weights = custom_softmax(attn_scores, dim=-1)
+
+    # Apply dropout if specified
+    if dropout_p > 0.0 and training:
+        attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout_p)
+
+    # Compute attention output: Attention @ V
+    output = torch.matmul(attn_weights, value)
+
+    return output
 
 
 class AttentionModule(DynaModule):
@@ -41,6 +161,10 @@ class AttentionModule(DynaModule):
         self.n_heads = n_heads
         self.d_head = d_head
         self.nope_pos = nope_pos
+        # self.softmax_fn = custom_softmax
+        self.softmax_fn = None
+        if self.softmax_fn is not None:
+            print("!!!! We are using custom softmax function !!!!", flush=True)
 
     def attend(
         self,
@@ -49,7 +173,8 @@ class AttentionModule(DynaModule):
         q: Float[Tensor, "batch n_heads seq d_head"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        manual_scale: bool = False,
+        sqrt_attention_scale: bool = False,
+        scale_qk: bool = False,
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.
 
@@ -71,14 +196,20 @@ class AttentionModule(DynaModule):
         """
         if not self.nope_pos:
             q, k = self._apply_rope(q, k, sequence_length)
+        if sqrt_attention_scale:
+            scale = 1 / torch.sqrt(torch.tensor(self.d_head, device=self.device))
+        elif scale_qk == False:
+            scale = 1 / self.d_head
+        else:
+            scale = 1
 
-        return torch.nn.functional.scaled_dot_product_attention(
+        return custom_scaled_dot_product_attention(
             q,
             k,
             v,
-            attn_mask=attention_mask,
-            dropout_p=0.0,
-            scale=1.0 if manual_scale else None,
+            attention_mask=attention_mask,
+            scale=scale,
+            custom_softmax_fn=self.softmax_fn,
         )
 
     def update_inv_freq(self, base: int) -> None:

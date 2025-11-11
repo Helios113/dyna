@@ -77,7 +77,7 @@ class DynaConfig(PretrainedConfig):
         self.use_reg_loss = kwargs.pop("use_reg_loss", False)
         self.use_moe_bias = kwargs.pop("use_moe_bias", True)
         self.use_embedding_norm = kwargs.pop("use_embedding_norm", False)
-        self.manual_scale = kwargs.pop("manual_scale", False)
+        self.sqrt_attention_scale = kwargs.pop("sqrt_attention_scale", False)
         self.loop_normalization = kwargs.pop("loop_normalization", False)
         self.norms: NormConfig = NormConfig(**kwargs.pop("norms", {}))
         self.loop_rope_theta_rebase = kwargs.pop("loop_rope_theta_rebase", False)
@@ -88,6 +88,7 @@ class DynaConfig(PretrainedConfig):
         self.base_width: int = kwargs.pop("base_width", 12)
         self.current_width: int = kwargs.pop("current_width", 12)
         self.cp_alpha: float = kwargs.pop("cp_alpha", 1.0)
+        self.scale_qk: bool = kwargs.pop("scale_qk", False)
 
         def to_dict(self):
             output = super().to_dict()

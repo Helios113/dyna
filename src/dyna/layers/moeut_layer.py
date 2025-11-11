@@ -26,7 +26,8 @@ class MoEUTLayer(LayerModule):
                 n_expert_shared_attn=config.n_expert_shared_attn,
                 nope_pos=config.nope_pos,
                 use_bias=not config.use_reg_loss,
-                manual_scale=config.manual_scale,
+                sqrt_attention_scale=config.sqrt_attention_scale,
+                scale_qk=config.scale_qk,
             ),
             ffn_module=SigmaMoE(
                 config.d_model,

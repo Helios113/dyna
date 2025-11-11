@@ -1,9 +1,11 @@
+import csv
 import glob
 import os
 import secrets
 import string
 import subprocess
 import time
+from pathlib import Path
 from typing import cast
 
 import yaml
@@ -32,89 +34,153 @@ def generate_id(length: int = 8) -> str:
 
 
 def make_wandb_run_name(
-    model_config: DictConfig, trainer_config: DictConfig, unique: str
+    model_config: DictConfig,
+    trainer_config: DictConfig,
+    unique: str,
+    metadata_dir: str = "wandb_metadata",
 ) -> str:
     """Generate a unique and informative wandb run name from config.
 
-    Includes a consistent part (run_id), a unique part (timestamp), and key info.
+    Format: <index>__<run_name>__<timestamp>__<unique_id>
+
+    Uses double underscores (__) as delimiters to separate major sections,
+    allowing single underscores in run names.
+
+    All config parameters are saved to a CSV file for reference instead of
+    being embedded in the run name, keeping names short and readable.
+
+    Args:
+        model_config: Model configuration
+        trainer_config: Trainer configuration
+        unique: Unique identifier for this run
+        metadata_dir: Directory to save parameter CSV files
+
+    Returns:
+        Formatted run name string
     """
-    # Consistent part: use config['run_id'] if present, else generate random string
-    run_name = trainer_config.get("run_name")
     load_path = trainer_config.get("load_path")
+
     if load_path is not None:
+        # Resume from checkpoint: parse existing name and update unique ID
         name = os.path.basename(load_path)
-        name_break_down = name.split("_")
-        name_break_down[4] = unique
-        name = "_".join(name_break_down)
+        parts = name.split("__")
+
+        # Replace the unique ID (4th part after index, run_name, timestamp)
+        if len(parts) >= 4:
+            parts[3] = unique
+            name = "__".join(parts)
+        else:
+            raise ValueError(f"Invalid checkpoint name format: {name}")
     else:
+        # Create new run name
+        run_name = trainer_config.get("run_name")
         if not run_name:
             run_name = generate_id(8)
-        else:
-            # check that there are no underscores in run_name
-            if "_" in run_name:
-                raise ValueError("run_name should not contain underscores")
-        # Unique part: timestamp
+
+        # Timestamp
         timestamp = time.strftime("%d%b%y").lower()
-        # Important info: select a few key hyperparameters (customize as needed)
-        abbrev_moa = {
-            "d_model": "dim",
-            "n_layers": "n_l",
-            "n_repeats": "n_r",
-            "n_heads": "n_h",
-            "d_head": "d_hd",
-            "n_experts_ffn": "n_e_ffn",
-            "n_experts_attn": "n_e_attn",
-            "ff_expert_size": "f_e_size",
-            "device_train_batch_size": "bs",
-            "enable_early_exit": "ee",
-            "execution_mode": "mode",
-            "norm_structure": "norm",
-            "rescaling_method": "rescale",
-        }
 
-        abbrev_trans = {
-            "d_model": "dim",
-            "d_ffn": "d_ffn",
-            "n_layers": "n_l",
-            "n_heads": "n_h",
-            "d_head": "d_hd",
-            "device_train_batch_size": "bs",
-            "enable_early_exit": "ee",
-            "execution_mode": "mode",
-            "norm_structure": "norm",
-            "rescaling_method": "rescale",
-        }
+        # Compose short name: run_name__timestamp__unique_id
+        name = f"{run_name}__{timestamp}__{unique}"
 
-        if model_config.get("execution_mode") == "moe":
-            keys = abbrev_moa
-        else:
-            keys = abbrev_trans
+    # Add or increment index prefix
+    name = _add_index_prefix(name)
 
-        info = []
-        for k, short in keys.items():
-            val = None
-            if k in model_config:
-                val = model_config[k]
-            elif k in trainer_config:
-                val = trainer_config[k]
-            if "." in str(val):
-                val = str(val).split(".")[-1]  # Simplify floats
-            if val is not None:
-                info.append(f"{short}~{val}")
+    # Save all parameters to CSV for reference
+    _save_parameters_to_csv(name, model_config, trainer_config, metadata_dir)
 
-        info_str = "_".join(info)
-        # Compose name
-        name = f"{run_name}_{timestamp}_{unique}"
-        if info_str:
-            name += f"_{info_str}"
-    has_index = name.split("_")[0].isdigit()
-    if has_index:
-        index = int(name.split("_")[0])
-        name = "_".join(name.split("_")[1:])
-        name = str(index + 1) + "_" + name
-    else:
-        name = "1_" + name
     return name
+
+
+def _save_parameters_to_csv(
+    run_name: str,
+    model_config: DictConfig,
+    trainer_config: DictConfig,
+    metadata_dir: str,
+) -> None:
+    """Save all config parameters to a CSV file.
+
+    Creates a CSV with columns: run_name, parameter, value, source
+    This allows easy tracking and comparison of runs without cluttering the run name.
+
+    Args:
+        run_name: The generated run name
+        model_config: Model configuration
+        trainer_config: Trainer configuration
+        metadata_dir: Directory to save the CSV file
+    """
+    # Create metadata directory if it doesn't exist
+    metadata_path = Path(metadata_dir)
+    metadata_path.mkdir(parents=True, exist_ok=True)
+
+    # CSV file path
+    csv_file = metadata_path / "run_parameters.csv"
+
+    # Check if file exists to determine if we need to write headers
+    file_exists = csv_file.exists()
+
+    # Collect all parameters
+    rows = []
+
+    # Add model config parameters
+    for key, value in model_config.items():
+        rows.append(
+            {
+                "run_name": run_name,
+                "parameter": key,
+                "value": str(value),
+                "source": "model_config",
+            }
+        )
+
+    # Add trainer config parameters
+    for key, value in trainer_config.items():
+        rows.append(
+            {
+                "run_name": run_name,
+                "parameter": key,
+                "value": str(value),
+                "source": "trainer_config",
+            }
+        )
+
+    # Append to CSV
+    with open(csv_file, "a", newline="") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["run_name", "parameter", "value", "source"]
+        )
+
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
+
+        # Write all rows
+        writer.writerows(rows)
+
+    print(f"Parameters saved to: {csv_file}")
+
+
+def _add_index_prefix(name: str) -> str:
+    """Add or increment the run index prefix.
+
+    If name starts with a number followed by double underscore (e.g., "1__..."), increment it.
+    Otherwise, add "1__" prefix.
+
+    Args:
+        name: The run name (may or may not have index prefix)
+
+    Returns:
+        Name with index prefix
+    """
+    parts = name.split("__", 1)
+
+    if len(parts) > 1 and parts[0].isdigit():
+        # Has existing index, increment it
+        index = int(parts[0]) + 1
+        return f"{index}__{parts[1]}"
+    else:
+        # No index, add "1__" prefix
+        return f"1__{name}"
 
 
 def get_callbacks(cfg: DictConfig) -> list[Callback]:
@@ -295,7 +361,7 @@ def create_param_groups(
 ):
     if frozen_param_names is None:
         frozen_param_names = []
-    depth_lr_scaling = (current_depth / base_depth) ** (-cp_alpha - 1)
+    depth_lr_scaling = (current_depth / base_depth) ** (cp_alpha - 1)
     width_lr_scaling = (current_width / base_width) ** (-1)
     emb_params = []
     hidden_ln_params = []
@@ -303,13 +369,14 @@ def create_param_groups(
     hidden_bias_params = []
     final_ln_params = []
     lm_head_params = []
-    print("scaling factors:", depth_lr_scaling, width_lr_scaling)
+    print("Optimzer parameter scaling factors:", depth_lr_scaling, width_lr_scaling)
     frozen_count = 0
     adam_eps = (
         eps
         * (current_width / base_width) ** (-1)
-        * (current_depth / base_depth) ** (-cp_alpha)
+        * (current_depth / base_depth) ** (-1 * cp_alpha)
     )
+
     total_params = sum(1 for _ in model.parameters())
     total_named_params = sum(1 for _ in model.named_parameters())
     assigned_params = 0

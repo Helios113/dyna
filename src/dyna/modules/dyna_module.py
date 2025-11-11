@@ -1,7 +1,6 @@
 import math
 from abc import ABC, abstractmethod
 
-from sympy.external.gmpy import flint
 import torch
 from jaxtyping import Float
 from torch import Tensor
@@ -40,7 +39,7 @@ class DynaModule(torch.nn.Module, ABC):
         pass
 
     @abstractmethod
-    def reset_parameters(self, std_scale: float) -> None:
+    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         pass
 
     @property
