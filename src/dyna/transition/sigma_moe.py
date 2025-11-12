@@ -78,10 +78,9 @@ class SigmaMoE(DynaModule):
 
     def renorm_keep_std(self, weight: torch.Tensor, dim: int = 0) -> None:
         """Renormalize weights while keeping standard deviation."""
-        with torch.no_grad():
-            std = weight.std()
-            weight.div_(weight.norm(dim=dim, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
-            weight.mul_(std / weight.std())
+        std = weight.std()
+        weight.div_(weight.norm(dim=dim, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+        weight.mul_(std / weight.std())
 
     def _compute_expert_selection(
         self, selection_input: Float[Tensor, "batch seq d_model"]

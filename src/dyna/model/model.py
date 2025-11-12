@@ -72,8 +72,7 @@ def _generate_attention_mask(
     )
 
     # Apply masks
-    final_mask: Bool[Tensor, "batch seq seq"] = base_causal[None, :, :] & same_seq_mask
-
+    final_mask = base_causal[None, :, :] & same_seq_mask
     return final_mask.unsqueeze(1)
 
 
@@ -165,7 +164,6 @@ class DynaLM(DynaPretrainedModel):
         self.tail_size = config.tail_size
         self.n_layers = config.n_layers
 
-    @torch.no_grad
     def reset_parameters(self):
         torch.nn.init.kaiming_normal_(
             self.embedding.weight, mode="fan_in", nonlinearity="linear"
@@ -327,4 +325,8 @@ class ComposerDynaModel(HuggingFaceModel):
             logits.view(-1, logits.size(-1)),
             _labels.to(logits.device).view(-1),
         )
+        # I want to see the gradient pathway to the q weights
+        # loss.backward(retain_graph=True)
+        # print(self.model.transformer.attention_modules[0].q_linear.weight.grad)
+
         return loss

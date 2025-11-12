@@ -1,3 +1,5 @@
+import math
+
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -38,13 +40,20 @@ class BasicAttn(AttentionModule):
         self.n_rotate = int(rotate_fraction * self.d_head)
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
-        with torch.no_grad():
-            # Initialize projection parameters
-            torch.nn.init.normal_(self.k.weight, 0, attn_scale)
-            torch.nn.init.normal_(self.q.weight, 0, attn_scale)
-            torch.nn.init.normal_(self.v.weight, 0, attn_scale)
-            # FIX: Use proper scaling for output projection
-            torch.nn.init.normal_(self.o.weight, 0, attn_scale)
+        # Initialize projection parameters
+        torch.nn.init.normal_(
+            self.k.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
+        )
+        torch.nn.init.normal_(
+            self.q.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
+        )
+        torch.nn.init.normal_(
+            self.v.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
+        )
+        # FIX: Use proper scaling for output projection
+        torch.nn.init.normal_(
+            self.o.weight, 0, attn_scale * (1 / math.sqrt(self.d_model))
+        )
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss.

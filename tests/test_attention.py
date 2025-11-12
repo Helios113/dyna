@@ -1,10 +1,9 @@
 import os
 
 import torch
+from generate_standard_inputs import generate_standard_inputs
 
 from dyna.model import _generate_attention_mask
-
-from .generate_standard_inputs import generate_standard_inputs
 
 
 def test_attention_mask():
@@ -29,7 +28,26 @@ def test_attention_mask():
     # --- 2. Iterate Through Batch ---
     for b_idx in range(batch_size):
         input_seq = inputs[b_idx]
-        attention_mask = mask[b_idx]
+        attention_mask = mask[b_idx][0]
+
+        import matplotlib.pyplot as plt
+
+        plt.imshow(attention_mask.cpu().numpy())
+        plt.title(f"Attention Mask for Batch Index {b_idx}")
+        plt.colorbar()
+        plt.savefig(f"attnention_mask_batch_{b_idx}.pdf")
+        plt.close()
+        print("attns mask shape:", attention_mask.shape, flush=True)
+        print(attention_mask[-1][-1], flush=True)
+        print(attention_mask[-1][-2], flush=True)
+        print(attention_mask[-10:-1][-10:-1], flush=True)
+        attn_slice = attention_mask[150:200, 150:200]
+        print(attn_slice.shape, flush=True)
+        plt.imshow(attn_slice.cpu().numpy())
+        plt.title(f"Attention Mask for Batch Index {b_idx}")
+        plt.colorbar()
+        plt.savefig(f"attnention_row_batch_{b_idx}.pdf")
+        exit()
 
         # Find the indices of all padding tokens (zeros) in the sequence
         zero_indices = torch.where(input_seq == 0)[0]

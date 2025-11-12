@@ -45,7 +45,6 @@ class PassThroughTransformer(DynaPretrainedModel):
         # entropy calculation head
         self._temp_lm_head: Callable[[torch.Tensor], torch.Tensor] | None = None
 
-    @torch.no_grad
     def reset_parameters(self) -> None:
         self._seq_len = []
         self._latent_vectors = []

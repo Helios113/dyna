@@ -109,28 +109,26 @@ class SwitchHead(AttentionModule):
         )
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
-        with torch.no_grad():
-            """Initialize all parameters with proper scaling."""
-            # Initialize selection parameters
-            if self.n_experts_attn > 1:
-                torch.nn.init.normal_(self.sel_v, 0, attn_scale)
-                self.renorm_rows(self.sel_v)
+        """Initialize all parameters with proper scaling."""
+        # Initialize selection parameters
+        if self.n_experts_attn > 1:
+            torch.nn.init.normal_(self.sel_v, 0, attn_scale)
+            self.renorm_rows(self.sel_v)
 
-            torch.nn.init.normal_(self.sel_o, 0, attn_scale)
-            self.renorm_rows(self.sel_o)
+        torch.nn.init.normal_(self.sel_o, 0, attn_scale)
+        self.renorm_rows(self.sel_o)
 
-            # Initialize projection parameters
-            torch.nn.init.normal_(self.k.weight, 0, attn_scale)
-            torch.nn.init.normal_(self.q.weight, 0, attn_scale)
-            torch.nn.init.normal_(self.v, 0, attn_scale)
-            torch.nn.init.normal_(self.o, 0, attn_scale)
+        # Initialize projection parameters
+        torch.nn.init.normal_(self.k.weight, 0, attn_scale)
+        torch.nn.init.normal_(self.q.weight, 0, attn_scale)
+        torch.nn.init.normal_(self.v, 0, attn_scale)
+        torch.nn.init.normal_(self.o, 0, attn_scale)
 
     def renorm_rows(self, x: torch.Tensor) -> None:
         """Renormalize rows while preserving standard deviation."""
-        with torch.no_grad():
-            std_t = x.std(dim=-1, keepdim=True)
-            x.div_(x.norm(dim=-1, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
-            x.mul_(std_t / x.std())
+        std_t = x.std(dim=-1, keepdim=True)
+        x.div_(x.norm(dim=-1, keepdim=True))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+        x.mul_(std_t / x.std())
 
     def get_reg_loss(self) -> Float[Tensor, ""]:
         """Get regularization loss from selection history."""

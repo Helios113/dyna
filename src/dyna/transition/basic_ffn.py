@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable
 
 import torch
@@ -9,16 +10,16 @@ class BasicFFN(DynaModule):
     def __init__(
         self,
         d_model: int,
-        d_expert_ffn: int,
+        d_ffn: int,
         activation: Callable[[torch.Tensor], torch.Tensor] = torch.nn.functional.gelu,
     ):
         """Initialize BasicFFN with configurable parameters."""
         super().__init__()
         self.d_model = d_model
-        self.d_expert_ffn = d_expert_ffn
+        self.d_ffn = d_ffn
         self.activation = activation
-        self.projection_up = torch.nn.Linear(self.d_model, self.d_expert_ffn)
-        self.projection_down = torch.nn.Linear(self.d_expert_ffn, self.d_model)
+        self.projection_up = torch.nn.Linear(self.d_model, self.d_ffn)
+        self.projection_down = torch.nn.Linear(self.d_ffn, self.d_model)
 
     def forward(
         self,
@@ -31,12 +32,14 @@ class BasicFFN(DynaModule):
         return (down_output, None)
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
-        with torch.no_grad():
-            """Initialize parameters with proper scaling."""
-            torch.nn.init.normal_(self.projection_up.weight, 0, ffn_scale)
-            torch.nn.init.normal_(self.projection_down.weight, 0, ffn_scale)
-            torch.nn.init.zeros_(self.projection_up.bias)
-            torch.nn.init.zeros_(self.projection_down.bias)
+        torch.nn.init.normal_(
+            self.projection_up.weight, 0, ffn_scale * (1 / math.sqrt(self.d_ffn))
+        )
+        torch.nn.init.normal_(
+            self.projection_down.weight, 0, ffn_scale * (1 / math.sqrt(self.d_model))
+        )
+        torch.nn.init.zeros_(self.projection_up.bias)
+        torch.nn.init.zeros_(self.projection_down.bias)
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss.

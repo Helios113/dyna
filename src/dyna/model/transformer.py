@@ -102,6 +102,7 @@ class DynaFormer(DynaPretrainedModel):
         self.current_width = config.current_width
         self.loop_hyper_params = config.loop_hyper_params
         self.cp_alpha = config.cp_alpha
+        self.d_model = config.d_model
 
     def _construct_layers(self, config):
         """Constructs the layers of the transformer model.
@@ -179,12 +180,12 @@ class DynaFormer(DynaPretrainedModel):
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
 
-    @torch.no_grad
     def reset_parameters(self) -> None:
-        init_std = 0.002
+        # init_std = 2/math.sqrt(self.d_model)
+        # init_std = 0.002
         """Initialize all model parameters."""
-        scale_ffn = init_std / math.sqrt(2 * self.base_depth)
-        scale_attn = init_std / math.sqrt(self.current_depth / self.base_depth)
+        scale_ffn = 1 / math.sqrt(2 * self.base_depth)
+        scale_attn = 1 / math.sqrt(self.current_depth / self.base_depth)
         # Initialize tracking variables
         self._seq_len = []
         self._latent_vectors = []
@@ -197,7 +198,7 @@ class DynaFormer(DynaPretrainedModel):
             if isinstance(layer, DynaFormer):
                 continue
             elif isinstance(layer, DynaModule):
-                layer.reset_parameters(scale_ffn, scale_attn)
+                layer.reset_parameters(1, 1)
             elif hasattr(layer, "reset_parameters"):
                 assert isinstance(layer.reset_parameters, Callable)
                 layer.reset_parameters()

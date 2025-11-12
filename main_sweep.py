@@ -119,7 +119,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         current_width=cfg.model_config.current_width,
         cp_alpha=cfg.model_config.cp_alpha,
     )
-    optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr)
+    optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 
