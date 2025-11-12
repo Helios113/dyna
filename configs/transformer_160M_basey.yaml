@@ -33,7 +33,7 @@ execute_config:
         base_width: 768
         current_width: 768
         cp_alpha: 1
-        sqrt_attention_scale: True
+        sqrt_attention_scale: False
         # use_embedding_norm: true
     train:
         max_duration: "3171ba"

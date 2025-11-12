@@ -1,4 +1,3 @@
-import math
 import random
 from collections.abc import Callable
 
@@ -181,30 +180,17 @@ class DynaFormer(DynaPretrainedModel):
                 )
 
     def reset_parameters(self) -> None:
-        # init_std = 2/math.sqrt(self.d_model)
-        # init_std = 0.002
         """Initialize all model parameters."""
-        scale_ffn = 1 / math.sqrt(2 * self.base_depth)
-        scale_attn = 1 / math.sqrt(self.current_depth / self.base_depth)
         # Initialize tracking variables
         self._seq_len = []
         self._latent_vectors = []
         self._residual_magnitudes = []
         self._exit_logits = []
         self._expert_sel = []
-
         # Initialize layer parameters
         for layer in self.modules():
-            if isinstance(layer, DynaFormer):
-                continue
-            elif isinstance(layer, DynaModule):
+            if isinstance(layer, DynaModule):
                 layer.reset_parameters(1, 1)
-            elif hasattr(layer, "reset_parameters"):
-                assert isinstance(layer.reset_parameters, Callable)
-                layer.reset_parameters()
-            elif isinstance(layer, torch.nn.LayerNorm):
-                torch.nn.init.ones_(layer.weight)
-                torch.nn.init.zeros_(layer.bias)
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.use_reg_loss:

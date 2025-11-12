@@ -41,9 +41,19 @@ class BasicAttn(AttentionModule):
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         # Initialize projection parameters
+        print("Resetting BasicAttn parameters")
+        print(
+            "deviation of weights before:",
+            torch.mean(self.k.weight.std(dim=-1, keepdim=True)),
+        )
         torch.nn.init.normal_(
             self.k.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
         )
+        print(
+            "deviation of weights after:",
+            torch.mean(self.k.weight.std(dim=-1, keepdim=True)),
+        )
+
         torch.nn.init.normal_(
             self.q.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
         )
