@@ -19,6 +19,7 @@ class SimpleLayer(LayerModule):
                 d_head=config.d_head,
                 dropout=config.dropout,
                 nope_pos=config.nope_pos,
+                sqrt_attention_scale=config.sqrt_attention_scale,
             ),
             BasicFFN(
                 config.d_model,

@@ -1,4 +1,3 @@
-import math
 from collections.abc import Callable
 
 import torch
@@ -32,22 +31,8 @@ class BasicFFN(DynaModule):
         return (down_output, None)
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
-        print("Resetting BasicFFN parameters")
-        print(
-            "deviation of weights before:",
-            torch.mean(self.projection_up.weight.std(dim=-1, keepdim=True)),
-        )
-        torch.nn.init.normal_(
-            self.projection_up.weight, 0, ffn_scale * (1 / math.sqrt(self.d_ffn))
-        )
-        print(
-            "deviation of weights after:",
-            torch.mean(self.projection_up.weight.std(dim=-1, keepdim=True)),
-        )
-
-        torch.nn.init.normal_(
-            self.projection_down.weight, 0, ffn_scale * (1 / math.sqrt(self.d_model))
-        )
+        torch.nn.init.normal_(self.projection_up.weight, 0, ffn_scale)
+        torch.nn.init.normal_(self.projection_down.weight, 0, ffn_scale)
         torch.nn.init.zeros_(self.projection_up.bias)
         torch.nn.init.zeros_(self.projection_down.bias)
 

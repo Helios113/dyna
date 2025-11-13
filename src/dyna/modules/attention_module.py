@@ -53,8 +53,7 @@ class AttentionModule(DynaModule):
         v: Float[Tensor, "batch n_heads seq d_head"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        # TODO this is not activated
-        sqrt_attention_scale: bool = True,
+        sqrt_attention_scale: bool = False,
         scale_qk: bool = False,
     ) -> Float[Tensor, "batch n_heads seq d_head"]:
         """Compute attention with RoPE for constant length q k v tensors.

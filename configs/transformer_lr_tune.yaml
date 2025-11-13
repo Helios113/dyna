@@ -2,7 +2,7 @@ defaults:
     - _self_
     - execute_config/scheduler_config: wsld
     - execute_config/callbacks: default_100
-    - execute_config/data_config: smoll_tune
+    - execute_config/data_config: smoll
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
 sweep_config:
@@ -45,8 +45,6 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
-        # norms:
-        #     norm_type: ln_norm
         base_depth: 2
         current_depth: 2
         base_width: 256

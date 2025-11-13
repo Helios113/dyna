@@ -1,3 +1,4 @@
+import math
 import random
 from collections.abc import Callable
 
@@ -188,9 +189,10 @@ class DynaFormer(DynaPretrainedModel):
         self._exit_logits = []
         self._expert_sel = []
         # Initialize layer parameters
+        scale = 0.02 / math.sqrt(self.current_width / self.base_width)
         for layer in self.modules():
             if isinstance(layer, DynaModule):
-                layer.reset_parameters(1, 1)
+                layer.reset_parameters(scale, scale)
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.use_reg_loss:

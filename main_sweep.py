@@ -1,13 +1,13 @@
 import contextlib
 import os
-import time
 from typing import cast
 
 import hydra
 import torch
 import wandb
 from composer import Trainer
-from composer.algorithms import GradientClipping
+
+# from composer.algorithms import GradientClipping
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW
 from omegaconf import DictConfig, OmegaConf
@@ -126,8 +126,8 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     loggers = [wandb_logger]
     callbacks = get_callbacks(cfg.callbacks)
 
-    clipping_type = cfg.optimizer_config.clipping_type
-    grad_clipping = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
+    # clipping_type = cfg.optimizer_config.clipping_type
+    # grad_clipping = GradientClipping(clipping_type=clipping_type, clipping_threshold=1)
 
     trainer = Trainer(
         model=model,
@@ -138,12 +138,11 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         schedulers=scheduler,
         parallelism_config={"fsdp_config": cfg.get("fsdp_config", {})},
         loggers=loggers,
-        algorithms=[grad_clipping],
+        algorithms=[],
         **cfg.trainer_config,
     )
 
     trainer.fit()
-    time.sleep(2)
 
     del trainer
     # del grad_clipping

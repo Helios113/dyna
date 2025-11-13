@@ -1,5 +1,3 @@
-import math
-
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -17,6 +15,7 @@ class BasicAttn(AttentionModule):
         rotate_fraction: float = 1.0,
         rope_base: int = 10000,
         nope_pos: bool = False,
+        sqrt_attention_scale: bool = False,
     ):
         """Initialize BasicAttn with configurable parameters."""
         super().__init__(d_model, n_heads, d_head, rope_base, nope_pos)
@@ -38,32 +37,16 @@ class BasicAttn(AttentionModule):
 
         # RoPE configuration
         self.n_rotate = int(rotate_fraction * self.d_head)
+        self.sqrt_attention_scale = sqrt_attention_scale
 
     def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
         # Initialize projection parameters
-        print("Resetting BasicAttn parameters")
-        print(
-            "deviation of weights before:",
-            torch.mean(self.k.weight.std(dim=-1, keepdim=True)),
-        )
-        torch.nn.init.normal_(
-            self.k.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
-        )
-        print(
-            "deviation of weights after:",
-            torch.mean(self.k.weight.std(dim=-1, keepdim=True)),
-        )
+        torch.nn.init.normal_(self.k.weight, 0, attn_scale)
 
-        torch.nn.init.normal_(
-            self.q.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
-        )
-        torch.nn.init.normal_(
-            self.v.weight, 0, attn_scale * (1 / math.sqrt(self.n_heads * self.d_head))
-        )
+        torch.nn.init.normal_(self.q.weight, 0, attn_scale)
+        torch.nn.init.normal_(self.v.weight, 0, attn_scale)
         # FIX: Use proper scaling for output projection
-        torch.nn.init.normal_(
-            self.o.weight, 0, attn_scale * (1 / math.sqrt(self.d_model))
-        )
+        torch.nn.init.normal_(self.o.weight, 0, attn_scale)
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss.
@@ -98,7 +81,14 @@ class BasicAttn(AttentionModule):
         # q = self.dropout(q)
 
         # Apply attention
-        res = self.attend(q, k, v, attention_mask, sequence_length)
+        res = self.attend(
+            q,
+            k,
+            v,
+            attention_mask,
+            sequence_length,
+            sqrt_attention_scale=self.sqrt_attention_scale,
+        )
 
         # Reshape result for output projection
         res = res.transpose(-2, -3).contiguous().view(res.shape[0], res.shape[2], -1)

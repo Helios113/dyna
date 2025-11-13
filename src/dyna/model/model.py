@@ -1,4 +1,3 @@
-import math
 from typing import cast
 
 import torch
@@ -166,12 +165,8 @@ class DynaLM(DynaPretrainedModel):
         self.n_layers = config.n_layers
 
     def reset_parameters(self):
-        torch.nn.init.normal_(
-            self.embedding.weight, mean=0.0, std=1 / math.sqrt(self.d_model)
-        )
-        torch.nn.init.normal_(
-            self.lm_head.weight, mean=0.0, std=1 / math.sqrt(self.d_model)
-        )
+        torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=0.02)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
         self.transformer.reset_parameters()
 
