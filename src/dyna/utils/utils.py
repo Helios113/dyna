@@ -414,6 +414,7 @@ def create_param_groups(
     print(f"Total named parameters: {total_named_params}")
 
     print(f"Frozen {frozen_count} parameter groups")
+    # Maintain order for lr updates consistency
     optim_groups = [
         {
             "params": emb_params,

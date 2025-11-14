@@ -71,7 +71,7 @@ class DynaFormer(DynaPretrainedModel):
         self.n_layers = config.n_layers
         self.n_repeats = config.n_repeats
         self.repeat_residual = config.repeat_residual
-        self.min_loop_layers = self.n_repeats
+        self.active_repeats = self.n_repeats
         self.loop_normalization = config.loop_normalization
         if self.loop_normalization:
             self.loop_norm = torch.nn.LayerNorm(config.d_model)
@@ -103,6 +103,7 @@ class DynaFormer(DynaPretrainedModel):
         self.loop_hyper_params = config.loop_hyper_params
         self.cp_alpha = config.cp_alpha
         self.d_model = config.d_model
+        self.init_sigma = config.init_sigma
 
     def _construct_layers(self, config):
         """Constructs the layers of the transformer model.
@@ -189,10 +190,11 @@ class DynaFormer(DynaPretrainedModel):
         self._exit_logits = []
         self._expert_sel = []
         # Initialize layer parameters
-        scale = 0.02 / math.sqrt(self.current_width / self.base_width)
+        input_proj = self.init_sigma / math.sqrt(self.current_width / self.base_width)
+        output_proj = self.init_sigma / math.sqrt(2 * self.n_layers * self.current_width / self.base_width)
         for layer in self.modules():
             if isinstance(layer, DynaModule):
-                layer.reset_parameters(scale, scale)
+                layer.reset_parameters(input_proj, output_proj)
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.use_reg_loss:
@@ -248,12 +250,12 @@ class DynaFormer(DynaPretrainedModel):
             sequence_length,
             e,
         )
+        self._get_repeat_number()
 
         x, energy_per_sample, layer_index = self.body(
             x,
             attention_mask,
             sequence_length,
-            self._get_repeat_number(),
             e,
             reinjection_embeddings,
             layer_index,
@@ -269,18 +271,12 @@ class DynaFormer(DynaPretrainedModel):
 
         return x, energy_per_sample
 
-    def _get_repeat_number(self) -> int:
+    def _get_repeat_number(self):
         if not self.sample_iterations:
-            return self.n_repeats
+            self.active_repeats = self.n_repeats
+            return
         # uniform sampling
-        a = random.randint(1, self.n_repeats)
-        print(f"We have sampled {a} iterations")
-        return a
-        # Gaussian sampling
-        # TODO: Implement lambda sampling
-        # Lambda sampling
-        # TODO: Implement lambda sampling
-        return 0
+        self.active_repeats = random.randint(1, self.n_repeats)
 
     def head(
         self,
@@ -322,7 +318,6 @@ class DynaFormer(DynaPretrainedModel):
         x: Float[Tensor, "batch seq d_model"],
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
-        repeats: int,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         reinjection_embeddings: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
@@ -336,7 +331,7 @@ class DynaFormer(DynaPretrainedModel):
         continue_mask = None
         energy_per_sample = None
         # multiple_out = None
-        for i in range(repeats):
+        for i in range(self.active_repeats):
             if self.repeat_residual:
                 residual_embeddings = x.clone()
             for layer in self.body_layers:

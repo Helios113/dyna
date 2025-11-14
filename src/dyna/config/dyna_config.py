@@ -22,6 +22,7 @@ class DynaConfig(PretrainedConfig):
 
         # Required parameters with defaults from model_config
         self.vocab_size = kwargs.pop("vocab_size", 49152)
+        self.init_sigma = kwargs.pop("init_sigma", 0.02)
         self.d_model = kwargs.pop("d_model", 412)
         self.n_repeats = kwargs.pop("n_repeats", 18)
         self.n_heads = kwargs.pop("n_heads", 4)

@@ -204,11 +204,11 @@ class LayerModule(Module, ABC):
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
-
-                    scale_factor = layer_index / (layer_index - 1) ** (-self.cp_alpha)
+                    scale_factor = (layer_index - 1)/layer_index 
                     update_factor: float = (layer_index / self.base_depth) ** (
                         -self.cp_alpha
                     )
+                    # print(f"Scale factor: {scale_factor}, Update factor: {update_factor}", flush=True)
                     residual_stream = (
                         scale_factor * residual_stream + update * update_factor
                     )

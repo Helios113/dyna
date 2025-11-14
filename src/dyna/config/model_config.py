@@ -16,6 +16,7 @@ class ModelConfig:
     execution_mode: ExecutionMode = ExecutionMode.moe
     transformer_type: TransformerType = TransformerType.dyna
     vocab_size: int = 49152
+    init_sigma: float = 0.02
     max_seq_len: int = 2048
     d_model: int = 1024
     d_ffn: int = 4096

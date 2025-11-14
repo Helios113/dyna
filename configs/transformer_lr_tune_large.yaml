@@ -12,10 +12,10 @@ sweep_config:
         goal: minimize
     parameters:
         optimizer_config.lr:
-            distribution: q_uniform
-            q: 1e-5
+            distribution: log_uniform_values
             min: 1e-5
             max: 1e-1
+
     early_terminate:
         type: hyperband
         s: 2
@@ -32,7 +32,7 @@ execute_config:
         n_heads: 12
         d_head: 64
         n_layers: 12
-        vocab_size: 49152
+        vocab_size: 50368
         max_seq_len: 1024
         n_expert_shared_attn: 0
         n_expert_shared_ffn: 0
@@ -45,19 +45,20 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
-        base_depth: 12
+        base_depth: 2
         current_depth: 12
-        base_width: 768
+        base_width: 256
         current_width: 768
         cp_alpha: 1
         sqrt_attention_scale: False
+        # use_embedding_norm: true
     train:
-        max_duration: "300ba"
-        warmup: "600ba"
-        cooldown: "100ba"
+        max_duration: "50ba"
+        warmup: "634ba"
+        cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "sweep_large"
+        run_name: "loop_lr_tune_large"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32

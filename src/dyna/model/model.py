@@ -163,10 +163,11 @@ class DynaLM(DynaPretrainedModel):
         self.head_size = config.head_size
         self.tail_size = config.tail_size
         self.n_layers = config.n_layers
+        self.init_sigma = config.init_sigma
 
     def reset_parameters(self):
-        torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=0.02)
-        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+        torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=self.init_sigma)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.init_sigma)
 
         self.transformer.reset_parameters()
 
