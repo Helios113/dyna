@@ -1,5 +1,5 @@
 lr_monitor: {}
-lr_scale_callback: 
+lr_scale_callback:
     eps: ${optimizer_config.eps}
 clean_metrics:
     interval: 100

@@ -6,7 +6,6 @@ import hydra
 import torch
 import wandb
 from composer import Trainer
-
 from composer.algorithms import GradientClipping
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW
@@ -197,7 +196,22 @@ def main(cfg: DictConfig):
     if cfg.get("sweep_config", False):
         # if False:
         sweep_config = cast(dict, OmegaConf.to_container(cfg.sweep_config))
-        prior_runs = ["zweb7bw7", "nkuogiad", "zkayf8v2","v2aygopn","fn5hzsor","tn5dygbd","6zpgmura","1oxetbt8","xcawownx","dah2p4y4","eexp9hws","2cufxwb9","4r52cs1v","rbcnrjw0"]  # List of prior run IDs to avoid duplicates
+        prior_runs = [
+            "zweb7bw7",
+            "nkuogiad",
+            "zkayf8v2",
+            "v2aygopn",
+            "fn5hzsor",
+            "tn5dygbd",
+            "6zpgmura",
+            "1oxetbt8",
+            "xcawownx",
+            "dah2p4y4",
+            "eexp9hws",
+            "2cufxwb9",
+            "4r52cs1v",
+            "rbcnrjw0",
+        ]  # List of prior run IDs to avoid duplicates
         sweep_id = wandb.sweep(sweep_config, project="dyna", prior_runs=prior_runs)
 
         def sweep_wrapper():

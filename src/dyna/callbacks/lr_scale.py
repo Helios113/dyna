@@ -20,7 +20,7 @@ class LrScaleCallback(Callback):
             if isinstance(log_interval, str)
             else Time(log_interval, TimeUnit.BATCH)
         )
-        self.eps=  eps
+        self.eps = eps
 
     def _should_log(self, state: State) -> bool:
         """Determine if it's time to log based on the log_interval."""
@@ -40,9 +40,12 @@ class LrScaleCallback(Callback):
         base_width = state.model.model.transformer.base_width
         current_width = state.model.model.transformer.current_width
         base_depth = state.model.model.transformer.base_depth
-        
-        current_depth = state.model.model.transformer.active_repeats * state.model.model.transformer.n_layers
-        depth_lr_scaling = (current_depth / base_depth)
+
+        current_depth = (
+            state.model.model.transformer.active_repeats
+            * state.model.model.transformer.n_layers
+        )
+        depth_lr_scaling = current_depth / base_depth
         width_lr_scaling = (current_width / base_width) ** (-1)
 
         adam_eps = (
@@ -51,30 +54,30 @@ class LrScaleCallback(Callback):
             * (current_depth / base_depth) ** (-1)
         )
         optim_groups = [
-        {
-            "lr_scale": 1.0,
-            "eps": self.eps,
-        },
-        {
-            "lr_scale": depth_lr_scaling,
-            "eps": adam_eps,
-        },
-        {
-            "lr_scale": width_lr_scaling * depth_lr_scaling,
-            "eps": adam_eps,
-        },
-        {
-            "lr_scale": depth_lr_scaling,
-            "eps": adam_eps,
-        },
-        {
-        "lr_scale": 1.0,
-            "eps": adam_eps,
-        },
-        {
-            "lr_scale": 1.0,
-            "eps": self.eps,
-        },
+            {
+                "lr_scale": 1.0,
+                "eps": self.eps,
+            },
+            {
+                "lr_scale": depth_lr_scaling,
+                "eps": adam_eps,
+            },
+            {
+                "lr_scale": width_lr_scaling * depth_lr_scaling,
+                "eps": adam_eps,
+            },
+            {
+                "lr_scale": depth_lr_scaling,
+                "eps": adam_eps,
+            },
+            {
+                "lr_scale": 1.0,
+                "eps": adam_eps,
+            },
+            {
+                "lr_scale": 1.0,
+                "eps": self.eps,
+            },
         ]
         for idx, ob in enumerate(state.optimizers[0].param_groups):
             for j in ob:

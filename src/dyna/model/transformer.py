@@ -191,7 +191,9 @@ class DynaFormer(DynaPretrainedModel):
         self._expert_sel = []
         # Initialize layer parameters
         input_proj = self.init_sigma / math.sqrt(self.current_width / self.base_width)
-        output_proj = self.init_sigma / math.sqrt(2 * self.n_layers * self.current_width / self.base_width)
+        output_proj = self.init_sigma / math.sqrt(
+            2 * self.n_layers * self.current_width / self.base_width
+        )
         for layer in self.modules():
             if isinstance(layer, DynaModule):
                 layer.reset_parameters(input_proj, output_proj)

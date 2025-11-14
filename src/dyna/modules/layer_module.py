@@ -204,7 +204,7 @@ class LayerModule(Module, ABC):
                     )
                 else:
                     # Apply to all tokens when early exit is disabled
-                    scale_factor = (layer_index - 1)/layer_index 
+                    scale_factor = (layer_index - 1) / layer_index
                     update_factor: float = (layer_index / self.base_depth) ** (
                         -self.cp_alpha
                     )
