@@ -4,12 +4,11 @@ from dyna.callbacks.abbie_number import AbbieNumberCallback
 from dyna.callbacks.clean_stats import CleanMetrics
 from dyna.callbacks.entropy_callback import ShannonEntropyCallback
 from dyna.callbacks.expert_selection_callback import ExpertSelectionCallback
+from dyna.callbacks.gradient_noise import GradientNoiseScaleMonitor
 from dyna.callbacks.layer_usage_monitor import LayerUsageMonitor
 from dyna.callbacks.loop_number_callback import LoopNumberCallback
 from dyna.callbacks.lr_scale import LrScaleCallback
 from dyna.callbacks.residual_stream_mag_callback import ResidualMagnitudeCallback
-from dyna.callbacks.gradient_noise import GradientNoiseScaleMonitor
-
 
 __all__ = [
     "LayerUsageMonitor",
@@ -20,7 +19,7 @@ __all__ = [
     "LoopNumberCallback",
     "AbbieNumberCallback",
     "LrScaleCallback",
-    'GradientNoiseScaleMonitor'
+    "GradientNoiseScaleMonitor",
 ]
 
 
@@ -36,4 +35,3 @@ callbacks.register("loop_number_callback", func=LoopNumberCallback)
 callbacks.register("abbie_number_callback", func=AbbieNumberCallback)
 callbacks.register("lr_scale_callback", func=LrScaleCallback)
 callbacks.register("gradient_noise_scale", func=GradientNoiseScaleMonitor)
-
