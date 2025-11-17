@@ -100,7 +100,6 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     #     ["model.embedding.weight", "model.lm_head.weight", "model.out_norm.weight"],
     #     "s3://loop-llm/dyna/1_baseTransformer_22oct25_X1Q0lJ_dim~768_d_ffn~3072_n_l~12_n_h~12_d_hd~64_ee~False_mode~transformer_norm~pre_rescale~none-ba3171.pt",
     # )
-    print("model_structure  ", model, flush=True)
     safe_clean_stale_shared_memory()
     # train_dataloader = build_text_dataloader() for future
     train_dataloader = get_data_loader(
@@ -118,6 +117,9 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         current_width=cfg.model_config.current_width,
         cp_alpha=cfg.model_config.cp_alpha,
     )
+    print("got into param groups", flush=True)
+    # print(f"{params}", flush=True)
+    # exit()
     optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
@@ -196,22 +198,7 @@ def main(cfg: DictConfig):
     if cfg.get("sweep_config", False):
         # if False:
         sweep_config = cast(dict, OmegaConf.to_container(cfg.sweep_config))
-        prior_runs = [
-            "zweb7bw7",
-            "nkuogiad",
-            "zkayf8v2",
-            "v2aygopn",
-            "fn5hzsor",
-            "tn5dygbd",
-            "6zpgmura",
-            "1oxetbt8",
-            "xcawownx",
-            "dah2p4y4",
-            "eexp9hws",
-            "2cufxwb9",
-            "4r52cs1v",
-            "rbcnrjw0",
-        ]  # List of prior run IDs to avoid duplicates
+        prior_runs = []  # List of prior run IDs to avoid duplicates
         sweep_id = wandb.sweep(sweep_config, project="dyna", prior_runs=prior_runs)
 
         def sweep_wrapper():

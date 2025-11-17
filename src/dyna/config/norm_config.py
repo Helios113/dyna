@@ -2,12 +2,14 @@ from dataclasses import asdict, dataclass
 
 from .enums import NormType
 
+import torch.nn.functional as F
 
+F.rms_norm
 @dataclass
 class NormConfig(dict):
     norm_type: NormType | str = NormType.low_precision_rmsnorm
-    attn_eps: float = 0.5
-    ffn_eps: float = 0.5
+    attn_eps: float = 0.0
+    ffn_eps: float = 0.0
 
     def __post_init__(self):
         # Convert string to enum if needed (for state dict loading)

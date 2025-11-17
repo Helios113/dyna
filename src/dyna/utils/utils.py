@@ -453,6 +453,10 @@ def create_param_groups(
             "eps": eps,
         },
     ]
+    for i in optim_groups:
+        print(
+            f"Group with {len(i['params'])} params, wd: {i['weight_decay']}, lr_scale: {i['lr_scale']}, eps: {i['eps']}"
+        )
     return optim_groups
 
 

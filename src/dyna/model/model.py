@@ -128,7 +128,7 @@ class DynaLM(DynaPretrainedModel):
 
         # Model configuration
         self.n_repeats = config.n_repeats
-        self.n_layers = config.n_repeats
+        self.n_layers = config.n_layers
 
         self.d_model = config.d_model
         self.eos_token_id = eos_token_id
@@ -162,7 +162,6 @@ class DynaLM(DynaPretrainedModel):
         )
         self.head_size = config.head_size
         self.tail_size = config.tail_size
-        self.n_layers = config.n_layers
         self.init_sigma = config.init_sigma
 
     def reset_parameters(self):
@@ -190,9 +189,6 @@ class DynaLM(DynaPretrainedModel):
         x, attention_mask, src_len_mask = self.embedding_stage(
             input_ids, inputs_embeds, attention_mask, src_len_mask
         )
-
-        assert attention_mask is not None
-        assert src_len_mask is not None
 
         # Prepare protected embeddings if enabled
         if self.rescaling_method in PROT_EMB_RESCALING_METHODS:
@@ -234,8 +230,8 @@ class DynaLM(DynaPretrainedModel):
             # Reg loss for moeut
             if self.use_reg_loss:
                 loss = loss + self.transformer._collect_regularization_loss()
-            else:
-                self.transformer._clear_selection_history()
+            
+            self.transformer._clear_selection_history()
 
         return CausalLMOutputWithPast(
             loss=loss,  # pyright: ignore[reportArgumentType]
@@ -252,8 +248,8 @@ class DynaLM(DynaPretrainedModel):
                 attention_mask = _generate_attention_mask(input_ids, self.eos_token_id)
             if src_len_mask is None:
                 src_len_mask = _generate_source_len_mask(attention_mask)
-        if self.embedding_norm is not None:
-            x = self.embedding_norm(x)
+            if self.embedding_norm is not None:
+                x = self.embedding_norm(x)
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
         return x, attention_mask, src_len_mask
@@ -307,7 +303,7 @@ class ComposerDynaModel(HuggingFaceModel):
             allow_embedding_resizing=True,
         )
 
-        self.model.reset_parameters()
+        # self.model.reset_parameters()
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         return self.model(

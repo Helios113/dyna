@@ -10,18 +10,22 @@ sweep_config:
     metric:
         name: loss/train/total
         goal: minimize
+
     parameters:
         optimizer_config.lr:
             distribution: log_uniform_values
-            min: 1e-5
+            min: 1e-4
             max: 1e-1
+        model_config.init_sigma:
+            distribution: uniform
+            min: 0.02
+            max: 0.1
 
     early_terminate:
         type: hyperband
         s: 2
         eta: 3
-        max_iter: 521
-        min_iter: 100
+        max_iter: 500
 
 execute_config:
     model_config:
@@ -45,15 +49,15 @@ execute_config:
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
-        base_depth: 2
+        base_depth: 12
         current_depth: 12
-        base_width: 256
+        base_width: 768
         current_width: 768
         cp_alpha: 1
         sqrt_attention_scale: False
         # use_embedding_norm: true
     train:
-        max_duration: "50ba"
+        max_duration: "100ba"
         warmup: "634ba"
         cooldown: "634ba"
         device_train_batch_size: 1024

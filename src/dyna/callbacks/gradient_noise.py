@@ -1,259 +1,251 @@
 # Copyright 2022 MosaicML Composer authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Monitor gradient noise scale during training."""
-
-from collections import defaultdict
+"""Monitor gradient statistics and noise across microbatches."""
 
 import torch
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
+import numpy as np
+import wandb
+from typing import Dict, List, Optional, Tuple
+from collections import defaultdict
+
 from composer.core import Callback, State
 from composer.loggers import Logger
 from composer.utils import dist
 
-__all__ = ["GradientNoiseScaleMonitor"]
+__all__ = ['GradientNoiseMonitor']
 
 
-class GradientNoiseScaleMonitor(Callback):
-    """Computes and logs the Gradient Noise Scale (GNS) during training.
-
-    GNS provides a suggestion for a compute-efficient batch size: small enough to be
-    compute efficient and large enough to take advantage of parallelism. This implementation
-    follows the paper "Efficient and Approximate Per-Example Gradient Norms for Gradient
-    Noise Scale" (Gray et al., 2023).
-
-    The callback supports two methods:
-    1. SOGNS (Scaled Output Gradient Noise Scale): Efficient approximation for transformers
-    2. PEPGNS (Per-Example Parameter GNS): Exact computation for 2D tensors
-
+class GradientNoiseMonitor(Callback):
+    """Computes and logs gradient mean, variance, and SNR statistics across microbatches.
+    
+    This callback tracks the accumulated gradients after each microbatch is added and computes
+    the Signal-to-Noise Ratio (SNR) as mean/std across different batch sizes.
+    
+    The SNR (reciprocal of coefficient of variation) shows how the gradient signal
+    quality improves with larger batch sizes.
+    
     Args:
-        batch_log_interval: How often to compute GNS (every N batches)
-        small_batch_size: Size of small batch for variance estimation (default: 1 for per-example)
-        use_approximation: If True, use SOGNS approximation for 3D+ tensors (default: True)
-        accumulation_steps: Number of microbatches to accumulate for small batch gradient estimates
-        log_layer_wise: If True, log GNS per layer in addition to global (default: False)
-
+        microbatch_size: Size of each microbatch (e.g., 16)
+        log_interval: Log statistics every N training steps
+        track_layers: Optional list of layer name patterns to track. If None, tracks all.
+    
     Example:
         >>> from composer import Trainer
-        >>> from composer.callbacks import GradientNoiseScaleMonitor
+        >>> from composer.callbacks import GradientNoiseMonitor
         >>> trainer = Trainer(
         ...     model=model,
         ...     train_dataloader=train_dataloader,
         ...     optimizers=optimizer,
         ...     max_duration="1ep",
-        ...     callbacks=[GradientNoiseScaleMonitor(batch_log_interval=100)],
+        ...     callbacks=[GradientNoiseMonitor(
+        ...         microbatch_size=16,
+        ...         log_interval=10
+        ...     )],
         ... )
-
+    
     Logged metrics:
-    +-----------------------------------------------+-----------------------------------------------------+
-    | Key                                           | Logged data                                         |
-    +===============================================+=====================================================+
-    | ``gns/simple/global``                         | Global gradient noise scale (B_simple)              |
-    +-----------------------------------------------+-----------------------------------------------------+
-    | ``gns/simple/LAYER_NAME``                     | Layer-wise GNS (if log_layer_wise=True)            |
-    +-----------------------------------------------+-----------------------------------------------------+
-    | ``gns/grad_variance/global``                  | Global gradient variance (trace of covariance)      |
-    +-----------------------------------------------+-----------------------------------------------------+
-    | ``gns/grad_mean_norm/global``                 | Global gradient mean squared norm                   |
-    +-----------------------------------------------+-----------------------------------------------------+
+        - grad_snr/{layer_name}/bs_{batch_size}: SNR = mean/std for each layer
+        - grad_mean/{layer_name}/bs_{batch_size}: Mean of accumulated gradients
+        - grad_std/{layer_name}/bs_{batch_size}: Std of accumulated gradients
+        - grad_snr/global/bs_{batch_size}: Global SNR across all parameters
     """
 
     def __init__(
         self,
-        batch_log_interval: int = 100,
-        small_batch_size: int = 1,
-        use_approximation: bool = True,
-        accumulation_steps: int = 10,
-        log_layer_wise: bool = False,
+        microbatch_size: int,
+        log_interval: int = 1,
+        track_layers: Optional[List[str]] = None
     ):
-        self.batch_log_interval = batch_log_interval
-        self.small_batch_size = small_batch_size
-        self.use_approximation = use_approximation
-        self.accumulation_steps = accumulation_steps
-        self.log_layer_wise = log_layer_wise
-
-        # Storage for gradient accumulation
-        self.small_batch_grads: dict[str, list] = defaultdict(list)
-        self.large_batch_grad_norms: dict[str, float] = {}
-        self.microbatch_count = 0
-
-    def _compute_approximate_per_example_norm(
-        self, param: torch.Tensor, grad: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute SOGNS approximation for 3D+ tensors.
-
-        For inputs with shape [batch, seq_len, ...], computes:
-        η²_b = I * σ²_b * Σ_k (Σ_t y'_btk)²
-
-        where σ²_b is the per-example variance of activations.
-        """
-        if grad.dim() < 3:
-            # For 2D tensors, use exact computation
-            return torch.linalg.vector_norm(grad.reshape(grad.shape[0], -1), dim=1)
-
-        # Assume grad has shape [batch, seq_len, ...] or similar
-        batch_size = grad.shape[0]
-
-        # Flatten all dimensions except batch and sequence
-        if grad.dim() == 3:
-            # Standard transformer case: [batch, seq, hidden]
-            grad_reshaped = grad  # [B, T, K]
-        else:
-            # For higher dimensional tensors, flatten non-batch dims
-            grad_reshaped = grad.reshape(batch_size, grad.shape[1], -1)
-
-        B, T, K = grad_reshaped.shape
-        I = K  # Input dimension (approximated)
-
-        # Sum over sequence dimension: [B, K]
-        grad_summed = grad_reshaped.sum(dim=1)
-
-        # Approximate variance (assuming we don't have access to activations)
-        # Using gradient statistics as proxy: σ²_b ≈ mean(grad²) over seq
-        sigma_squared_b = (grad_reshaped**2).mean(dim=(1, 2))  # [B]
-
-        # Compute approximate per-example norm
-        # η²_b = I * σ²_b * Σ_k (Σ_t y'_btk)²
-        eta_squared = I * sigma_squared_b * (grad_summed**2).sum(dim=1)
-
-        return torch.sqrt(eta_squared.clamp(min=1e-10))
-
-    def _compute_per_example_gradient_norms(
-        self,
-        state: State,
-    ) -> dict[str, torch.Tensor]:
-        """Compute per-example gradient norms for all parameters."""
-        per_example_norms = {}
-
+        self.microbatch_size = microbatch_size
+        self.log_interval = log_interval
+        self.track_layers = track_layers
+        
+        # Storage for gradient statistics after each microbatch
+        # {layer_name: [(mean, variance, batch_size), ...]}
+        self.reset_accumulation()
+        
+    def reset_accumulation(self):
+        """Reset accumulated gradient statistics."""
+        self.gradient_stats: Dict[str, List[Tuple[float, float, int]]] = defaultdict(list)
+        self.current_batch_size = 0
+        
+    def _should_track_layer(self, name: str) -> bool:
+        """Check if we should track this layer."""
+        if self.track_layers is None:
+            return True
+        return any(pattern in name for pattern in self.track_layers)
+    
+    def after_backward(self, state: State, logger: Logger):
+        """Store mean and variance of accumulated gradients after each microbatch."""
+        # Increment the current accumulated batch size
+        self.current_batch_size += self.microbatch_size
+        print(f"Accumulated batch size: {self.current_batch_size}", flush=True)
+        # Store statistics for each parameter
         for name, p in state.model.named_parameters():
-            if p.grad is not None and p.requires_grad:
-                if self.use_approximation and p.grad.dim() >= 3:
-                    # Use SOGNS approximation for 3D+ tensors
-                    norms = self._compute_approximate_per_example_norm(p, p.grad)
-                else:
-                    # Exact computation for 2D tensors
-                    # Flatten all non-batch dimensions
-                    grad_flat = p.grad.reshape(p.grad.shape[0], -1)
-                    norms = torch.linalg.vector_norm(grad_flat, dim=1)
-
-                per_example_norms[name] = norms
-
-        return per_example_norms
-
-    def _accumulate_small_batch_gradients(self, state: State):
-        """Accumulate gradients from small batches (microbatches)."""
-        for name, p in state.model.named_parameters():
-            if p.grad is not None and p.requires_grad:
-                # Store gradient norm squared for this microbatch
-                grad_norm_sq = torch.linalg.vector_norm(p.grad) ** 2
-                self.small_batch_grads[name].append(grad_norm_sq.detach().cpu())
-
-        self.microbatch_count += 1
-
-    def _compute_gns_metrics(
-        self,
-        state: State,
-    ) -> dict[str, float]:
-        """Compute GNS using accumulated small batch gradients and current large batch."""
-        metrics = {}
-
-        # Get large batch size from state
-        B_big = (
-            state.timestamp.batch_size.value
-            if hasattr(state.timestamp, "batch_size")
-            else 32
-        )
-        B_small = self.small_batch_size
-
-        if self.microbatch_count == 0 or B_big <= B_small:
-            return metrics
-
-        global_S = 0.0  # Variance estimate (trace of covariance)
-        global_G_sq = 0.0  # Mean gradient norm squared
-
-        for name, p in state.model.named_parameters():
-            if p.grad is not None and p.requires_grad:
-                # Large batch gradient norm squared
-                G_big_sq = torch.linalg.vector_norm(p.grad) ** 2
-
-                # Small batch gradient norm squared (mean of accumulated)
-                if (
-                    name in self.small_batch_grads
-                    and len(self.small_batch_grads[name]) > 0
-                ):
-                    small_grads = torch.stack(self.small_batch_grads[name])
-                    G_small_sq = small_grads.mean()
-
-                    # Unbiased estimators from McCandlish et al. 2018
-                    # |G|² := 1/(B_big - B_small) * (B_big * |G_big|² - B_small * |G_small|²)
-                    G_sq_est = (B_big * G_big_sq - B_small * G_small_sq) / (
-                        B_big - B_small
-                    )
-
-                    # S := 1/(1/B_small - 1/B_big) * (|G_small|² - |G_big|²)
-                    S_est = (G_small_sq - G_big_sq) / (1.0 / B_small - 1.0 / B_big)
-
-                    # Accumulate for global metrics
-                    global_S += S_est.item()
-                    global_G_sq += G_sq_est.item()
-
-                    # Layer-wise metrics
-                    if self.log_layer_wise:
-                        layer_gns = S_est / (G_sq_est + 1e-10)
-                        metrics[f"gns/simple/{name}"] = layer_gns.item()
-
-        # Global GNS
-        if global_G_sq > 0:
-            B_simple = global_S / global_G_sq
-            metrics["gns/simple/global"] = B_simple
-            metrics["gns/grad_variance/global"] = global_S
-            metrics["gns/grad_mean_norm/global"] = global_G_sq
-
-        # Reduce across ranks if distributed
-        if dist.get_world_size() > 1:
-            for key in [
-                "gns/simple/global",
-                "gns/grad_variance/global",
-                "gns/grad_mean_norm/global",
-            ]:
-                if key in metrics:
-                    tensor = torch.tensor(metrics[key], device=state.device)
-                    dist.all_reduce(tensor, reduce_operation="SUM")
-                    metrics[key] = (tensor / dist.get_world_size()).item()
-
-        return metrics
-
-    def after_dataloader(self, state: State, logger: Logger):
-        """Called after the dataloader returns a batch, before forward pass.
-
-        This is where we can capture small batch gradients during accumulation.
-        """
-        # Check if we're in accumulation mode
-        if hasattr(state, "gradient_accumulation") and state.gradient_accumulation > 1:
-            # We're in the middle of accumulation, store these as small batch grads
-            if self.microbatch_count < self.accumulation_steps:
-                # Note: We actually need to do this after backward, not here
-                pass
-
-    def after_train_batch(self, state: State, logger: Logger):
-        """Called after the backward pass and optimizer step."""
-        # Only compute every N batches
-        if state.timestamp.batch.value % self.batch_log_interval != 0:
-            # Still accumulate small batch stats even when not logging
-            if self.microbatch_count < self.accumulation_steps:
-                self._accumulate_small_batch_gradients(state)
+            if p.grad is not None and p.requires_grad and self._should_track_layer(name):
+                # Compute mean and variance of the accumulated gradient
+                grad_mean = p.grad.mean().item()
+                grad_var = p.grad.var().item()
+                
+                # Store (mean, variance, batch_size)
+                self.gradient_stats[name].append((grad_mean, grad_var, self.current_batch_size))
+    
+    def batch_end(self, state: State, logger: Logger):
+        """Compute and log SNR statistics across all accumulated batch sizes."""
+        if state.timestamp.batch.value % self.log_interval != 0:
+            self.reset_accumulation()
             return
+        
+        if len(self.gradient_stats) == 0:
+            self.reset_accumulation()
+            return
+        
+        # Collect data for plotting
+        layer_data = {}  # {layer_name: {'batch_sizes': [], 'snr': [], 'mean': [], 'std': []}}
+        
+        # Compute SNR for each layer at each batch size
+        for name, stats_list in self.gradient_stats.items():
+            layer_data[name] = {
+                'batch_sizes': [],
+                'snr': [],
+                "var" : []
+            }
+            
+            for mean_val, var_val, batch_size in stats_list:
+                print(f"Layer: {name}, Batch Size: {batch_size}, Mean: {mean_val}, Var: {var_val}", flush=True)
+                # Compute std from variance
+                std_val = var_val ** 0.5
+                
+                # Compute SNR as mean/std (reciprocal of coefficient of variation)
+                if std_val > 1e-10:
+                    snr = abs(mean_val) / std_val
+                else:
+                    snr = float('inf') if abs(mean_val) > 1e-10 else 0.0
+                
+                layer_data[name]['batch_sizes'].append(batch_size)
+                layer_data[name]['snr'].append(snr if snr != float('inf') else 1e6)
+                layer_data[name]['var'].append(var_val if var_val != float('inf') else 1e6)
+                
+                
+        
+        # Compute global statistics across all parameters at each batch size
+        batch_sizes = sorted(set(bs for stats_list in self.gradient_stats.values() 
+                                for _, _, bs in stats_list))
+        
+        global_data = {
+            'batch_sizes': [],
+            'snr': [],
+            'var': []
+        }
+        
+        for batch_size in batch_sizes:
+            all_means = []
+            all_vars = []
+            
+            for name, stats_list in self.gradient_stats.items():
+                # Find stats for this batch size
+                for mean_val, var_val, bs in stats_list:
+                    if bs == batch_size:
+                        all_means.append(mean_val)
+                        all_vars.append(var_val)
+                        break
+            
+            if len(all_means) > 0:
+                # Compute global statistics
+                global_mean = sum(all_means) / len(all_means)
+                global_var = sum(all_vars) / len(all_vars)
+                global_std = global_var ** 0.5
+                
+                if global_std > 1e-10:
+                    global_snr = abs(global_mean) / global_std
+                else:
+                    global_snr = float('inf') if abs(global_mean) > 1e-10 else 0.0
+                
+                global_data['batch_sizes'].append(batch_size)
+                global_data['snr'].append(global_snr if global_snr != float('inf') else 1e6)
+                global_data['var'].append(global_var if global_var != float('inf') else 1e6)
+                
+        
+        # Create plots
+        self._create_and_log_plots(layer_data, global_data, logger, state)
+        
+        # Reset for next minibatch
+        self.reset_accumulation()
+    
+    def _create_and_log_plots(self, layer_data: Dict, global_data: Dict, logger: Logger, state: State):
+        """Create matplotlib plots and log to wandb."""
+        
+        metrics_dict = {}
+        
+        # Plot 1: Global SNR vs Batch Size
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(global_data['batch_sizes'], global_data['snr'], 'o-', linewidth=2, markersize=8)
+        ax.set_xlabel('Batch Size', fontsize=12)
+        ax.set_ylabel('SNR (Signal-to-Noise Ratio)', fontsize=12)
+        ax.set_title('Gradient SNR vs Batch Size (Global)', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_xscale('log', base=2)
+        ax.set_yscale('log')
+        plt.tight_layout()
+        
+        # Convert to wandb image and store in metrics
+        metrics_dict['gradient_noise/global_snr'] = self._fig_to_wandb_image(fig)
+        # Plot 1: Global SNR vs Batch Size
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(global_data['batch_sizes'], global_data['var'], 'o-', linewidth=2, markersize=8)
+        ax.set_xlabel('Batch Size', fontsize=12)
+        ax.set_ylabel('Var', fontsize=12)
+        ax.set_title('Gradient SNR vs Batch Size (Global)', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        # ax.set_xscale('log', base=2)
+        # ax.set_yscale('log')
+        plt.tight_layout()
+        
+        # Convert to wandb image and store in metrics
+        metrics_dict['gradient_noise/global_var'] = self._fig_to_wandb_image(fig)
+        
+        
+        # Plot 3: SNR for bottom layers (by final SNR)
+        # Sort layers by their final SNR value (lowest first)
+        print("layer_data", layer_data, flush=True)
+        layer_final_snr = {name: data['snr'][-1] for name, data in layer_data.items()}
+        bottom_layers = sorted(layer_final_snr.items(), key=lambda x: x[1], reverse=False)[:10]
+        
+        if len(bottom_layers) > 0:
+            fig, ax = plt.subplots(figsize=(12, 7))
+            
+            for layer_name, _ in bottom_layers:
+                data = layer_data[layer_name]
+                # Truncate long layer names for legend
+                short_name = layer_name.split('.')[-1] if len(layer_name) > 30 else layer_name
+                ax.plot(data['batch_sizes'], data['snr'], 'o-', label=short_name, alpha=0.7)
+            
+            ax.set_xlabel('Batch Size', fontsize=12)
+            ax.set_ylabel('SNR (Signal-to-Noise Ratio)', fontsize=12)
+            ax.set_title('Gradient SNR vs Batch Size (Bottom 10 Layers)', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.set_xscale('log', base=2)
+            ax.set_yscale('log')
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+            plt.tight_layout()
+            
+            metrics_dict['gradient_noise/bottom_layers'] = self._fig_to_wandb_image(fig)
+        
+        # Log all metrics at once
+        logger.log_metrics(metrics_dict)
+    
+    def _fig_to_wandb_image(self, fig) -> wandb.Image:
+        """Convert matplotlib figure to wandb Image."""
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        buf.seek(0)
 
-        # Accumulate small batch gradient norms
-        if self.microbatch_count < self.accumulation_steps:
-            self._accumulate_small_batch_gradients(state)
-
-        # Compute GNS metrics
-        if self.microbatch_count >= self.accumulation_steps:
-            metrics = self._compute_gns_metrics(state)
-
-            if metrics:
-                logger.log_metrics(metrics)
-
-        # Reset accumulation
-        self.small_batch_grads.clear()
-        self.microbatch_count = 0
+        # Create wandb image from PIL Image
+        pil_img = Image.open(buf)
+        img = wandb.Image(pil_img)
+        plt.close(fig)
+        return img

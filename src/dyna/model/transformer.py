@@ -70,8 +70,9 @@ class DynaFormer(DynaPretrainedModel):
         # Looping behaviour
         self.n_layers = config.n_layers
         self.n_repeats = config.n_repeats
-        self.repeat_residual = config.repeat_residual
         self.active_repeats = self.n_repeats
+        
+        self.repeat_residual = config.repeat_residual
         self.loop_normalization = config.loop_normalization
         if self.loop_normalization:
             self.loop_norm = torch.nn.LayerNorm(config.d_model)
@@ -233,6 +234,8 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         input_ids: Int[Tensor, "batch seq"] | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
+        
+        # Culprit
         if input_ids is not None:
             _labels = torch.roll(input_ids, shifts=-1)
             _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
@@ -245,7 +248,8 @@ class DynaFormer(DynaPretrainedModel):
         self._latent_vectors.append([])
         self._seq_len.append([])
         self._residual_magnitudes.append([])
-
+        print("Inside DynaFormer forward", flush=True)
+        print("head and tail are none (true,true):", self.head_layers is None, self.tail_layers is None, flush=True)
         x, reinjection_embeddings, layer_index = self.head(
             x,
             attention_mask,
@@ -275,6 +279,7 @@ class DynaFormer(DynaPretrainedModel):
 
     def _get_repeat_number(self):
         if not self.sample_iterations:
+            print("Not sampling iterations", flush=True)
             self.active_repeats = self.n_repeats
             return
         # uniform sampling
@@ -370,7 +375,7 @@ class DynaFormer(DynaPretrainedModel):
             if not continue_processing:
                 break
             # multiple_out = multiple_out + x if multiple_out is not None else x
-        assert layer_index is not None
+        # assert layer_index is not None
 
         return x, energy_per_sample, layer_index
 
@@ -449,10 +454,10 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         layer_index: int | None = None,
     ) -> Float[Tensor, "batch seq d_model"]:
-        if layer_index is None:
-            layer_index = 0
         if self.tail_layers is None:
             return x
+        if layer_index is None:
+            layer_index = 0
         for layer in self.tail_layers:
             x, expert_sel, _, layer_index = layer(
                 x=x,

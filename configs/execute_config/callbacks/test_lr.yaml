@@ -1,6 +1,8 @@
 lr_monitor: {}
-lr_scale_callback:
-    eps: ${optimizer_config.eps}
+# lr_scale_callback:
+#     eps: ${optimizer_config.eps}
+gradient_noise_callback:
+    microbatch_size: ${trainer_config.device_train_microbatch_size}
 clean_metrics:
     interval: 100
 speed_monitor:

@@ -114,12 +114,12 @@ class AttentionModule(DynaModule):
         """Optimized rotary position encoding application."""
         sin, cos = self.get_sincos_positions(x, positions)
 
-        # Get sequence length once
-        seq_len = x.shape[self.seq_dim]
+        # # Get sequence length once
+        # seq_len = x.shape[self.seq_dim]
 
-        # Use slice instead of narrow (more readable, same performance)
-        sin = sin[..., :seq_len, :]
-        cos = cos[..., :seq_len, :]
+        # # Use slice instead of narrow (more readable, same performance)
+        # sin = sin[..., :seq_len, :]
+        # cos = cos[..., :seq_len, :]
         return x * cos + self.rotate_half_optimized(x) * sin
 
     def rotate_half_optimized(self, x: torch.Tensor) -> torch.Tensor:
