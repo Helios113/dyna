@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import math
 
 import torch
 
@@ -31,6 +32,11 @@ class BasicFFN(DynaModule):
         return (down_output, None)
 
     def reset_parameters(self, input_proj: float, output_projection: float) -> None:
+        # torch.nn.init.normal_(self.projection_up.weight, 0, input_proj / math.sqrt(self.d_model))
+        # torch.nn.init.normal_(self.projection_down.weight, 0, input_proj / math.sqrt(self.d_model))
+        # torch.nn.init.zeros_(self.projection_up.bias)
+        # torch.nn.init.zeros_(self.projection_down.bias)
+        torch.manual_seed(42)
         torch.nn.init.normal_(self.projection_up.weight, 0, input_proj)
         torch.nn.init.normal_(self.projection_down.weight, 0, output_projection)
         torch.nn.init.zeros_(self.projection_up.bias)

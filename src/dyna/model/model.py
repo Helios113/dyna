@@ -165,9 +165,13 @@ class DynaLM(DynaPretrainedModel):
         self.init_sigma = config.init_sigma
 
     def reset_parameters(self):
+        torch.manual_seed(42)
         torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=self.init_sigma)
-        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.init_sigma)
-
+        # torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.init_sigma)
+        # torch.nn.init.kaiming_normal_(
+        #     self.embedding.weight, mode="fan_in", nonlinearity="linear"
+        # )
+        # self.transformer.reset_parameters()
         self.transformer.reset_parameters()
 
     def forward(
@@ -208,6 +212,7 @@ class DynaLM(DynaPretrainedModel):
         # Calculate the loss
         loss = None
         if labels is not None:
+            print("Calculating loss in DynaLM", flush=True)
             _labels = torch.roll(labels, shifts=-1)
             _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
             losses = torch.nn.functional.cross_entropy(
@@ -303,7 +308,7 @@ class ComposerDynaModel(HuggingFaceModel):
             allow_embedding_resizing=True,
         )
 
-        # self.model.reset_parameters()
+        self.model.reset_parameters()
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         return self.model(
@@ -313,17 +318,17 @@ class ComposerDynaModel(HuggingFaceModel):
             attention_mask=batch.get("attention_mask", None),
         )
 
-    def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
-        labels = batch["labels"]
-        logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
-        _labels = torch.roll(labels, shifts=-1)
-        _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-        loss = torch.nn.functional.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            _labels.to(logits.device).view(-1),
-        )
-        # I want to see the gradient pathway to the q weights
-        # loss.backward(retain_graph=True)
-        # print(self.model.transformer.attention_modules[0].q_linear.weight.grad)
+    # def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
+    #     print("Calculating loss in composer", flush=True)
+        
+    #     labels = batch["labels"]
+    #     logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
+    #     _labels = torch.roll(labels, shifts=-1)
+    #     _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+    #     loss = torch.nn.functional.cross_entropy(
+    #         logits.view(-1, logits.size(-1)),
+    #         _labels.to(logits.device).view(-1),
+    #     )
+    #     loss = loss.flatten()
 
-        return loss
+    #     return loss

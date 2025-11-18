@@ -195,6 +195,9 @@ class DynaFormer(DynaPretrainedModel):
         output_proj = self.init_sigma / math.sqrt(
             2 * self.n_layers * self.current_width / self.base_width
         )
+        # input_proj = math.sqrt(2 / (self.n_repeats * self.n_layers))
+        # output_proj = math.sqrt(2 / (self.n_repeats * self.n_layers))
+        
         for layer in self.modules():
             if isinstance(layer, DynaModule):
                 layer.reset_parameters(input_proj, output_proj)
@@ -235,11 +238,6 @@ class DynaFormer(DynaPretrainedModel):
         input_ids: Int[Tensor, "batch seq"] | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
         
-        # Culprit
-        if input_ids is not None:
-            _labels = torch.roll(input_ids, shifts=-1)
-            _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-
         # logging data containers
         # !!! if we provide and e, we expect that x is zeros
 

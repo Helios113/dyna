@@ -46,7 +46,6 @@ class ModelConfig:
     run_id: str | None = None
     sample_iterations: bool = False
     repeat_residual: bool = False
-    perfiery_size: int = 2
     nope_pos: bool = False
     use_reg_loss: bool = False
     use_embedding_norm: bool = False

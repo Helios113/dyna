@@ -2,9 +2,6 @@ from dataclasses import asdict, dataclass
 
 from .enums import NormType
 
-import torch.nn.functional as F
-
-F.rms_norm
 @dataclass
 class NormConfig(dict):
     norm_type: NormType | str = NormType.low_precision_rmsnorm

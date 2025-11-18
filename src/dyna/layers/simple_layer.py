@@ -54,6 +54,7 @@ class SimpleLayer(LayerModule):
     ]:
         """Forward pass through the layer with configurable behavior."""
         if self.input_reinjection and reinjection_embeddings is not None:
+            print("Using input reinjection", flush=True)
             assert self.input_projection is not None, "Input projection must be defined"
             # Concatenate along the feature dimension
             x = torch.cat((x, reinjection_embeddings), dim=-1)
@@ -61,8 +62,6 @@ class SimpleLayer(LayerModule):
             x = self.input_projection(x)
 
         q_val, k_val, v_val = self._apply_pre_norm_attn(x + e if e is not None else x)
-        assert torch.allclose(q_val, k_val), "QKV are different"
-        assert torch.allclose(q_val, v_val), "QKV are different"
         att_out, expert_sel_attn = self.attention(
             q_val,
             k_val,

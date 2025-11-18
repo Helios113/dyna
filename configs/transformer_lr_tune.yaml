@@ -57,6 +57,7 @@ execute_config:
         current_width: 256
         cp_alpha: 1
         sqrt_attention_scale: False
+        use_embedding_norm: True
     train:
         max_duration: "521ba"
         warmup: "100ba"

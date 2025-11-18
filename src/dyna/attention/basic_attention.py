@@ -1,3 +1,4 @@
+import math
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -41,12 +42,18 @@ class BasicAttn(AttentionModule):
 
     def reset_parameters(self, input_proj: float, output_proj: float) -> None:
         # Initialize projection parameters
+        torch.manual_seed(42)
         torch.nn.init.normal_(self.k.weight, 0, input_proj)
-
         torch.nn.init.normal_(self.q.weight, 0, input_proj)
         torch.nn.init.normal_(self.v.weight, 0, input_proj)
         # FIX: Use proper scaling for output projection
         torch.nn.init.normal_(self.o.weight, 0, output_proj)
+        # torch.nn.init.normal_(self.k.weight, 0, input_proj / math.sqrt(self.d_model))
+        # torch.nn.init.normal_(self.q.weight, 0, input_proj / math.sqrt(self.d_model))
+        # torch.nn.init.normal_(self.v.weight, 0, input_proj / math.sqrt(self.d_model))
+        # torch.nn.init.normal_(self.o.weight, 0, input_proj / math.sqrt(self.d_model))
+        
+        
 
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss.
