@@ -1,0 +1,33 @@
+# Minimal evaluation configuration for quick testing
+# Usage: python eval.py --config-name=eval_minimal
+
+seed: 42
+precision: fp32
+device: cpu
+python_log_level: INFO
+
+model:
+  dim: 256
+  d_ffn: 1024
+  n_layers: 4
+  n_heads: 4
+  d_head: 64
+  vocab_size: 49152
+  max_seq_len: 512
+  mode: transformer
+  enable_early_exit: false
+  norm_type: pre
+  rescale_type: none
+  base_depth: 4
+  current_depth: 4
+  base_width: 256
+  current_width: 256
+  cp_alpha: 1.0
+
+tokenizer:
+  name: HuggingFaceTB/SmolLM2-1.7B
+  kwargs:
+    trust_remote_code: true
+
+# Optional checkpoint path
+# load_path: /path/to/checkpoint.pt

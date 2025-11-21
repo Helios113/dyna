@@ -1,0 +1,90 @@
+# Example evaluation configuration for Dyna models
+# Based on LLM Foundry eval.py pattern with Hydra integration
+# 
+# Usage:
+#   python eval.py                                    # Uses this default config
+#   python eval.py --config-name=eval_example         # Explicitly use this config
+#   python eval.py device=cpu                         # Override device parameter
+#   python eval.py load_path=/path/to/checkpoint.pt   # Load checkpoint
+#   python eval.py device=cpu precision=fp32 seed=123 # Multiple overrides
+
+# Evaluation Parameters
+seed: 42
+precision: amp_bf16
+device: gpu
+dist_timeout: 300.0
+python_log_level: INFO
+run_name: dyna_eval
+
+# Model Configuration (single model format - training style)
+model:
+  # Model architecture parameters
+  dim: 768
+  d_ffn: 3072
+  n_layers: 12
+  n_heads: 12
+  d_head: 64
+  vocab_size: 49152
+  max_seq_len: 2048
+  
+  # Model behavior
+  mode: transformer
+  enable_early_exit: false
+  norm_type: pre
+  rescale_type: none
+  
+  # Depth and width parameters
+  base_depth: 12
+  current_depth: 12
+  base_width: 768
+  current_width: 768
+  cp_alpha: 1.0
+  
+  # Device configuration
+  init_device: cpu
+
+# Tokenizer Configuration
+tokenizer:
+  name: HuggingFaceTB/SmolLM2-1.7B
+  kwargs:
+    trust_remote_code: true
+
+# Path to checkpoint to load (optional)
+# load_path: /path/to/checkpoint.pt
+
+# Loggers
+loggers:
+  wandb:
+    project: dyna_eval
+    log_artifacts: false
+    name: ${run_name}
+
+# Callbacks (optional)
+callbacks: {}
+
+# Alternative: Multiple models format (eval style)
+# Uncomment to evaluate multiple models
+# models:
+#   - model_name: dyna_model_1
+#     model:
+#       dim: 768
+#       d_ffn: 3072
+#       n_layers: 12
+#       # ... other model params
+#     tokenizer:
+#       name: HuggingFaceTB/SmolLM2-1.7B
+#       kwargs:
+#         trust_remote_code: true
+#     load_path: /path/to/checkpoint1.pt
+#   
+#   - model_name: dyna_model_2
+#     model:
+#       dim: 512
+#       d_ffn: 2048
+#       n_layers: 8
+#       # ... other model params
+#     tokenizer:
+#       name: HuggingFaceTB/SmolLM2-1.7B
+#       kwargs:
+#         trust_remote_code: true
+#     load_path: /path/to/checkpoint2.pt

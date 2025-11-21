@@ -9,6 +9,7 @@
 !tests/
 !tests/**
 !main_sweep.py
+!eval.py
 !.pre-commit-config.yaml
 !pyproject.toml
 !README.md
