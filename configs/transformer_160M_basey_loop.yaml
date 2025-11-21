@@ -5,45 +5,16 @@ defaults:
     - execute_config/data_config: smoll
     - execute_config/optimizer_config: adamw
     - execute_config/fsdp_config: null
-sweep_config:
-    method: bayes
-    metric:
-        name: loss/train/total
-        goal: minimize
-
-    parameters:
-        optimizer_config.lr:
-            distribution: q_uniform
-            min: 1e-4
-            max: 1e-2
-            q: 1e-4
-        optimizer_config.weight_decay:
-            distribution: q_uniform
-            min: 1e-6
-            max: 1e-4
-            q: 1e-6
-        model_config.init_sigma:
-            distribution: q_uniform
-            min: 0.01
-            max: 0.1
-            q: 0.01
-    early_terminate:
-        type: hyperband
-        s: 2
-        eta: 3
-        max_iter: 500
-        min_iter: 100
-
 
 execute_config:
     model_config:
         execution_mode: transformer
-        d_model: 256
-        d_ffn: 1024
-        n_repeats: 1
-        n_heads: 4
+        d_model: 768
+        d_ffn: 3072
+        n_repeats: 2
+        n_heads: 12
         d_head: 64
-        n_layers: 2
+        n_layers: 6
         vocab_size: 50368
         max_seq_len: 1024
         n_expert_shared_attn: 0
@@ -58,24 +29,25 @@ execute_config:
         transformer_type: dyna
         layer_type: simple
         base_depth: 2
-        current_depth: 2
+        current_depth: 12
         base_width: 256
-        current_width: 256
+        current_width: 768
         cp_alpha: 1
         sqrt_attention_scale: False
         use_embedding_norm: False
+        init_sigma: 0.02
     train:
-        max_duration: "521ba"
-        warmup: "100ba"
-        cooldown: "100ba"
+        max_duration: "3171ba"
+        warmup: "634ba"
+        cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "sweep_fin"
+        run_name: "loop"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32
         precision: "amp_bf16"
         device: "gpu"
-        # save_folder: "s3://loop-llm/dyna/"
-        save_folder: null
+        save_folder: "s3://loop-llm/dyna/"
+        # save_folder: null
         save_interval: "100ba"

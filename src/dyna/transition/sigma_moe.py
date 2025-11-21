@@ -65,8 +65,12 @@ class SigmaMoE(DynaModule):
 
         self.sel_hist = []
 
-    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
+    def reset_parameters(self, scale: float) -> None:
         """Initialize parameters with proper scaling."""
+        torch.manual_seed(42)
+        # Use muP scaling for FFN weights
+        ffn_scale = scale  # scale already includes width scaling from model
+        
         torch.nn.init.normal_(self.keys, 0, ffn_scale)
         torch.nn.init.normal_(
             self.values,

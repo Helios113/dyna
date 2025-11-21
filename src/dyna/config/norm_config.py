@@ -5,8 +5,8 @@ from .enums import NormType
 @dataclass
 class NormConfig(dict):
     norm_type: NormType | str = NormType.low_precision_rmsnorm
-    attn_eps: float = 0.0
-    ffn_eps: float = 0.0
+    attn_eps: float = 0
+    ffn_eps: float = 0
 
     def __post_init__(self):
         # Convert string to enum if needed (for state dict loading)

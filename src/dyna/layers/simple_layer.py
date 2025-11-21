@@ -87,6 +87,8 @@ class SimpleLayer(LayerModule):
         saturation_event = None
         if self.saturation_detector is not None:
             saturation_event = self.saturation_detector(ffn_out)
+            
+            
         x, layer_index = self._apply_update_to_residual(
             x, ffn_out, continue_mask, layer_index, self.ffn_post, e
         )

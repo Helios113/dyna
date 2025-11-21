@@ -37,10 +37,10 @@ def calc_entropy(
     """
     # entropy = 0
     # for logits in chunks:
-    logits = chunks.cpu()
+    logits = chunks.detach()
     probs = torch.softmax(logits / temperature, dim=-1)
     log_probs = torch.log(probs + 1e-8)
-    entropy = -torch.sum(probs * log_probs, dim=-1).detach()
+    entropy = -torch.sum(probs * log_probs, dim=-1).cpu()
     return entropy
 
 
@@ -97,14 +97,9 @@ class DynaFormer(DynaPretrainedModel):
         self._construct_layers(config)
 
         # Use the the inint block length for this value
-        self.base_depth = config.base_depth
-        self.current_depth = config.current_depth
-        self.base_width = config.base_width
-        self.current_width = config.current_width
+
         self.loop_hyper_params = config.loop_hyper_params
-        self.cp_alpha = config.cp_alpha
-        self.d_model = config.d_model
-        self.init_sigma = config.init_sigma
+        
 
     def _construct_layers(self, config):
         """Constructs the layers of the transformer model.
@@ -182,7 +177,7 @@ class DynaFormer(DynaPretrainedModel):
                     f"{config.execution_mode} needs to be one of {ExecutionMode}"
                 )
 
-    def reset_parameters(self) -> None:
+    def reset_parameters(self, scale) -> None:
         """Initialize all model parameters."""
         # Initialize tracking variables
         self._seq_len = []
@@ -191,16 +186,11 @@ class DynaFormer(DynaPretrainedModel):
         self._exit_logits = []
         self._expert_sel = []
         # Initialize layer parameters
-        input_proj = self.init_sigma / math.sqrt(self.current_width / self.base_width)
-        output_proj = self.init_sigma / math.sqrt(
-            2 * self.n_layers * self.current_width / self.base_width
-        )
-        # input_proj = math.sqrt(2 / (self.n_repeats * self.n_layers))
-        # output_proj = math.sqrt(2 / (self.n_repeats * self.n_layers))
-        
         for layer in self.modules():
             if isinstance(layer, DynaModule):
-                layer.reset_parameters(input_proj, output_proj)
+                layer.reset_parameters(scale)
+            elif isinstance(layer, (torch.nn.LayerNorm, torch.nn.RMSNorm)):
+                layer.reset_parameters()
 
     def _collect_regularization_loss(self) -> torch.Tensor:
         if not self.use_reg_loss:
@@ -246,8 +236,6 @@ class DynaFormer(DynaPretrainedModel):
         self._latent_vectors.append([])
         self._seq_len.append([])
         self._residual_magnitudes.append([])
-        print("Inside DynaFormer forward", flush=True)
-        print("head and tail are none (true,true):", self.head_layers is None, self.tail_layers is None, flush=True)
         x, reinjection_embeddings, layer_index = self.head(
             x,
             attention_mask,
@@ -277,7 +265,6 @@ class DynaFormer(DynaPretrainedModel):
 
     def _get_repeat_number(self):
         if not self.sample_iterations:
-            print("Not sampling iterations", flush=True)
             self.active_repeats = self.n_repeats
             return
         # uniform sampling
@@ -493,4 +480,4 @@ class DynaFormer(DynaPretrainedModel):
         )
         if expert_sel[0] is not None:
             self._expert_sel[-1].append(expert_sel)
-        self._residual_magnitudes[-1].append(torch.norm(x.detach(), dim=-1).cpu())
+        self._residual_magnitudes[-1].append(torch.norm(x.detach(), dim=-1))

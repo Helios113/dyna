@@ -1,3 +1,4 @@
+import math
 from typing import cast
 
 import torch
@@ -131,6 +132,7 @@ class DynaLM(DynaPretrainedModel):
         self.n_layers = config.n_layers
 
         self.d_model = config.d_model
+        self.vocab_size = config.vocab_size
         self.eos_token_id = eos_token_id
         self.rescaling_method = config.rescaling_method
         self.use_energy_per_sample = config.use_energy_per_sample
@@ -163,16 +165,21 @@ class DynaLM(DynaPretrainedModel):
         self.head_size = config.head_size
         self.tail_size = config.tail_size
         self.init_sigma = config.init_sigma
-
+        self.base_depth = config.base_depth
+        self.current_depth = config.current_depth
+        self.base_width = config.base_width
+        self.current_width = config.current_width
+        self.cp_alpha = config.cp_alpha
     def reset_parameters(self):
         torch.manual_seed(42)
-        torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=self.init_sigma)
-        # torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.init_sigma)
+        scale = self.init_sigma
+        torch.nn.init.normal_(self.embedding.weight, mean=0.0, std=scale)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=scale)
         # torch.nn.init.kaiming_normal_(
-        #     self.embedding.weight, mode="fan_in", nonlinearity="linear"
+        # self.embedding.weight, mode="fan_in", nonlinearity="linear"
         # )
-        # self.transformer.reset_parameters()
-        self.transformer.reset_parameters()
+        width_multiplier = math.sqrt(self.current_width / self.base_width)
+        self.transformer.reset_parameters(scale/width_multiplier)
 
     def forward(
         self,
@@ -211,32 +218,31 @@ class DynaLM(DynaPretrainedModel):
 
         # Calculate the loss
         loss = None
-        if labels is not None:
-            print("Calculating loss in DynaLM", flush=True)
-            _labels = torch.roll(labels, shifts=-1)
-            _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-            losses = torch.nn.functional.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                _labels.to(logits.device).view(-1),
-                reduction="none",
-            )
-            loss = losses.flatten()
+        # if labels is not None:
+        #     _labels = torch.roll(labels, shifts=-1)
+        #     _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+        #     losses = torch.nn.functional.cross_entropy(
+        #         logits.view(-1, logits.size(-1)),
+        #         _labels.to(logits.device).view(-1),
+        #         reduction="none",
+        #     )
+        #     loss = losses.flatten()
 
-            # energy per sample for early exit
-            if self.use_energy_per_sample:
-                loss = loss * energy_per_sample.flatten()
+        #     # energy per sample for early exit
+        #     if self.use_energy_per_sample:
+        #         loss = loss * energy_per_sample.flatten()
 
-            # Reduce the loss according to the correct tokens
-            if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
-                loss = loss.sum()
-            else:
-                loss = loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()  # type: ignore
+        #     # Reduce the loss according to the correct tokens
+        #     if torch.all(_labels == CROSS_ENTROPY_IGNORE_INDEX):  # type: ignore
+        #         loss = loss.sum()
+        #     else:
+        #         loss = loss.sum() / (_labels != CROSS_ENTROPY_IGNORE_INDEX).sum()  # type: ignore
 
-            # Reg loss for moeut
-            if self.use_reg_loss:
-                loss = loss + self.transformer._collect_regularization_loss()
+        #     # Reg loss for moeut
+        #     if self.use_reg_loss:
+        #         loss = loss + self.transformer._collect_regularization_loss()
             
-            self.transformer._clear_selection_history()
+        #     self.transformer._clear_selection_history()
 
         return CausalLMOutputWithPast(
             loss=loss,  # pyright: ignore[reportArgumentType]
@@ -318,17 +324,16 @@ class ComposerDynaModel(HuggingFaceModel):
             attention_mask=batch.get("attention_mask", None),
         )
 
-    # def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
-    #     print("Calculating loss in composer", flush=True)
+    def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
         
-    #     labels = batch["labels"]
-    #     logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
-    #     _labels = torch.roll(labels, shifts=-1)
-    #     _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-    #     loss = torch.nn.functional.cross_entropy(
-    #         logits.view(-1, logits.size(-1)),
-    #         _labels.to(logits.device).view(-1),
-    #     )
-    #     loss = loss.flatten()
+        labels = batch["labels"]
+        logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
+        _labels = torch.roll(labels, shifts=-1)
+        _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
+        loss = torch.nn.functional.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            _labels.to(logits.device).view(-1),
+        )
+        loss = loss.flatten()
 
-    #     return loss
+        return loss

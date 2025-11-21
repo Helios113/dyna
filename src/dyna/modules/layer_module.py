@@ -25,6 +25,19 @@ class LayerModule(Module, ABC):
         self.attention = attention_module
         self.ffn = ffn_module
         self.input_projection = input_projection
+        
+        PRE_NORM_STRUCTURES = [
+            NormStructure.peri,
+            NormStructure.pre,
+            NormStructure.moeut,
+            NormStructure.sandwich,
+        ]
+        POST_NORM_STRUCTURES = [
+            NormStructure.peri,
+            NormStructure.post,
+            NormStructure.sandwich,
+        ]
+        
         self.attn_pre = build_norm(
             name=config.norms.norm_type,
             eps=config.norms.attn_eps,
@@ -35,42 +48,27 @@ class LayerModule(Module, ABC):
             eps=config.norms.attn_eps,
             normalized_shape=config.d_model,
         )
-        self.attn_pre.requires_grad_(
-            config.norm_structure
-            in [
-                NormStructure.peri,
-                NormStructure.pre,
-                NormStructure.moeut,
-                NormStructure.sandwich,
-            ]
-        )
-        self.attn_post.requires_grad_(
-            config.norm_structure
-            in [NormStructure.peri, NormStructure.post, NormStructure.sandwich]
-        )
+        
+        enable_attn_pre = config.norm_structure in PRE_NORM_STRUCTURES
+        enable_attn_post = config.norm_structure in POST_NORM_STRUCTURES
+        self.attn_pre.requires_grad_(enable_attn_pre)
+        self.attn_post.requires_grad_(enable_attn_post)
+        
         self.ffn_pre = build_norm(
             name=config.norms.norm_type,
             eps=config.norms.ffn_eps,
             normalized_shape=config.d_model,
-        )
-        self.ffn_pre.requires_grad_(
-            config.norm_structure
-            in [
-                NormStructure.peri,
-                NormStructure.pre,
-                NormStructure.moeut,
-                NormStructure.sandwich,
-            ]
         )
         self.ffn_post = build_norm(
             name=config.norms.norm_type,
             eps=config.norms.ffn_eps,
             normalized_shape=config.d_model,
         )
-        self.ffn_post.requires_grad_(
-            config.norm_structure
-            in [NormStructure.peri, NormStructure.post, NormStructure.sandwich]
-        )
+        
+        enable_ffn_pre = config.norm_structure in PRE_NORM_STRUCTURES
+        enable_ffn_post = config.norm_structure in POST_NORM_STRUCTURES
+        self.ffn_pre.requires_grad_(enable_ffn_pre)
+        self.ffn_post.requires_grad_(enable_ffn_post)
         # Configuration
         self.drop = torch.nn.Dropout(config.dropout)
         self.n_layers = config.n_layers
@@ -89,7 +87,6 @@ class LayerModule(Module, ABC):
     def update_inv_freq(self, base: int):
         self.attention.update_inv_freq(base)
 
-    # Done
     def _apply_pre_norm_attn(
         self,
         residual_stream: Float[Tensor, "batch seq d_model"],
@@ -98,31 +95,30 @@ class LayerModule(Module, ABC):
         Float[Tensor, "batch seq d_model"],
         Float[Tensor, "batch seq d_model"],
     ]:
-        if (
-            self.norm_structure == NormStructure.peri
-            or self.norm_structure == NormStructure.pre
-            or self.norm_structure == NormStructure.sandwich
-        ):
-            # Peri, Pre
-            residual_stream_normed = self.attn_pre(residual_stream)
-            q_val = residual_stream_normed
-            k_val = residual_stream_normed
-            v_val = residual_stream_normed
-
+        uses_pre_norm = self.norm_structure in [
+            NormStructure.peri,
+            NormStructure.pre,
+            NormStructure.sandwich,
+        ]
+        
+        if uses_pre_norm:
+            normalized = self.attn_pre(residual_stream)
+            query_input = normalized
+            key_input = normalized
+            value_input = normalized
         elif self.norm_structure == NormStructure.post:
-            q_val = residual_stream
-            k_val = residual_stream
-            v_val = residual_stream
-
+            query_input = residual_stream
+            key_input = residual_stream
+            value_input = residual_stream
         elif self.norm_structure == NormStructure.moeut:
-            residual_stream_normed = self.attn_pre(residual_stream)
-            q_val = residual_stream_normed
-            k_val = residual_stream_normed
-            v_val = residual_stream
+            normalized = self.attn_pre(residual_stream)
+            query_input = normalized
+            key_input = normalized
+            value_input = residual_stream
         else:
             raise ValueError(f"{self.norm_structure} must be one of {NormStructure}")
 
-        return q_val, k_val, v_val
+        return query_input, key_input, value_input
 
     def _apply_update_to_residual(
         self,
@@ -173,9 +169,9 @@ class LayerModule(Module, ABC):
                         scale_factor * residual_stream + update / layer_index
                     )
             case RescaleMethod.complete_p:
-                scale_factor = (self.current_depth / self.base_depth) ** (
-                    -self.cp_alpha
-                )
+                # Reference: nanoGPT-mup Block.forward() implementation
+                # self.residual_scaling = 1/(config.depth_multiplier ** config.depth_alpha_exp)
+                scale_factor = (self.base_depth / self.current_depth) ** self.cp_alpha
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
                         residual_stream.view(-1),

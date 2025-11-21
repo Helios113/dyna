@@ -350,6 +350,7 @@ def build_full_concrete_config(cfg: DictConfig):
 
 def create_param_groups(
     model,
+    lr,
     eps,
     base_depth,
     current_depth,
@@ -363,13 +364,13 @@ def create_param_groups(
         frozen_param_names = []
     depth_lr_scaling = (current_depth / base_depth) ** (cp_alpha - 1)
     width_lr_scaling = (current_width / base_width) ** (-1)
+    print(
+        f"Depth LR scaling: {depth_lr_scaling}, Width LR scaling: {width_lr_scaling}",flush=True)
     emb_params = []
     hidden_ln_params = []
     hidden_weight_params = []
     hidden_bias_params = []
     final_ln_params = []
-    lm_head_params = []
-    print("Optimzer parameter scaling factors:", depth_lr_scaling, width_lr_scaling)
     frozen_count = 0
     adam_eps = (
         eps
@@ -390,9 +391,16 @@ def create_param_groups(
         if name == "model.embedding.weight":
             emb_params.append(param)
             assigned_params += 1
+        elif name == "model.out_norm.weight":
+            final_ln_params.append(param)
+            assigned_params += 1
+        elif "model.lm_head" in name:
+            emb_params.append(param)
+            assigned_params += 1
         elif "transformer" in name:
             if "pre" in name or "post" in name:
                 # print("norm name", name, flush=True)
+                print("names in hidden ln", name, flush=True)
                 hidden_ln_params.append(param)
                 assigned_params += 1
             elif "weight" in name:
@@ -403,59 +411,53 @@ def create_param_groups(
                 # print("bias name", name, flush=True)
                 hidden_bias_params.append(param)
                 assigned_params += 1
-        elif name == "model.out_norm.weight":
-            final_ln_params.append(param)
+        else:
+            # Default to emb_params weights as no scaling is applied
+            emb_params.append(param)
             assigned_params += 1
-        elif "model.lm_head" in name:
-            lm_head_params.append(param)
-            assigned_params += 1
+        
     print(f"Assigned {assigned_params} parameters")
     print(f"Total parameters: {total_params}")
     print(f"Total named parameters: {total_named_params}")
 
     print(f"Frozen {frozen_count} parameter groups")
     # Maintain order for lr updates consistency
+    names = ["embedding", "hidden_ln", "hidden_weight", "hidden_bias", "final_ln"]
     optim_groups = [
         {
             "params": emb_params,
             "weight_decay": default_wd,
-            "lr_scale": 1.0,
+            "lr": 1.0*lr,
             "eps": eps,
         },
         {
             "params": hidden_ln_params,
             "weight_decay": 0.0,
-            "lr_scale": depth_lr_scaling,
+            "lr": depth_lr_scaling * lr,
             "eps": adam_eps,
         },
         {
             "params": hidden_weight_params,
             "weight_decay": default_wd / width_lr_scaling,
-            "lr_scale": width_lr_scaling * depth_lr_scaling,
+            "lr": width_lr_scaling * depth_lr_scaling *lr,
             "eps": adam_eps,
         },
         {
             "params": hidden_bias_params,
             "weight_decay": 0.0,
-            "lr_scale": depth_lr_scaling,
+            "lr": depth_lr_scaling*lr,
             "eps": adam_eps,
         },
         {
             "params": final_ln_params,
             "weight_decay": 0.0,
-            "lr_scale": 1.0,
+            "lr": 1.0*lr,
             "eps": adam_eps,
         },
-        {
-            "params": lm_head_params,
-            "weight_decay": default_wd,
-            "lr_scale": 1.0,
-            "eps": eps,
-        },
     ]
-    for i in optim_groups:
+    for i, val in enumerate(optim_groups):
         print(
-            f"Group with {len(i['params'])} params, wd: {i['weight_decay']}, lr_scale: {i['lr_scale']}, eps: {i['eps']}"
+            f"{names[i]} with {len(val['params'])} params, wd: {val['weight_decay']}, lr: {val['lr']}, eps: {val['eps']}"
         )
     return optim_groups
 

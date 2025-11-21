@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J dyna
+#SBATCH -J loop
 #SBATCH -w ruapehu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -8,7 +8,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
-#SBATCH --dependency afterany:28470
+#SBATCH --dependency afterany:28405
 
 ulimit -n 65535
 ulimit -u 65535
@@ -72,7 +72,7 @@ echo "=========================================="
 echo "Starting experiment"
 echo "=========================================="
 
-CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey
+CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey_loop
 
 # Capture exit status
 status=$?

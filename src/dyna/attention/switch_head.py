@@ -108,8 +108,13 @@ class SwitchHead(AttentionModule):
             torch.zeros(self.n_experts_attn), requires_grad=False
         )
 
-    def reset_parameters(self, ffn_scale: float, attn_scale: float) -> None:
+    def reset_parameters(self, scale: float) -> None:
         """Initialize all parameters with proper scaling."""
+        torch.manual_seed(42)
+        # Use muP scaling for hidden weights (attention projections)
+        # Based on nanoGPT-mup: std=init_std / math.sqrt(mup_width_multiplier)
+        attn_scale = scale  # scale already includes width scaling from model
+        
         # Initialize selection parameters
         if self.n_experts_attn > 1:
             torch.nn.init.normal_(self.sel_v, 0, attn_scale)

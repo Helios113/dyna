@@ -7,6 +7,7 @@ class LrScaleCallback(Callback):
         self,
         log_interval: str | int = "1ba",
         eps: float = 1e-8,
+        base_lr: float = 1e-8,
     ):
         """Initialize the AbbieNumberCallback.
 
@@ -21,6 +22,7 @@ class LrScaleCallback(Callback):
             else Time(log_interval, TimeUnit.BATCH)
         )
         self.eps = eps
+        self.base_lr = base_lr
 
     def _should_log(self, state: State) -> bool:
         """Determine if it's time to log based on the log_interval."""
@@ -55,27 +57,27 @@ class LrScaleCallback(Callback):
         )
         optim_groups = [
             {
-                "lr_scale": 1.0,
+                "lr": 1.0*self.base_lr,
                 "eps": self.eps,
             },
             {
-                "lr_scale": depth_lr_scaling,
+                "lr": depth_lr_scaling*self.base_lr,
                 "eps": adam_eps,
             },
             {
-                "lr_scale": width_lr_scaling * depth_lr_scaling,
+                "lr": width_lr_scaling * depth_lr_scaling*self.base_lr,
                 "eps": adam_eps,
             },
             {
-                "lr_scale": depth_lr_scaling,
+                "lr": depth_lr_scaling*self.base_lr,
                 "eps": adam_eps,
             },
             {
-                "lr_scale": 1.0,
+                "lr": 1.0*self.base_lr,
                 "eps": adam_eps,
             },
             {
-                "lr_scale": 1.0,
+                "lr": 1.0*self.base_lr,
                 "eps": self.eps,
             },
         ]

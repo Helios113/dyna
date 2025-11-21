@@ -40,21 +40,18 @@ class BasicAttn(AttentionModule):
         self.n_rotate = int(rotate_fraction * self.d_head)
         self.sqrt_attention_scale = sqrt_attention_scale
 
-    def reset_parameters(self, input_proj: float, output_proj: float) -> None:
+    def reset_parameters(self, scale: float) -> None:
         # Initialize projection parameters
         torch.manual_seed(42)
-        torch.nn.init.normal_(self.k.weight, 0, input_proj)
-        torch.nn.init.normal_(self.q.weight, 0, input_proj)
-        torch.nn.init.normal_(self.v.weight, 0, input_proj)
+        torch.nn.init.normal_(self.k.weight, 0, scale)
+        torch.nn.init.normal_(self.q.weight, 0, scale)
+        torch.nn.init.normal_(self.v.weight, 0, scale)
         # FIX: Use proper scaling for output projection
-        torch.nn.init.normal_(self.o.weight, 0, output_proj)
-        # torch.nn.init.normal_(self.k.weight, 0, input_proj / math.sqrt(self.d_model))
-        # torch.nn.init.normal_(self.q.weight, 0, input_proj / math.sqrt(self.d_model))
-        # torch.nn.init.normal_(self.v.weight, 0, input_proj / math.sqrt(self.d_model))
-        # torch.nn.init.normal_(self.o.weight, 0, input_proj / math.sqrt(self.d_model))
+        torch.nn.init.normal_(
+            self.o.weight, 0, scale
+        )
         
         
-
     def get_reg_loss(self) -> torch.Tensor:
         """Return zero for regularization loss.
 

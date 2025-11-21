@@ -95,6 +95,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     conf = DynaConfig(**cfg.model_config)
     torch.manual_seed(42)
     model = ComposerDynaModel(config=conf, tokenizer=tokenizer)
+    print(model, flush=True)
     # condition_model(
     #     model,
     #     ["model.embedding.weight", "model.lm_head.weight", "model.out_norm.weight"],
@@ -107,20 +108,21 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
         tokenizer=tokenizer,
         device_train_batch_size=cfg.train.device_train_batch_size,
     )
-    print("about to get into param groups", flush=True)
     params = create_param_groups(
         model,
-        1e-8,
+        cfg.optimizer_config.lr,
+        cfg.optimizer_config.eps,
         base_depth=cfg.model_config.base_depth,
         current_depth=cfg.model_config.current_depth,
         base_width=cfg.model_config.base_width,
         current_width=cfg.model_config.current_width,
         cp_alpha=cfg.model_config.cp_alpha,
+        default_wd=cfg.optimizer_config.weight_decay,
     )
-    print("got into param groups", flush=True)
-    # print(f"{params}", flush=True)
-    # exit()
-    optimizer = DecoupledAdamW(params, lr=cfg.optimizer_config.lr)
+
+    # optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr, eps=cfg.optimizer_config.eps, weight_decay=cfg.optimizer_config.weight_decay)
+    optimizer = DecoupledAdamW(params)
+    
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 
@@ -146,7 +148,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     trainer.fit()
 
     del trainer
-    # del grad_clipping
+    del grad_clipping
     del callbacks
     del params
     del scheduler
