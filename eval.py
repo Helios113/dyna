@@ -10,12 +10,10 @@ Usage with Hydra:
 """
 
 import logging
-import os
 import time
-from typing import Any, Optional, Union
+from typing import Any
 
 import hydra
-import pandas as pd
 import torch
 from composer import Trainer
 from composer.core import Callback
@@ -46,11 +44,11 @@ def build_tokenizer(
     """
     log.info(f"Building tokenizer: {tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, **tokenizer_kwargs)
-    
+
     # Set pad token to eos token if not set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     return tokenizer
 
 
@@ -70,20 +68,20 @@ def build_composer_model(
         ComposerDynaModel: The initialized model
     """
     log.info("Building Dyna model...")
-    
+
     # Create DynaConfig from model_config
     dyna_config = DynaConfig(**model_config)
-    
+
     # Set random seed for reproducibility
     torch.manual_seed(42)
-    
+
     # Build the model
     model = ComposerDynaModel(config=dyna_config, tokenizer=tokenizer)
-    
+
     return model
 
 
-def build_callbacks(callback_configs: Optional[dict[str, Any]]) -> list[Callback]:
+def build_callbacks(callback_configs: dict[str, Any] | None) -> list[Callback]:
     """Build callbacks from config.
 
     Args:
@@ -96,11 +94,12 @@ def build_callbacks(callback_configs: Optional[dict[str, Any]]) -> list[Callback
     if callback_configs:
         # Import here to avoid circular dependencies
         from dyna.utils import get_callbacks
+
         callbacks = get_callbacks(callback_configs)
     return callbacks
 
 
-def build_loggers(logger_configs: Optional[dict[str, Any]]) -> list[LoggerDestination]:
+def build_loggers(logger_configs: dict[str, Any] | None) -> list[LoggerDestination]:
     """Build loggers from config.
 
     Args:
@@ -122,14 +121,14 @@ def evaluate_model(
     model_name: str,
     model_config: dict[str, Any],
     tokenizer_config: dict[str, Any],
-    load_path: Optional[str] = None,
-    evaluators: Optional[list] = None,
-    callbacks: Optional[list[Callback]] = None,
-    loggers: Optional[list[LoggerDestination]] = None,
+    load_path: str | None = None,
+    evaluators: list | None = None,
+    callbacks: list[Callback] | None = None,
+    loggers: list[LoggerDestination] | None = None,
     precision: str = "amp_bf16",
     seed: int = 42,
-    dist_timeout: Union[float, int] = 300.0,
-    run_name: Optional[str] = None,
+    dist_timeout: float | int = 300.0,
+    run_name: str | None = None,
     device: str = "gpu",
 ) -> Trainer:
     """Evaluate a single model.
@@ -152,16 +151,16 @@ def evaluate_model(
         Trainer: The trainer object after evaluation
     """
     log.info(f"Evaluating model: {model_name}")
-    
+
     # Build tokenizer
     tokenizer_name = tokenizer_config.get("name", "HuggingFaceTB/SmolLM2-1.7B")
     tokenizer_kwargs = tokenizer_config.get("kwargs", {})
     tokenizer = build_tokenizer(tokenizer_name, tokenizer_kwargs)
-    
+
     # Build model
     init_device = model_config.pop("init_device", device)
     model = build_composer_model(model_config, tokenizer, init_device)
-    
+
     # Build trainer
     log.info(f"Building trainer for {model_name}...")
     trainer = Trainer(
@@ -178,22 +177,22 @@ def evaluate_model(
         dist_timeout=dist_timeout,
         device=device,
     )
-    
+
     # Run evaluation if evaluators provided
     if evaluators:
         log.info(f"Starting eval for {model_name}...")
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        
+
         start_time = time.time()
         trainer.eval(eval_dataloader=evaluators)
-        
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        
+
         elapsed_time = time.time() - start_time
         log.info(f"Ran {model_name} eval in: {elapsed_time:.2f} seconds")
-    
+
     return trainer
 
 
@@ -208,7 +207,7 @@ def evaluate(cfg: DictConfig) -> list[Trainer]:
     """
     # Initialize distributed
     dist.initialize_dist(get_device(None), timeout=cfg.get("dist_timeout", 300.0))
-    
+
     # Set up logging
     python_log_level = cfg.get("python_log_level", "INFO")
     logging.basicConfig(
@@ -216,35 +215,39 @@ def evaluate(cfg: DictConfig) -> list[Trainer]:
         level=getattr(logging, python_log_level.upper()),
         force=True,
     )
-    
+
     # Set seed
     seed = cfg.get("seed", 42)
     reproducibility.seed_all(seed)
-    
+
     # Build loggers
     logger_configs = cfg.get("loggers", {})
     loggers = build_loggers(logger_configs)
-    
+
     # Build callbacks
     callback_configs = cfg.get("callbacks", {})
     callbacks = build_callbacks(callback_configs)
-    
+
     # Get model configurations
     # Support both single model and multiple models
     if "model" in cfg and "models" not in cfg:
         # Single model format (training style)
-        model_configs = [{
-            "model_name": cfg.get("model_name", cfg.model.get("name", "dyna_model")),
-            "model": cfg.model,
-            "tokenizer": cfg.tokenizer,
-            "load_path": cfg.get("load_path", None),
-        }]
+        model_configs = [
+            {
+                "model_name": cfg.get(
+                    "model_name", cfg.model.get("name", "dyna_model")
+                ),
+                "model": cfg.model,
+                "tokenizer": cfg.tokenizer,
+                "load_path": cfg.get("load_path", None),
+            }
+        ]
     elif "models" in cfg:
         # Multiple models format (eval style)
         model_configs = cfg.models
     else:
         raise ValueError("Configuration must contain either 'model' or 'models' key")
-    
+
     # Evaluate each model
     trainers = []
     for model_cfg in model_configs:
@@ -252,7 +255,7 @@ def evaluate(cfg: DictConfig) -> list[Trainer]:
         model_config = dict(model_cfg["model"])
         tokenizer_config = model_cfg["tokenizer"]
         load_path = model_cfg.get("load_path", None)
-        
+
         trainer = evaluate_model(
             model_name=model_name,
             model_config=model_config,
@@ -267,45 +270,45 @@ def evaluate(cfg: DictConfig) -> list[Trainer]:
             run_name=cfg.get("run_name", None),
             device=cfg.get("device", "gpu"),
         )
-        
+
         trainers.append(trainer)
         log.info(f"Completed evaluation for {model_name}")
-    
+
     return trainers
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="eval_example")
 def main(cfg: DictConfig) -> list[Trainer]:
     """Main entry point for evaluation script using Hydra.
-    
+
     Args:
         cfg: Configuration loaded by Hydra from configs directory
-        
+
     Returns:
         list[Trainer]: List of trainers from evaluation
-        
+
     Examples:
         # Use default config
         python eval.py
-        
+
         # Use specific config file
         python eval.py --config-name=my_eval_config
-        
+
         # Override parameters
         python eval.py device=cpu precision=fp32
         python eval.py load_path=/path/to/checkpoint.pt
-        
+
         # Multiple overrides
         python eval.py device=cpu precision=fp32 seed=123
     """
     log.info("Starting Dyna model evaluation")
     log.info(f"Configuration:\n{OmegaConf.to_yaml(cfg)}")
-    
+
     # Run evaluation
     trainers = evaluate(cfg)
-    
+
     log.info(f"Evaluation complete. Evaluated {len(trainers)} model(s).")
-    
+
     return trainers
 
 

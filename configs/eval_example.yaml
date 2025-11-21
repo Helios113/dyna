@@ -1,6 +1,6 @@
 # Example evaluation configuration for Dyna models
 # Based on LLM Foundry eval.py pattern with Hydra integration
-# 
+#
 # Usage:
 #   python eval.py                                    # Uses this default config
 #   python eval.py --config-name=eval_example         # Explicitly use this config
@@ -26,20 +26,20 @@ model:
   d_head: 64
   vocab_size: 49152
   max_seq_len: 2048
-  
+
   # Model behavior
   mode: transformer
   enable_early_exit: false
   norm_type: pre
   rescale_type: none
-  
+
   # Depth and width parameters
   base_depth: 12
   current_depth: 12
   base_width: 768
   current_width: 768
   cp_alpha: 1.0
-  
+
   # Device configuration
   init_device: cpu
 
@@ -76,7 +76,7 @@ callbacks: {}
 #       kwargs:
 #         trust_remote_code: true
 #     load_path: /path/to/checkpoint1.pt
-#   
+#
 #   - model_name: dyna_model_2
 #     model:
 #       dim: 512
