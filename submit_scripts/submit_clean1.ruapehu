@@ -8,7 +8,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --output=slurm_outputs/%x.%j.log
-#SBATCH --dependency afterany:28405
+#SBATCH --dependency afterany:28536
 
 ulimit -n 65535
 ulimit -u 65535
@@ -72,7 +72,7 @@ echo "=========================================="
 echo "Starting experiment"
 echo "=========================================="
 
-CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey_loop
+CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey_sig
 
 # Capture exit status
 status=$?

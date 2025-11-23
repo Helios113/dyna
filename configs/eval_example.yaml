@@ -9,55 +9,58 @@
 #   python eval.py device=cpu precision=fp32 seed=123 # Multiple overrides
 
 # Evaluation Parameters
-seed: 42
-precision: amp_bf16
-device: gpu
-dist_timeout: 300.0
-python_log_level: INFO
-run_name: dyna_eval
+eval_config:
+  seed: 42
+  precision: amp_bf16
+  device: gpu
+  dist_timeout: 300
+  run_name: dyna_eval
+  # Tokenizer Configuration
+  tokenizer: HuggingFaceTB/SmolLM2-1.7B
+  
 
 # Model Configuration (single model format - training style)
-model:
-  # Model architecture parameters
-  dim: 768
-  d_ffn: 3072
-  n_layers: 12
-  n_heads: 12
-  d_head: 64
-  vocab_size: 49152
-  max_seq_len: 2048
 
-  # Model behavior
-  mode: transformer
-  enable_early_exit: false
-  norm_type: pre
-  rescale_type: none
+model_config:
+    execution_mode: transformer
+    d_model: 768
+    d_ffn: 3072
+    n_repeats: 2
+    n_heads: 12
+    d_head: 64
+    n_layers: 6
+    vocab_size: 50368
+    max_seq_len: 1024
+    n_expert_shared_attn: 0
+    n_expert_shared_ffn: 0
+    collect_reg_loss: False
+    enable_early_exit: False
+    norm_structure: pre
+    rescaling_method: complete_p
+    loop_normalization: False
+    sample_iterations: False
+    loop_rope_theta_rebase: False
+    transformer_type: dyna
+    layer_type: simple
+    base_depth: 2
+    current_depth: 12
+    base_width: 256
+    current_width: 768
+    cp_alpha: 1
+    sqrt_attention_scale: False
+    use_embedding_norm: False
+    init_sigma: 0.02
+    load_path: "s3://loop-llm/dyna/test-ba3171.pt"
 
-  # Depth and width parameters
-  base_depth: 12
-  current_depth: 12
-  base_width: 768
-  current_width: 768
-  cp_alpha: 1.0
 
-  # Device configuration
-  init_device: cpu
 
-# Tokenizer Configuration
-tokenizer:
-  name: HuggingFaceTB/SmolLM2-1.7B
-  kwargs:
-    trust_remote_code: true
-
-# Path to checkpoint to load (optional)
-# load_path: /path/to/checkpoint.pt
 
 # Loggers
 loggers:
   wandb:
-    project: dyna_eval
+    project: dyna
     log_artifacts: false
-    name: ${run_name}
+    name: ${eval_config.run_name}
 
 # Callbacks (optional)
 callbacks: {}

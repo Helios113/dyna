@@ -1,6 +1,13 @@
 from .dataset_config import DataConfig, DatasetConfig
 from .dyna_config import DynaConfig
 from .enums import ExecutionMode, NormStructure, RescaleMethod
+from .eval_config import (
+    EvalConfig,
+    EvalDatasetConfig,
+    EvalLoaderConfig,
+    ICLTaskConfig,
+    TokenizerConfig,
+)
 from .fsdp_config import FSDPConfig
 from .model_config import ModelConfig
 from .scheduler_config import SchedulerConfig
@@ -42,8 +49,12 @@ __all__ = [
     "DataConfig",
     "DatasetConfig",
     "DynaConfig",
+    "EvalConfig",
+    "EvalDatasetConfig",
+    "EvalLoaderConfig",
     "ExecutionMode",
     "FSDPConfig",
+    "ICLTaskConfig",
     "ModelConfig",
     "NormStructure",
     "RescaleMethod",

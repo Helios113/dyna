@@ -1,0 +1,99 @@
+# Evaluation configuration for language modeling tasks
+# This config demonstrates perplexity and token accuracy evaluation
+
+# Model configuration
+model_config:
+  # Model architecture settings
+  execution_mode: transformer
+  d_model: 768
+  d_ffn: 3072
+  n_repeats: 2
+  n_heads: 12
+  d_head: 64
+  n_layers: 6
+  vocab_size: 50368
+  max_seq_len: 1024
+  n_expert_shared_attn: 0
+  n_expert_shared_ffn: 0
+  collect_reg_loss: false
+  enable_early_exit: false
+  norm_structure: pre
+  rescaling_method: complete_p
+  loop_normalization: false
+  sample_iterations: false
+  loop_rope_theta_rebase: false
+  transformer_type: dyna
+  layer_type: simple
+  base_depth: 2
+  current_depth: 12
+  base_width: 256
+  current_width: 768
+  cp_alpha: 1
+  sqrt_attention_scale: false
+  use_embedding_norm: false
+  init_sigma: 0.02
+
+# Tokenizer configuration
+tokenizer:
+  name: HuggingFaceTB/SmolLM2-1.7B
+  kwargs:
+    padding_side: left
+
+# Model checkpoint to load (optional)
+load_path: null  # Set to checkpoint path, e.g., "s3://bucket/model-checkpoint.pt"
+
+# Evaluation configuration
+eval_config:
+  # Evaluation settings
+  device: gpu
+  precision: amp_bf16
+  seed: 42
+  dist_timeout: 300
+  device_eval_batch_size: 8  # Batch size for ICL tasks
+  eval_batch_size: 1024       # Batch size for single-batch perplexity eval
+  icl_seq_len: 1024
+  run_name: dyna_lm_eval
+  tokenizer: HuggingFaceTB/SmolLM2-1.7B
+  
+  # In-context learning tasks for evaluation
+  # These tasks evaluate perplexity and token accuracy on language modeling
+  icl_tasks:
+    # Language modeling task - evaluates token-level accuracy and perplexity
+    - label: lm_test
+      dataset_uri: local_data/lm_test.jsonl  # Test dataset
+      icl_task_type: language_modeling
+      num_fewshot: 0
+      max_seq_len: 1024
+      prompt_string: ''
+      example_delimiter: '\n'
+      continuation_delimiter: ' '
+      metric_names:
+        - InContextLearningLMAccuracy  # Token accuracy
+
+  # Eval dataloader for single-batch perplexity/token accuracy evaluation
+  # This uses a different batch size from ICL tasks
+  eval_loader:
+    name: text
+    dataset:
+      local: /nfs-share/datasets/photon/dataset_cache/smollm-corpus-shared/fineweb_edu_dedup/client_0
+      remote: s3://smollm-corpus/shared/fineweb_edu_dedup/client_0
+      split: train
+      shuffle: true
+      max_seq_len: ${eval_config.icl_seq_len}
+      shuffle_seed: ${eval_config.seed}
+    drop_last: false
+    num_workers: 8
+    pin_memory: false
+    prefetch_factor: 2
+    persistent_workers: true
+    timeout: 0
+
+# Logging
+loggers:
+  wandb:
+    project: dyna-eval
+    log_artifacts: false
+    name: ${eval_config.run_name}
+
+# Callbacks (optional)
+callbacks: {}

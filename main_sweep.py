@@ -70,6 +70,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
 
     if wandb_run is not None:
         wandb_logger = WandBLogger()
+        run_name = wandb_run.name
     else:
         tmpdir = os.getenv("TMPDIR") or "/tmp_000"
         unique = tmpdir.split("_")[-1]
@@ -86,8 +87,9 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     cfg = build_full_concrete_config(cfg)
     print(OmegaConf.to_yaml(cfg))
     # assert wandb.run is not None
-    # cfg.trainer_config.save_filename = wandb.run.name + "-ba{batch}.pt"
-    cfg.trainer_config.save_filename = "test" + "-ba{batch}.pt"
+    cfg.trainer_config.save_filename = run_name + "-ba{batch}.pt"
+    cfg.trainer_config.save_latest_filename = run_name+ "-latest-" + "-ba{batch}.pt"
+    
 
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token

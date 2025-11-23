@@ -1,5 +1,6 @@
 import csv
 import glob
+import logging
 import os
 import secrets
 import string
@@ -15,6 +16,7 @@ from composer.optim.scheduler import ComposerScheduler
 from llmfoundry.utils.builders import build_callback, build_dataloader, build_scheduler
 from omegaconf import DictConfig, OmegaConf
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from dyna.config import ICLTaskConfig, ModelConfig, EvalConfig
 
 from dyna.config import (
     DataConfig,
@@ -287,64 +289,117 @@ def build_full_concrete_config(cfg: DictConfig):
     """Constructs and merges all configs.
 
     (model, trainer, data) and returns a single config dict.
+    Includes validation of all configuration schemas.
     """
+    log = logging.getLogger(__name__)
+    log.info("Validating and building full configuration...")
+    
     OmegaConf.resolve(cfg)
     # Model Config
-    model_schema = OmegaConf.structured(ModelConfig)
-    model_config = OmegaConf.merge(model_schema, cfg.model_config)
+    model_config = None
+    models = None
+    if "model_config" in cfg and "models" not in cfg:
+        model_schema = OmegaConf.structured(ModelConfig)    
+        model_config = OmegaConf.merge(model_schema, cfg.model_config)
+    elif "models" in cfg:
+        model_schema = OmegaConf.structured(ModelConfig)    
+        model_list = []
+        for mod in cfg.models:
+            model_list.append(OmegaConf.merge(model_schema, mod))
+        models = model_list
+            
 
     # Trainer Config
-    trainer_schema = OmegaConf.structured(TrainerConfig)
-    trainer_config = OmegaConf.merge(trainer_schema, cfg.trainer_config)
+    if "trainer_config" in cfg:
+        trainer_schema = OmegaConf.structured(TrainerConfig)
+        trainer_config = OmegaConf.merge(trainer_schema, cfg.trainer_config)
 
     # Data Config (including streams)
-    data_schema = OmegaConf.structured(DataConfig)
-    data_config = OmegaConf.merge(data_schema, cfg.data_config)
-    streams_configs = load_and_concat_yamls(data_config.path)
+    if "data_config" in cfg:
+        data_schema = OmegaConf.structured(DataConfig)
+        data_config = OmegaConf.merge(data_schema, cfg.data_config)
+        streams_configs = load_and_concat_yamls(data_config.path)
 
-    del data_config.path  # pyright: ignore[reportAttributeAccessIssue]
+        del data_config.path  # pyright: ignore[reportAttributeAccessIssue]
 
-    data_config.dataset.streams = streams_configs
+        data_config.dataset.streams = streams_configs
+        
+    if "scheduler_config" in cfg:
+        scheduler_schema = OmegaConf.structured(SchedulerConfig)
+        scheduler_config = OmegaConf.merge(scheduler_schema, cfg.scheduler_config)
 
-    scheduler_schema = OmegaConf.structured(SchedulerConfig)
-    scheduler_config = OmegaConf.merge(scheduler_schema, cfg.scheduler_config)
 
-    fsdp_schema = OmegaConf.structured(FSDPConfig)
-    fsdp_config = cfg.get("fsdp_config", {})
-    if fsdp_config:
-        fsdp_config = OmegaConf.merge(fsdp_schema, fsdp_config)
-
+    if "fsdp_config" in cfg:
+        fsdp_schema = OmegaConf.structured(FSDPConfig)
+        fsdp_config = cfg.get("fsdp_config", {})
+        if fsdp_config:
+            fsdp_config = OmegaConf.merge(fsdp_schema, fsdp_config)
+        
+    if "eval_config" in cfg :
+        eval_schema = OmegaConf.structured(EvalConfig)
+        
+        # Validate ICL tasks if present in eval_config
+        if "icl_tasks" in cfg.eval_config and cfg.eval_config.icl_tasks:
+            validated_tasks = []
+            for task in cfg.eval_config.icl_tasks:
+                task_schema = OmegaConf.structured(ICLTaskConfig)
+                validated_task = OmegaConf.merge(task_schema, task)
+                validated_tasks.append(validated_task)
+            cfg.eval_config.icl_tasks = validated_tasks
+        
+        eval_config = OmegaConf.merge(eval_schema, cfg.eval_config)
+    
     # Merge all configs into one dict for duplicate key checking
     merged_config: dict[str, object] = {}
-    merged_config.update(
-        cast(dict[str, object], OmegaConf.to_container(model_config, resolve=True))
-    )
-    merged_config.update(
-        cast(dict[str, object], OmegaConf.to_container(trainer_config, resolve=True))
-    )
-    merged_config.update(
-        cast(dict[str, object], OmegaConf.to_container(data_config, resolve=True))
-    )
-    merged_config.update(
-        cast(dict[str, object], OmegaConf.to_container(scheduler_config, resolve=True))
-    )
-    if fsdp_config:
+    if model_config in cfg:
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(model_config, resolve=True))
+        )
+    if "trainer_config" in cfg:
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(trainer_config, resolve=True))
+        )
+    if "data_config" in cfg:
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(data_config, resolve=True))
+        )
+    if "scheduler_config" in cfg:
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(scheduler_config, resolve=True))
+        )
+    if "fsdp_config" in cfg:
         merged_config.update(
             cast(dict[str, object], OmegaConf.to_container(fsdp_config, resolve=True))
         )
         # cfg.fsdp_config.load_planner = fsdp_config.get("load_planner", "default")
+    if "eval_config" in cfg:
+        merged_config.update(
+            cast(dict[str, object], OmegaConf.to_container(eval_config, resolve=True))
+        )
 
     check_duplicate_keys(merged_config)
 
     # Convert merged_config back into an OmegaConf DictConfig
-    cfg.model_config = model_config
-    cfg.trainer_config = trainer_config
-    cfg.data_config = data_config
-    cfg.scheduler_config = scheduler_config
+    if models is None:
+        cfg.model_config = model_config
+    else:
+        cfg.models = models
+    if "trainer_config" in cfg:
+        cfg.trainer_config = trainer_config
+    
+    if "data_config" in cfg:
+        cfg.data_config = data_config
+        
+    if "scheduler_config" in cfg:
+        cfg.scheduler_config = scheduler_config
 
-    if fsdp_config:
+    if "fsdp_config" in cfg:
         cfg.fsdp_config = fsdp_config
+    
+    if "eval_config" in cfg :
+        cfg.eval_config = eval_config
 
+    log.info("✓ Configuration validation and build successful")
     return cfg
 
 

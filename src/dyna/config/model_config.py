@@ -67,3 +67,4 @@ class ModelConfig:
     current_width: int = 12
     loop_hyper_params: bool = False
     cp_alpha: float = 1.0
+    load_path: str = ""
