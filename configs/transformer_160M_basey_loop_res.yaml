@@ -22,7 +22,7 @@ execute_config:
         collect_reg_loss: False
         enable_early_exit: False
         norm_structure: pre
-        rescaling_method: complete_p_dyn
+        rescaling_method: complete_p
         loop_normalization: False
         sample_iterations: False
         loop_rope_theta_rebase: False
@@ -36,13 +36,14 @@ execute_config:
         sqrt_attention_scale: False
         use_embedding_norm: False
         init_sigma: 0.02
+        repeat_residual: True
     train:
         max_duration: "3171ba"
         warmup: "634ba"
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "loop_dyn"
+        run_name: "loop_rep"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
         device_train_microbatch_size: 32
