@@ -17,7 +17,21 @@ eval_config:
   run_name: dyna_eval
   # Tokenizer Configuration
   tokenizer: HuggingFaceTB/SmolLM2-1.7B
-  
+  icl_tasks:
+    -
+      label: piqa
+      dataset_uri: # ADD YOUR OWN DATASET URI
+      num_fewshot: [5]
+      icl_task_type: multiple_choice
+      continuation_delimiter: ' '
+      example_delimiter: "\n"
+      prompt_string: ''
+    -
+      label: lambada
+      dataset_uri: # ADD YOUR OWN DATASET URI
+      num_fewshot: [0]
+      icl_task_type: language_modeling
+
 
 # Model Configuration (single model format - training style)
 
@@ -25,10 +39,10 @@ model_config:
     execution_mode: transformer
     d_model: 768
     d_ffn: 3072
-    n_repeats: 2
+    n_repeats: 1
     n_heads: 12
     d_head: 64
-    n_layers: 6
+    n_layers: 12
     vocab_size: 50368
     max_seq_len: 1024
     n_expert_shared_attn: 0

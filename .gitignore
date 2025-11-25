@@ -16,6 +16,8 @@
 !LICENSE
 !.python-version
 !.gitignore
+!llm-foundry
+!.gitmodules
 
 # 2. Now, re-ignore build/cache artifacts
 __pycache__/
