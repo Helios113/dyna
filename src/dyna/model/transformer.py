@@ -1,4 +1,3 @@
-import math
 import random
 from collections.abc import Callable
 
@@ -8,7 +7,6 @@ from torch import Tensor
 from torch.nn import ModuleList
 
 from dyna.config import (
-    CROSS_ENTROPY_IGNORE_INDEX,
     GEIPING_METHODS,
 )
 from dyna.config.enums import ExecutionMode
@@ -71,12 +69,12 @@ class DynaFormer(DynaPretrainedModel):
         self.n_layers = config.n_layers
         self.n_repeats = config.n_repeats
         self.active_repeats = self.n_repeats
-        
+
         self.repeat_residual = config.repeat_residual
         self.loop_normalization = config.loop_normalization
         if self.loop_normalization:
             self.loop_norm = torch.nn.LayerNorm(config.d_model)
-            
+
         self.non_lin = config.non_lin
         if self.non_lin:
             self.non_lin_fn = torch.nn.GELU()
@@ -103,7 +101,6 @@ class DynaFormer(DynaPretrainedModel):
         # Use the the inint block length for this value
 
         self.loop_hyper_params = config.loop_hyper_params
-        
 
     def _construct_layers(self, config):
         """Constructs the layers of the transformer model.
@@ -231,7 +228,6 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         input_ids: Int[Tensor, "batch seq"] | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
-        
         # logging data containers
         # !!! if we provide and e, we expect that x is zeros
 
@@ -332,7 +328,7 @@ class DynaFormer(DynaPretrainedModel):
         for i in range(self.active_repeats):
             if self.non_lin:
                 x = self.non_lin_fn(x)
-            
+
             for layer in self.body_layers:
                 x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
@@ -342,7 +338,7 @@ class DynaFormer(DynaPretrainedModel):
                     attention_mask=attention_mask,
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
-                    total_depth = self.n_layers * self.active_repeats,
+                    total_depth=self.n_layers * self.active_repeats,
                 )
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(

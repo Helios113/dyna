@@ -91,6 +91,7 @@ class DynaConfig(PretrainedConfig):
         self.cp_alpha: float = kwargs.pop("cp_alpha", 1.0)
         self.scale_qk: bool = kwargs.pop("scale_qk", False)
         self.non_lin: bool = kwargs.pop("non_lin", False)
+
         def to_dict(self):
             output = super().to_dict()
             # Convert NormConfig to dict

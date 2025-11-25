@@ -56,27 +56,27 @@ class LrScaleCallback(Callback):
             * (current_depth / base_depth) ** (-1)
         )
         optim_groups = [
-        {
-            "lr": 1.0*self.base_lr,
-            "eps": self.eps,
-        },
-        {
-            "lr": depth_lr_scaling * self.base_lr,
-            "eps": adam_eps,
-        },
-        {
-            "lr": width_lr_scaling * depth_lr_scaling *self.base_lr,
-            "eps": adam_eps,
-        },
-        {
-            "lr": depth_lr_scaling*self.base_lr,
-            "eps": adam_eps,
-        },
-        {
-            "lr": 1.0*self.base_lr,
-            "eps": adam_eps,
-        },
-    ]
+            {
+                "lr": 1.0 * self.base_lr,
+                "eps": self.eps,
+            },
+            {
+                "lr": depth_lr_scaling * self.base_lr,
+                "eps": adam_eps,
+            },
+            {
+                "lr": width_lr_scaling * depth_lr_scaling * self.base_lr,
+                "eps": adam_eps,
+            },
+            {
+                "lr": depth_lr_scaling * self.base_lr,
+                "eps": adam_eps,
+            },
+            {
+                "lr": 1.0 * self.base_lr,
+                "eps": adam_eps,
+            },
+        ]
         for idx, ob in enumerate(state.optimizers[0].param_groups):
             for j in ob:
                 if j in optim_groups[idx]:

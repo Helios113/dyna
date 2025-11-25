@@ -25,7 +25,7 @@ class LayerModule(Module, ABC):
         self.attention = attention_module
         self.ffn = ffn_module
         self.input_projection = input_projection
-        
+
         PRE_NORM_STRUCTURES = [
             NormStructure.peri,
             NormStructure.pre,
@@ -37,7 +37,7 @@ class LayerModule(Module, ABC):
             NormStructure.post,
             NormStructure.sandwich,
         ]
-        
+
         self.attn_pre = build_norm(
             name=config.norms.norm_type,
             eps=config.norms.attn_eps,
@@ -48,12 +48,12 @@ class LayerModule(Module, ABC):
             eps=config.norms.attn_eps,
             normalized_shape=config.d_model,
         )
-        
+
         enable_attn_pre = config.norm_structure in PRE_NORM_STRUCTURES
         enable_attn_post = config.norm_structure in POST_NORM_STRUCTURES
         self.attn_pre.requires_grad_(enable_attn_pre)
         self.attn_post.requires_grad_(enable_attn_post)
-        
+
         self.ffn_pre = build_norm(
             name=config.norms.norm_type,
             eps=config.norms.ffn_eps,
@@ -64,7 +64,7 @@ class LayerModule(Module, ABC):
             eps=config.norms.ffn_eps,
             normalized_shape=config.d_model,
         )
-        
+
         enable_ffn_pre = config.norm_structure in PRE_NORM_STRUCTURES
         enable_ffn_post = config.norm_structure in POST_NORM_STRUCTURES
         self.ffn_pre.requires_grad_(enable_ffn_pre)
@@ -100,7 +100,7 @@ class LayerModule(Module, ABC):
             NormStructure.pre,
             NormStructure.sandwich,
         ]
-        
+
         if uses_pre_norm:
             normalized = self.attn_pre(residual_stream)
             query_input = normalized
@@ -175,7 +175,9 @@ class LayerModule(Module, ABC):
                 if total_depth is not None:
                     scale_factor = (self.base_depth / total_depth) ** self.cp_alpha
                 else:
-                    scale_factor = (self.base_depth / self.current_depth) ** self.cp_alpha
+                    scale_factor = (
+                        self.base_depth / self.current_depth
+                    ) ** self.cp_alpha
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
                         residual_stream.view(-1),
