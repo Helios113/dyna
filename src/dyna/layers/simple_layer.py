@@ -46,6 +46,7 @@ class SimpleLayer(LayerModule):
         attention_mask: Bool[Tensor, "batch 1 seq seq"],
         sequence_length: Int[Tensor, "batch seq"],
         continue_mask: None | Int[Tensor, " size"] = None,
+        total_depth: int | None = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,
@@ -77,6 +78,7 @@ class SimpleLayer(LayerModule):
             layer_index,
             self.attn_post,
             e,
+            total_depth=total_depth,
         )
 
         ffn_inputs = self._apply_pre_norm_ffn(x + e if e is not None else x)
@@ -90,7 +92,7 @@ class SimpleLayer(LayerModule):
             
             
         x, layer_index = self._apply_update_to_residual(
-            x, ffn_out, continue_mask, layer_index, self.ffn_post, e
+            x, ffn_out, continue_mask, layer_index, self.ffn_post, e, total_depth=total_depth
         )
 
         return (x, (expert_sel_attn, expert_sel_ffn), saturation_event, layer_index)

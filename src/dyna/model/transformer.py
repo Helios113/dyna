@@ -76,6 +76,10 @@ class DynaFormer(DynaPretrainedModel):
         self.loop_normalization = config.loop_normalization
         if self.loop_normalization:
             self.loop_norm = torch.nn.LayerNorm(config.d_model)
+            
+        self.non_lin = config.non_lin
+        if self.non_lin:
+            self.non_lin_fn = torch.nn.GELU()
         # Execution behaviour
         self.enable_early_exit = config.enable_early_exit
         self.execution_mode = config.execution_mode
@@ -323,9 +327,12 @@ class DynaFormer(DynaPretrainedModel):
         continue_mask = None
         energy_per_sample = None
         # multiple_out = None
+        if self.repeat_residual:
+            residual_embeddings = x.clone()
         for i in range(self.active_repeats):
-            if self.repeat_residual:
-                residual_embeddings = x.clone()
+            if self.non_lin:
+                x = self.non_lin_fn(x)
+            
             for layer in self.body_layers:
                 x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
@@ -335,6 +342,7 @@ class DynaFormer(DynaPretrainedModel):
                     attention_mask=attention_mask,
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
+                    total_depth = self.n_layers * self.active_repeats,
                 )
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(

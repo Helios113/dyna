@@ -129,6 +129,7 @@ class LayerModule(Module, ABC):
         norm_to_use: Module,
         e: Float[Tensor, "batch seq d_model"] | None = None,
         cum_sum: Float[Tensor, "batch seq"] | None = None,
+        total_depth: int | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], int]:
         update = update_on_stream
         if self.norm_structure == NormStructure.peri:
@@ -171,7 +172,10 @@ class LayerModule(Module, ABC):
             case RescaleMethod.complete_p:
                 # Reference: nanoGPT-mup Block.forward() implementation
                 # self.residual_scaling = 1/(config.depth_multiplier ** config.depth_alpha_exp)
-                scale_factor = (self.base_depth / self.current_depth) ** self.cp_alpha
+                if total_depth is not None:
+                    scale_factor = (self.base_depth / total_depth) ** self.cp_alpha
+                else:
+                    scale_factor = (self.base_depth / self.current_depth) ** self.cp_alpha
                 if self.enable_early_exit and continue_mask is not None:
                     residual_stream = torch.scatter_add(
                         residual_stream.view(-1),
@@ -306,6 +310,7 @@ class LayerModule(Module, ABC):
         sequence_length: None | Int[Tensor, "batch seq"],
         layer_index: int,
         continue_mask: None | Int[Tensor, " size"] = None,
+        total_depth: int | None = None,
     ) -> tuple[
         Float[Tensor, "batch seq d_model"],
         tuple,

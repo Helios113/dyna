@@ -55,7 +55,7 @@ class ModelConfig:
     head_size: int = 2
     loop_normalization: bool = False
     loop_rope_theta_rebase: bool = False
-
+    non_lin: bool = False
     # old name
     # total_depth_for_init: int = 12
 

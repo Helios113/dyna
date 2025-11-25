@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J loop
-#SBATCH -w ruapehu
+#SBATCH -w mauao
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=24
@@ -72,7 +72,7 @@ echo "=========================================="
 echo "Starting experiment"
 echo "=========================================="
 
-CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey_loop_norm
+CUDA_LAUNCH_BLOCKING=1 HYDRA_FULL_ERROR=1 uv run python -B main_sweep.py --config-name=transformer_160M_basey_loop_nonlin
 
 # Capture exit status
 status=$?
