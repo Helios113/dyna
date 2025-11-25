@@ -81,7 +81,13 @@ def _generate_source_len_mask(
     attention_mask: Bool[Tensor, "batch 1 seq seq"],
 ) -> Int[Tensor, "batch seq"]:
     """Generate source length mask with position indices for each sequence."""
-    batch_size, _, seq_len, _ = attention_mask.shape
+    print("attention_mask.shape:", attention_mask.shape, flush=True)
+
+    # if we are in eval mode, we mihgt not have batches?
+    if attention_mask.ndim == 4:
+        batch_size, _, seq_len, _ = attention_mask.shape
+    elif attention_mask.ndim == 2:
+        batch_size, seq_len = attention_mask.shape
     device = attention_mask.device
 
     pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
@@ -170,6 +176,7 @@ class DynaLM(DynaPretrainedModel):
         self.base_width = config.base_width
         self.current_width = config.current_width
         self.cp_alpha = config.cp_alpha
+
     def reset_parameters(self):
         torch.manual_seed(42)
         scale = self.init_sigma
@@ -179,7 +186,7 @@ class DynaLM(DynaPretrainedModel):
         # self.embedding.weight, mode="fan_in", nonlinearity="linear"
         # )
         width_multiplier = math.sqrt(self.current_width / self.base_width)
-        self.transformer.reset_parameters(scale/width_multiplier)
+        self.transformer.reset_parameters(scale / width_multiplier)
 
     def forward(
         self,
@@ -241,7 +248,7 @@ class DynaLM(DynaPretrainedModel):
         #     # Reg loss for moeut
         #     if self.use_reg_loss:
         #         loss = loss + self.transformer._collect_regularization_loss()
-            
+
         #     self.transformer._clear_selection_history()
 
         return CausalLMOutputWithPast(
@@ -325,7 +332,6 @@ class ComposerDynaModel(HuggingFaceModel):
         )
 
     def loss(self, outputs: CausalLMOutputWithPast, batch) -> torch.Tensor:
-        
         labels = batch["labels"]
         logits: torch.Tensor = cast(torch.Tensor, outputs.logits)
         _labels = torch.roll(labels, shifts=-1)

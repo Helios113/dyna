@@ -16,11 +16,12 @@ from composer.optim.scheduler import ComposerScheduler
 from llmfoundry.utils.builders import build_callback, build_dataloader, build_scheduler
 from omegaconf import DictConfig, OmegaConf
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from dyna.config import ICLTaskConfig, ModelConfig, EvalConfig
 
 from dyna.config import (
     DataConfig,
+    EvalConfig,
     FSDPConfig,
+    ICLTaskConfig,
     ModelConfig,
     SchedulerConfig,
     TrainerConfig,
@@ -254,7 +255,19 @@ def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
     if value_map is None:
         value_map = {}
     if exceptions is None:
-        exceptions = ["remote", "local", "dataset.split", "proportion"]
+        exceptions = [
+            "remote",
+            "local",
+            "dataset.split",
+            "proportion",
+            "label",
+            "dataset_uri",
+            "icl_task_type",
+            "continuation_delimiter",
+            "example_delimiter",
+            "prompt_string",
+            "num_fewshot",
+        ]
     if isinstance(cfg, dict) or hasattr(cfg, "keys"):
         for k in cfg:
             v = cfg[k]
@@ -293,21 +306,20 @@ def build_full_concrete_config(cfg: DictConfig):
     """
     log = logging.getLogger(__name__)
     log.info("Validating and building full configuration...")
-    
+
     OmegaConf.resolve(cfg)
     # Model Config
     model_config = None
     models = None
     if "model_config" in cfg and "models" not in cfg:
-        model_schema = OmegaConf.structured(ModelConfig)    
+        model_schema = OmegaConf.structured(ModelConfig)
         model_config = OmegaConf.merge(model_schema, cfg.model_config)
     elif "models" in cfg:
-        model_schema = OmegaConf.structured(ModelConfig)    
+        model_schema = OmegaConf.structured(ModelConfig)
         model_list = []
         for mod in cfg.models:
             model_list.append(OmegaConf.merge(model_schema, mod))
         models = model_list
-            
 
     # Trainer Config
     if "trainer_config" in cfg:
@@ -323,21 +335,20 @@ def build_full_concrete_config(cfg: DictConfig):
         del data_config.path  # pyright: ignore[reportAttributeAccessIssue]
 
         data_config.dataset.streams = streams_configs
-        
+
     if "scheduler_config" in cfg:
         scheduler_schema = OmegaConf.structured(SchedulerConfig)
         scheduler_config = OmegaConf.merge(scheduler_schema, cfg.scheduler_config)
-
 
     if "fsdp_config" in cfg:
         fsdp_schema = OmegaConf.structured(FSDPConfig)
         fsdp_config = cfg.get("fsdp_config", {})
         if fsdp_config:
             fsdp_config = OmegaConf.merge(fsdp_schema, fsdp_config)
-        
-    if "eval_config" in cfg :
+
+    if "eval_config" in cfg:
         eval_schema = OmegaConf.structured(EvalConfig)
-        
+
         # Validate ICL tasks if present in eval_config
         if "icl_tasks" in cfg.eval_config and cfg.eval_config.icl_tasks:
             validated_tasks = []
@@ -346,9 +357,9 @@ def build_full_concrete_config(cfg: DictConfig):
                 validated_task = OmegaConf.merge(task_schema, task)
                 validated_tasks.append(validated_task)
             cfg.eval_config.icl_tasks = validated_tasks
-        
+
         eval_config = OmegaConf.merge(eval_schema, cfg.eval_config)
-    
+
     # Merge all configs into one dict for duplicate key checking
     merged_config: dict[str, object] = {}
     if model_config in cfg:
@@ -357,7 +368,9 @@ def build_full_concrete_config(cfg: DictConfig):
         )
     if "trainer_config" in cfg:
         merged_config.update(
-            cast(dict[str, object], OmegaConf.to_container(trainer_config, resolve=True))
+            cast(
+                dict[str, object], OmegaConf.to_container(trainer_config, resolve=True)
+            )
         )
     if "data_config" in cfg:
         merged_config.update(
@@ -365,7 +378,10 @@ def build_full_concrete_config(cfg: DictConfig):
         )
     if "scheduler_config" in cfg:
         merged_config.update(
-            cast(dict[str, object], OmegaConf.to_container(scheduler_config, resolve=True))
+            cast(
+                dict[str, object],
+                OmegaConf.to_container(scheduler_config, resolve=True),
+            )
         )
     if "fsdp_config" in cfg:
         merged_config.update(
@@ -386,17 +402,17 @@ def build_full_concrete_config(cfg: DictConfig):
         cfg.models = models
     if "trainer_config" in cfg:
         cfg.trainer_config = trainer_config
-    
+
     if "data_config" in cfg:
         cfg.data_config = data_config
-        
+
     if "scheduler_config" in cfg:
         cfg.scheduler_config = scheduler_config
 
     if "fsdp_config" in cfg:
         cfg.fsdp_config = fsdp_config
-    
-    if "eval_config" in cfg :
+
+    if "eval_config" in cfg:
         cfg.eval_config = eval_config
 
     log.info("✓ Configuration validation and build successful")
@@ -420,7 +436,9 @@ def create_param_groups(
     depth_lr_scaling = (current_depth / base_depth) ** (cp_alpha - 1)
     width_lr_scaling = (current_width / base_width) ** (-1)
     print(
-        f"Depth LR scaling: {depth_lr_scaling}, Width LR scaling: {width_lr_scaling}",flush=True)
+        f"Depth LR scaling: {depth_lr_scaling}, Width LR scaling: {width_lr_scaling}",
+        flush=True,
+    )
     emb_params = []
     hidden_ln_params = []
     hidden_weight_params = []
@@ -470,7 +488,7 @@ def create_param_groups(
             # Default to emb_params weights as no scaling is applied
             emb_params.append(param)
             assigned_params += 1
-        
+
     print(f"Assigned {assigned_params} parameters")
     print(f"Total parameters: {total_params}")
     print(f"Total named parameters: {total_named_params}")
@@ -482,7 +500,7 @@ def create_param_groups(
         {
             "params": emb_params,
             "weight_decay": default_wd,
-            "lr": 1.0*lr,
+            "lr": 1.0 * lr,
             "eps": eps,
         },
         {
@@ -494,19 +512,19 @@ def create_param_groups(
         {
             "params": hidden_weight_params,
             "weight_decay": default_wd / width_lr_scaling,
-            "lr": width_lr_scaling * depth_lr_scaling *lr,
+            "lr": width_lr_scaling * depth_lr_scaling * lr,
             "eps": adam_eps,
         },
         {
             "params": hidden_bias_params,
             "weight_decay": 0.0,
-            "lr": depth_lr_scaling*lr,
+            "lr": depth_lr_scaling * lr,
             "eps": adam_eps,
         },
         {
             "params": final_ln_params,
             "weight_decay": 0.0,
-            "lr": 1.0*lr,
+            "lr": 1.0 * lr,
             "eps": adam_eps,
         },
     ]

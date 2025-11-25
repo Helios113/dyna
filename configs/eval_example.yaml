@@ -20,16 +20,16 @@ eval_config:
   icl_tasks:
     -
       label: piqa
-      dataset_uri: # ADD YOUR OWN DATASET URI
-      num_fewshot: [5]
+      dataset_uri: /nfs-share/pa511/code_bases/dyna_project/dyna/llm-foundry/scripts/eval/local_data/commonsense_reasoning/piqa.jsonl
+      num_fewshot: 5
       icl_task_type: multiple_choice
       continuation_delimiter: ' '
       example_delimiter: "\n"
       prompt_string: ''
     -
       label: lambada
-      dataset_uri: # ADD YOUR OWN DATASET URI
-      num_fewshot: [0]
+      dataset_uri: /nfs-share/pa511/code_bases/dyna_project/dyna/llm-foundry/scripts/eval/local_data/language_understanding/lambada_openai_small.jsonl
+      num_fewshot: 0
       icl_task_type: language_modeling
 
 
