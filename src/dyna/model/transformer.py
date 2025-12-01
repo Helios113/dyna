@@ -355,11 +355,11 @@ class DynaFormer(DynaPretrainedModel):
                     break
                 if self.gather_stats:
                     self.gather_stats_func(x, expert_sel)
-            
+
             # g = torch.sigmoid(self.gate(ht))
             # x = g * ht + (1 - g) * x
             # x = self.c_proj(x)
-            
+
             if self.loop_normalization:
                 x = self.loop_norm(x)
             if self.loop_rope_theta_rebase:

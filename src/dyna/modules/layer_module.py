@@ -187,7 +187,6 @@ class LayerModule(Module, ABC):
                         scale_factor * update.view(-1)[continue_mask],
                     ).reshape_as(residual_stream)
                 else:
-                    
                     residual_stream = residual_stream + scale_factor * update
             case RescaleMethod.complete_p_dyn:
                 # Reference: nanoGPT-mup Block.forward() implementation
@@ -207,10 +206,13 @@ class LayerModule(Module, ABC):
                     ).reshape_as(residual_stream)
                 else:
                     residual_stream = residual_stream + scale_factor * update
-                    current_magnitude = torch.sqrt(torch.mean(residual_stream ** 2)) + 1e-8
-                    residual_stream = residual_stream * (self.target_residual_magnitude / current_magnitude)
-                    
-                    
+                    current_magnitude = (
+                        torch.sqrt(torch.mean(residual_stream**2)) + 1e-8
+                    )
+                    residual_stream = residual_stream * (
+                        self.target_residual_magnitude / current_magnitude
+                    )
+
             # case RescaleMethod.complete_p_dyn:
             #     if (
             #         self.enable_early_exit
