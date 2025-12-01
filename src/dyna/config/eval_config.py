@@ -9,7 +9,7 @@ class ICLTaskConfig:
 
     label: str
     dataset_uri: str
-    num_fewshot: list[int] = field(default_factory=lambda: [0])
+    num_fewshot: int = field(default_factory=lambda: 0)
     icl_task_type: str = "language_modeling"
     metric_names: list[str] = field(
         default_factory=lambda: ["InContextLearningLMAccuracy"]
@@ -18,6 +18,7 @@ class ICLTaskConfig:
     example_delimiter: str = "\n"
     continuation_delimiter: str = " "
     max_seq_len: int = 1024
+    batch_size: int = 8
 
 
 @dataclass
@@ -34,7 +35,9 @@ class EvalLoaderConfig:
     """Configuration for evaluation data loader."""
 
     name: str = "text"
-    dataset: EvalDatasetConfig = field(default_factory=lambda: EvalDatasetConfig(local=""))
+    dataset: EvalDatasetConfig = field(
+        default_factory=lambda: EvalDatasetConfig(local="")
+    )
     drop_last: bool = False
     num_workers: int = 8
 
@@ -50,6 +53,7 @@ class TokenizerConfig:
 @dataclass
 class EvalConfig:
     """Main evaluation configuration."""
+
     run_name: str
     # Model checkpoint
     load_weights_only: bool = True

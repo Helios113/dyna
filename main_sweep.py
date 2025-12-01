@@ -88,8 +88,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
     print(OmegaConf.to_yaml(cfg))
     # assert wandb.run is not None
     cfg.trainer_config.save_filename = run_name + "-ba{batch}.pt"
-    cfg.trainer_config.save_latest_filename = run_name+ "-latest-" + "-ba{batch}.pt"
-    
+    cfg.trainer_config.save_latest_filename = run_name + "-latest-" + "-ba{batch}.pt"
 
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
     tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
@@ -124,7 +123,7 @@ def execute_train(cfg: DictConfig, wandb_run: Run | None = None):
 
     # optimizer = DecoupledAdamW(model.parameters(), lr=cfg.optimizer_config.lr, eps=cfg.optimizer_config.eps, weight_decay=cfg.optimizer_config.weight_decay)
     optimizer = DecoupledAdamW(params)
-    
+
     scheduler = get_scheduler(cfg.scheduler_config)
     eval_dataloader = None
 

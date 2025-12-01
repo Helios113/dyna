@@ -54,7 +54,7 @@ eval_config:
   icl_seq_len: 1024
   run_name: dyna_lm_eval
   tokenizer: HuggingFaceTB/SmolLM2-1.7B
-  
+
   # In-context learning tasks for evaluation
   # These tasks evaluate perplexity and token accuracy on language modeling
   icl_tasks:

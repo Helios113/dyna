@@ -12,7 +12,7 @@ Usage with Hydra:
 import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any
 
 import hydra
 import pandas as pd
@@ -23,15 +23,12 @@ from composer.loggers import WandBLogger
 from composer.loggers.logger_destination import LoggerDestination
 from composer.utils import dist, get_device, reproducibility
 from llmfoundry.utils.builders import (
-    add_metrics_to_eval_loaders,
-    build_evaluators,
-    build_logger,
     build_tokenizer as llm_build_tokenizer,
 )
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from dyna.config import DynaConfig, EvalConfig, ICLTaskConfig, ModelConfig
+from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import build_full_concrete_config
 
@@ -138,53 +135,55 @@ def build_icl_evaluators(
     destination_dir: str = "./eval_data",
 ):
     """Build ICL evaluators as a generator to avoid memory issues.
-    
+
     Args:
         icl_tasks: List of validated ICL task configurations
         tokenizer: Tokenizer for the model
         device_eval_batch_size: Batch size for evaluation
         icl_seq_len: Maximum sequence length
         destination_dir: Directory to cache eval data
-        
+
     Yields:
         Evaluator: Individual evaluator objects
     """
     from composer import Evaluator
     from llmfoundry.eval.datasets import get_icl_task_dataloader
-    
+
     os.makedirs(destination_dir, exist_ok=True)
-    
+
     for icl_cfg in icl_tasks:
         log.info(f"Building evaluator for {icl_cfg['label']}")
-        
+
         # Set defaults
-        if 'max_seq_len' not in icl_cfg:
-            icl_cfg['max_seq_len'] = icl_seq_len
-        if 'batch_size' not in icl_cfg:
-            icl_cfg['batch_size'] = device_eval_batch_size
-            
+        if "max_seq_len" not in icl_cfg:
+            icl_cfg["max_seq_len"] = icl_seq_len
+        if "batch_size" not in icl_cfg:
+            icl_cfg["batch_size"] = device_eval_batch_size
+
         # Set default metrics based on task type
-        if 'metric_names' not in icl_cfg:
-            if icl_cfg['icl_task_type'] == 'language_modeling':
-                icl_cfg['metric_names'] = ['InContextLearningLMAccuracy']
-            elif icl_cfg['icl_task_type'] == 'multiple_choice':
-                icl_cfg['metric_names'] = ['InContextLearningMultipleChoiceAccuracy']
-            elif icl_cfg['icl_task_type'] == 'schema':
-                icl_cfg['metric_names'] = ['InContextLearningMultipleChoiceAccuracy']
+        if "metric_names" not in icl_cfg:
+            if icl_cfg["icl_task_type"] == "language_modeling":
+                icl_cfg["metric_names"] = ["InContextLearningLMAccuracy"]
+            elif (
+                icl_cfg["icl_task_type"] == "multiple_choice"
+                or icl_cfg["icl_task_type"] == "schema"
+            ):
+                icl_cfg["metric_names"] = ["InContextLearningMultipleChoiceAccuracy"]
             else:
-                icl_cfg['metric_names'] = []
-        
+                icl_cfg["metric_names"] = []
+
         # Build the dataloader
-        label = icl_cfg.pop('label')
-        dataset_uri = icl_cfg.pop('dataset_uri')
-        icl_task_type = icl_cfg.pop('icl_task_type')
-        batch_size = icl_cfg.pop('batch_size')
-        metric_names = icl_cfg.pop('metric_names')
-        has_categories = icl_cfg.pop('has_categories', False)
-        
+        icl_cfg = OmegaConf.to_container(icl_cfg)
+        label = icl_cfg.pop("label")
+        dataset_uri = icl_cfg.pop("dataset_uri")
+        icl_task_type = icl_cfg.pop("icl_task_type")
+        batch_size = icl_cfg.pop("batch_size")
+        metric_names = icl_cfg.pop("metric_names")
+        has_categories = icl_cfg.pop("has_categories", False)
+        icl_cfg["pad_tok_id"] = tokenizer.pad_token_id
         # Remaining kwargs for the dataset
         kwargs = icl_cfg
-        
+
         dataloader = get_icl_task_dataloader(
             icl_task_type=icl_task_type,
             dataset_uri=dataset_uri,
@@ -194,7 +193,7 @@ def build_icl_evaluators(
             destination_path=os.path.join(destination_dir, f"{label}.jsonl"),
             kwargs=kwargs,
         )
-        
+
         # Create evaluator
         if isinstance(dataloader, dict):
             # Handle categorical datasets
@@ -219,13 +218,13 @@ def calculate_markdown_results(
     model_name: str,
 ) -> pd.DataFrame:
     """Calculate and format evaluation results as a markdown table.
-    
+
     Args:
         logger_keys: List of metric keys from evaluation
         trainer: Composer trainer with evaluation results
         benchmark_to_taxonomy: Mapping of benchmark names to taxonomy categories
         model_name: Name of the evaluated model
-        
+
     Returns:
         DataFrame with formatted results
     """
@@ -234,12 +233,14 @@ def calculate_markdown_results(
     for key in logger_keys:
         # dl_name is either 2-tuple (benchmark_name, num_fewshot)
         # or 3-tuple (benchmark_name, num_fewshot, subcategory)
-        parts = key.split('/')
+        parts = key.split("/")
         dl_name, metric_name = parts[1:-1], parts[-1]
-        if 'Accuracy' not in metric_name:
+        if "Accuracy" not in metric_name:
             continue
 
-        metric = trainer.state.eval_metrics.get('/'.join(dl_name), {}).get(metric_name, None)
+        metric = trainer.state.eval_metrics.get("/".join(dl_name), {}).get(
+            metric_name, None
+        )
 
         if metric is None:
             continue
@@ -252,19 +253,21 @@ def calculate_markdown_results(
         if metric_name not in results[dl_name[1]][dl_name[0]]:
             results[dl_name[1]][dl_name[0]][metric_name] = []
 
-        results[dl_name[1]][dl_name[0]][metric_name].append({
-            'val': metric.compute(),
-            'subcat': dl_name[-1] if len(dl_name) == 3 else 'no_subcat',
-        })
+        results[dl_name[1]][dl_name[0]][metric_name].append(
+            {
+                "val": metric.compute(),
+                "subcat": dl_name[-1] if len(dl_name) == 3 else "no_subcat",
+            }
+        )
 
     df = pd.DataFrame(
         columns=[
-            'Category',
-            'Benchmark',
-            'Subtask',
-            'Accuracy',
-            'Number few shot',
-            'Model',
+            "Category",
+            "Benchmark",
+            "Subtask",
+            "Accuracy",
+            "Number few shot",
+            "Model",
         ],
     )
 
@@ -274,32 +277,32 @@ def calculate_markdown_results(
                 subscores = results[num_shot][benchmark][metric]
                 if len(subscores) == 1:
                     row = {
-                        'Category': benchmark_to_taxonomy.get(benchmark, ''),
-                        'Benchmark': benchmark,
-                        'Subtask': None,
-                        'Accuracy': subscores[0]['val'],
-                        'Number few shot': num_shot,
-                        'Model': model_name,
+                        "Category": benchmark_to_taxonomy.get(benchmark, ""),
+                        "Benchmark": benchmark,
+                        "Subtask": None,
+                        "Accuracy": subscores[0]["val"],
+                        "Number few shot": num_shot,
+                        "Model": model_name,
                     }
                     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
                 else:
                     row = {
-                        'Category': benchmark_to_taxonomy.get(benchmark, ''),
-                        'Benchmark': benchmark,
-                        'Subtask': 'Average',
-                        'Accuracy': sum(s['val'] for s in subscores) / len(subscores),
-                        'Number few shot': num_shot,
-                        'Model': model_name,
+                        "Category": benchmark_to_taxonomy.get(benchmark, ""),
+                        "Benchmark": benchmark,
+                        "Subtask": "Average",
+                        "Accuracy": sum(s["val"] for s in subscores) / len(subscores),
+                        "Number few shot": num_shot,
+                        "Model": model_name,
                     }
                     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
                     for sub in subscores:
                         row = {
-                            'Category': benchmark_to_taxonomy.get(benchmark, ''),
-                            'Benchmark': None,
-                            'Subtask': sub['subcat'],
-                            'Accuracy': sub['val'],
-                            'Number few shot': num_shot,
-                            'Model': model_name,
+                            "Category": benchmark_to_taxonomy.get(benchmark, ""),
+                            "Benchmark": None,
+                            "Subtask": sub["subcat"],
+                            "Accuracy": sub["val"],
+                            "Number few shot": num_shot,
+                            "Model": model_name,
                         }
                         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     return df
@@ -347,8 +350,8 @@ def evaluate_model(
     """
     log.info(f"Evaluating model: {model_name}")
 
-
-    tokenizer = build_tokenizer(tokenizer_config, {})
+    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-1.7B")
+    tokenizer.pad_token = tokenizer.eos_token  # Set pad token to eos token
 
     # Build model
     # init_device = model_config.pop("init_device", device)
@@ -378,19 +381,21 @@ def evaluate_model(
             torch.cuda.synchronize()
 
         start_time = time.time()
-        
+
         # Build evaluators as generator and evaluate one at a time
         # Each evaluator will evaluate on the ENTIRE dataset (subset_num_batches=None)
         evaluators_gen = build_icl_evaluators(
             icl_tasks=icl_tasks,
-            tokenizer=build_tokenizer(tokenizer_config, None),
+            tokenizer=tokenizer,
             device_eval_batch_size=device_eval_batch_size,
             icl_seq_len=icl_seq_len,
         )
-        
+
         for evaluator in evaluators_gen:
             log.info(f"Evaluating {evaluator.label} on full dataset...")
-            trainer.eval(eval_dataloader=evaluator)  # No subset_num_batches, uses full dataset
+            trainer.eval(
+                eval_dataloader=evaluator
+            )  # No subset_num_batches, uses full dataset
             # Clean up to free memory
             del evaluator
             if torch.cuda.is_available():
@@ -401,52 +406,51 @@ def evaluate_model(
 
         elapsed_time = time.time() - start_time
         log.info(f"Ran {model_name} ICL eval in: {elapsed_time:.2f} seconds")
-    
+
     # Run separate evaluation on single batch for perplexity/token accuracy
     if eval_loader_config:
-        log.info(f"Starting single-batch perplexity/token accuracy eval for {model_name}...")
+        log.info(
+            f"Starting single-batch perplexity/token accuracy eval for {model_name}..."
+        )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-            
+
         start_time = time.time()
-        
+
         # Build the eval dataloader
-        from llmfoundry.utils.builders import build_dataloader
         from composer import Evaluator
-        
-        tokenizer = build_tokenizer(
-            tokenizer_config.get("name", "HuggingFaceTB/SmolLM2-1.7B"),
-            tokenizer_config.get("kwargs", {})
-        )
-        
+        from llmfoundry.utils.builders import build_dataloader
+
         eval_dataloader = build_dataloader(
             eval_loader_config,
             tokenizer,
             eval_batch_size,
         )
-        
+
         # Create evaluator with standard LM metrics (perplexity, token accuracy)
         eval_evaluator = Evaluator(
             label="eval_batch",
             dataloader=eval_dataloader,
             metric_names=[],  # Uses model's default metrics (perplexity, token_accuracy, cross_entropy)
         )
-        
+
         log.info(f"Evaluating single batch (batch_size={eval_batch_size})...")
-        trainer.eval(eval_dataloader=eval_evaluator, subset_num_batches=1)  # Only 1 batch
-        
+        trainer.eval(
+            eval_dataloader=eval_evaluator, subset_num_batches=1
+        )  # Only 1 batch
+
         # Cleanup
         del eval_evaluator
         del eval_dataloader
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-            
+
         elapsed_time = time.time() - start_time
         log.info(f"Ran {model_name} single-batch eval in: {elapsed_time:.2f} seconds")
-    
+
     # Cleanup trainer and model
     del trainer
     del model
@@ -478,13 +482,13 @@ def evaluate(cfg: DictConfig) -> None:
     callback_configs = cfg.get("callbacks", {})
     callbacks = build_callbacks(callback_configs)
 
-  
-
     # Get ICL tasks configuration from eval_config
     icl_tasks = cfg.eval_config.get("icl_tasks", None) if "eval_config" in cfg else None
-    eval_loader_config = cfg.eval_config.get("eval_loader", None) if "eval_config" in cfg else None
+    eval_loader_config = (
+        cfg.eval_config.get("eval_loader", None) if "eval_config" in cfg else None
+    )
     eval_gauntlet_config = cfg.get("eval_gauntlet", None)
-    
+
     models = [cfg.model_config] if "model_config" in cfg else cfg.models
     # Evaluate each model
     for model_cfg in models:
@@ -514,7 +518,7 @@ def evaluate(cfg: DictConfig) -> None:
         )
 
         log.info(f"Completed evaluation for {model_name}")
-        
+
         # Cleanup between models
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -548,10 +552,8 @@ def main(cfg: DictConfig) -> None:
     log.info("Starting Dyna model evaluation")
     os.environ["S3_ENDPOINT_URL"] = "http://128.232.115.19:9000"
 
-    
     # Validate configuration using structured schemas
     cfg = build_full_concrete_config(cfg)
-
 
     # Run evaluation
     evaluate(cfg)
