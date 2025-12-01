@@ -97,7 +97,8 @@ class DynaFormer(DynaPretrainedModel):
         self._residual_magnitudes = []
 
         self._construct_layers(config)
-
+        # self.gate = torch.nn.Linear(config.d_model, 1)
+        # self.c_proj = torch.nn.Linear(config.d_model, config.d_model)
         # Use the the inint block length for this value
 
         self.loop_hyper_params = config.loop_hyper_params
@@ -328,6 +329,7 @@ class DynaFormer(DynaPretrainedModel):
         for i in range(self.active_repeats):
             if self.non_lin:
                 x = self.non_lin_fn(x)
+            # ht = x
 
             for layer in self.body_layers:
                 x_out, expert_sel, saturation_event, layer_index = layer(
@@ -353,6 +355,11 @@ class DynaFormer(DynaPretrainedModel):
                     break
                 if self.gather_stats:
                     self.gather_stats_func(x, expert_sel)
+            
+            # g = torch.sigmoid(self.gate(ht))
+            # x = g * ht + (1 - g) * x
+            # x = self.c_proj(x)
+            
             if self.loop_normalization:
                 x = self.loop_norm(x)
             if self.loop_rope_theta_rebase:
@@ -365,7 +372,7 @@ class DynaFormer(DynaPretrainedModel):
                 break
             # multiple_out = multiple_out + x if multiple_out is not None else x
         # assert layer_index is not None
-
+        # x = self.c_proj(x)
         return x, energy_per_sample, layer_index
 
     def update_inv_freq(self, base: int):

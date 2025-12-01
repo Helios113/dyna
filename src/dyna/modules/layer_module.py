@@ -83,6 +83,7 @@ class LayerModule(Module, ABC):
         self.current_width = config.current_width
         self.loop_hyper_params = config.loop_hyper_params
         self.cp_alpha = config.cp_alpha
+        self.target_residual_magnitude = torch.nn.Parameter(torch.tensor(1.0))
 
     def update_inv_freq(self, base: int):
         self.attention.update_inv_freq(base)
@@ -186,34 +187,56 @@ class LayerModule(Module, ABC):
                         scale_factor * update.view(-1)[continue_mask],
                     ).reshape_as(residual_stream)
                 else:
+                    
                     residual_stream = residual_stream + scale_factor * update
-
             case RescaleMethod.complete_p_dyn:
-                if (
-                    self.enable_early_exit
-                    and cum_sum is not None
-                    and continue_mask is not None
-                ):
-                    scale_factor = layer_index / (layer_index - 1) ** (-self.cp_alpha)
-                    update_factor: float = cum_sum[continue_mask].unsqueeze(1) * (  # pyright: ignore[reportRedeclaration]
-                        layer_index / self.base_depth
-                    ) ** (-self.cp_alpha)
-
-                    residual_stream[continue_mask] = (
-                        scale_factor * residual_stream[continue_mask]
-                        + update.view(-1, update.shape[-1])[: continue_mask.sum()]
-                        * update_factor
-                    )
+                # Reference: nanoGPT-mup Block.forward() implementation
+                # self.residual_scaling = 1/(config.depth_multiplier ** config.depth_alpha_exp)
+                if total_depth is not None:
+                    scale_factor = (self.base_depth / total_depth) ** self.cp_alpha
                 else:
-                    # Apply to all tokens when early exit is disabled
-                    scale_factor = (layer_index - 1) / layer_index
-                    update_factor: float = (layer_index / self.base_depth) ** (
-                        -self.cp_alpha
-                    )
-                    # print(f"Scale factor: {scale_factor}, Update factor: {update_factor}", flush=True)
-                    residual_stream = (
-                        scale_factor * residual_stream + update * update_factor
-                    )
+                    scale_factor = (
+                        self.base_depth / self.current_depth
+                    ) ** self.cp_alpha
+                if self.enable_early_exit and continue_mask is not None:
+                    residual_stream = torch.scatter_add(
+                        residual_stream.view(-1),
+                        0,
+                        continue_mask,
+                        scale_factor * update.view(-1)[continue_mask],
+                    ).reshape_as(residual_stream)
+                else:
+                    residual_stream = residual_stream + scale_factor * update
+                    current_magnitude = torch.sqrt(torch.mean(residual_stream ** 2)) + 1e-8
+                    residual_stream = residual_stream * (self.target_residual_magnitude / current_magnitude)
+                    
+                    
+            # case RescaleMethod.complete_p_dyn:
+            #     if (
+            #         self.enable_early_exit
+            #         and cum_sum is not None
+            #         and continue_mask is not None
+            #     ):
+            #         scale_factor = layer_index / (layer_index - 1) ** (-self.cp_alpha)
+            #         update_factor: float = cum_sum[continue_mask].unsqueeze(1) * (  # pyright: ignore[reportRedeclaration]
+            #             layer_index / self.base_depth
+            #         ) ** (-self.cp_alpha)
+
+            #         residual_stream[continue_mask] = (
+            #             scale_factor * residual_stream[continue_mask]
+            #             + update.view(-1, update.shape[-1])[: continue_mask.sum()]
+            #             * update_factor
+            #         )
+            #     else:
+            #         # Apply to all tokens when early exit is disabled
+            #         scale_factor = (layer_index - 1) / layer_index
+            #         update_factor: float = (layer_index / self.base_depth) ** (
+            #             -self.cp_alpha
+            #         )
+            #         # print(f"Scale factor: {scale_factor}, Update factor: {update_factor}", flush=True)
+            #         residual_stream = (
+            #             scale_factor * residual_stream + update * update_factor
+            #         )
             # case (
             #     RescaleMethod.sqrt_prot_emb |
             # RescaleMethod.sqrt_no_prot_emb

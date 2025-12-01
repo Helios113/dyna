@@ -9,12 +9,12 @@ defaults:
 execute_config:
     model_config:
         execution_mode: transformer
-        d_model: 768
-        d_ffn: 3072
-        n_repeats: 2
-        n_heads: 12
-        d_head: 64
-        n_layers: 6
+        d_model: 1024
+        d_ffn: 4096
+        n_repeats: 1
+        n_heads: 8
+        d_head: 128
+        n_layers: 12
         vocab_size: 50368
         max_seq_len: 1024
         n_expert_shared_attn: 0
@@ -22,7 +22,7 @@ execute_config:
         collect_reg_loss: False
         enable_early_exit: False
         norm_structure: pre
-        rescaling_method: complete_p_dyn
+        rescaling_method: complete_p
         loop_normalization: False
         repeat_residual: False
         sample_iterations: False
@@ -32,7 +32,7 @@ execute_config:
         base_depth: 2
         current_depth: 12
         base_width: 256
-        current_width: 768
+        current_width: 1024
         cp_alpha: 1
         sqrt_attention_scale: False
         use_embedding_norm: False
@@ -43,10 +43,10 @@ execute_config:
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "rescale_c_proj"
+        run_name: "base_400M_complete_p"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
-        device_train_microbatch_size: 32
+        device_train_microbatch_size: auto
         precision: "amp_bf16"
         device: "gpu"
         save_folder: "s3://loop-llm/dyna/"
