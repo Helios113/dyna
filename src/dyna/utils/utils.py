@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import csv
+import functools
 import glob
 import logging
 import os
@@ -6,16 +9,20 @@ import secrets
 import string
 import subprocess
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, Callable, Generic, TypeVar, cast
 
+import catalogue
 import yaml
 from composer import DataSpec
 from composer.core import Callback
 from composer.optim.scheduler import ComposerScheduler
-from llmfoundry.utils.builders import build_callback, build_dataloader, build_scheduler
 from omegaconf import DictConfig, OmegaConf
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
+import dyna.callbacks  # noqa: F401
+import dyna.schedulers  # noqa: F401
 
 from dyna.config import (
     DataConfig,
@@ -26,6 +33,11 @@ from dyna.config import (
     SchedulerConfig,
     TrainerConfig,
 )
+from dyna.data.text_data import build_text_dataloader
+from dyna.utils.builders import build_callback, build_scheduler
+
+T = TypeVar("T")
+TypeBoundT = TypeVar("TypeBoundT", bound=type[Any])
 
 
 def generate_id(length: int = 8) -> str:
@@ -186,15 +198,27 @@ def _add_index_prefix(name: str) -> str:
         return f"1__{name}"
 
 
-def get_callbacks(cfg: DictConfig) -> list[Callback]:
-    return [
-        build_callback(
-            name=str(name),
-            kwargs=callback_cfg,
-            train_config=cfg,
+def get_callbacks(cfg: DictConfig | dict[str, Any] | None) -> list[Callback]:
+    if cfg is None:
+        return []
+
+    callbacks: list[Callback] = []
+    for name, callback_cfg in cfg.items():
+        if isinstance(callback_cfg, DictConfig):
+            callback_kwargs = cast(
+                dict[str, Any], OmegaConf.to_container(callback_cfg, resolve=True)
+            )
+        else:
+            callback_kwargs = cast(dict[str, Any], callback_cfg) if callback_cfg else {}
+
+        callbacks.append(
+            build_callback(
+                name=str(name),
+                kwargs=callback_kwargs,
+            )
         )
-        for name, callback_cfg in cfg.items()
-    ]
+
+    return callbacks
 
 
 def load_and_concat_yamls(directory):
@@ -223,22 +247,25 @@ def get_data_loader(
     device_train_batch_size: int,
 ) -> DataSpec:
     os.environ["S3_ENDPOINT_URL"] = "http://128.232.115.19:9000"
-    train_loader = build_dataloader(
-        cast(dict[str, object], OmegaConf.to_container(cfg)),
-        tokenizer,
-        device_train_batch_size,
+    cfg_dict = cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
+    dataset_cfg = cast(dict[str, Any], cfg_dict.get("dataset", {})).copy()
+    return build_text_dataloader(
+        tokenizer=tokenizer,
+        device_batch_size=device_train_batch_size,
+        dataset=dataset_cfg,
+        drop_last=bool(cfg_dict.get("drop_last", True)),
+        num_workers=int(cfg_dict.get("num_workers", 0)),
+        pin_memory=bool(cfg_dict.get("pin_memory", False)),
+        prefetch_factor=int(cfg_dict.get("prefetch_factor", 2)),
+        persistent_workers=bool(cfg_dict.get("persistent_workers", False)),
+        timeout=int(cfg_dict.get("timeout", 0)),
     )
-    return train_loader
 
 
 def get_scheduler(cfg: DictConfig) -> ComposerScheduler:
-    scheduler_name = cfg.name
-    del cfg.name
-    scheduler = build_scheduler(
-        name=scheduler_name,
-        scheduler_config=cast(dict[str, object], OmegaConf.to_container(cfg)),
-    )
-    return scheduler
+    cfg_dict = cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
+    scheduler_name = cfg_dict.pop("name")
+    return build_scheduler(name=scheduler_name, scheduler_config=cfg_dict)
 
 
 def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
@@ -550,3 +577,110 @@ def get_current_git_short_hash(repo_path=".") -> str:
     )
 
     return short_hash
+
+class TypedRegistry(catalogue.Registry, Generic[T]):
+    """A thin wrapper around catalogue.Registry to add static typing and.
+
+    descriptions.
+    """
+
+    def __init__(
+        self,
+        namespace: Sequence[str],
+        entry_points: bool = False,
+        description: str = '',
+    ) -> None:
+        super().__init__(namespace, entry_points=entry_points)
+
+        self.description = description
+
+    def __call__(self, name: str, func: T | None = None) -> Callable[[T], T]:
+        return super().__call__(name, func)
+
+    def register(self, name: str, *, func: T | None = None) -> T:
+        return super().register(name, func=func)
+
+    def register_class(
+        self,
+        name: str,
+        *,
+        func: TypeBoundT | None = None,
+    ) -> TypeBoundT:
+        return super().register(name, func=func)
+
+    def get(self, name: str) -> T:
+        return super().get(name)
+
+    def get_all(self) -> dict[str, T]:
+        return super().get_all()
+
+    def get_entry_point(self, name: str, default: T | None = None) -> T:
+        return super().get_entry_point(name, default=default)
+
+    def get_entry_points(self) -> dict[str, T]:
+        return super().get_entry_points()
+
+
+def construct_from_registry(
+    name: str,
+    registry: TypedRegistry,
+    partial_function: bool = True,
+    pre_validation_function: Callable[[Any], None] | type | None = None,
+    post_validation_function: Callable[[Any], None] | None = None,
+    kwargs: dict[str, Any] | None = None,
+) -> Any:
+    """Helper function to build an item from the registry.
+
+    Args:
+        name (str): The name of the registered item
+        registry (catalogue.Registry): The registry to fetch the item from
+        partial_function (bool, optional): Whether to return a partial function for registered callables. Defaults to True.
+        pre_validation_function (Optional[Union[Callable[[Any], None], type]], optional): An optional validation function called
+            before constructing the item to return. This should throw an exception if validation fails. Defaults to None.
+        post_validation_function (Optional[Callable[[Any], None]], optional): An optional validation function called after
+            constructing the item to return. This should throw an exception if validation fails. Defaults to None.
+        kwargs (Optional[Dict[str, Any]]): Other relevant keyword arguments.
+
+    Raises:
+        ValueError: If the validation functions failed or the registered item is invalid
+
+    Returns:
+        Any: The constructed item from the registry
+    """
+    if kwargs is None:
+        kwargs = {}
+
+    registered_constructor = registry.get(name)
+
+    if pre_validation_function is not None:
+        if isinstance(pre_validation_function, type):
+            if not issubclass(registered_constructor, pre_validation_function):
+                raise ValueError(
+                    f'Expected {name} to be of type {pre_validation_function}, but got {type(registered_constructor)}',
+                )
+        elif isinstance(pre_validation_function, Callable):
+            pre_validation_function(registered_constructor)
+        else:
+            raise ValueError(
+                f'Expected pre_validation_function to be a callable or a type, but got {type(pre_validation_function)}',
+            )
+
+    # If it is a class, or a builder function, construct the class with kwargs
+    # If it is a function, create a partial with kwargs
+    if isinstance(
+        registered_constructor,
+        type,
+    ) or callable(registered_constructor) and not partial_function:
+        constructed_item = registered_constructor(**kwargs)
+    elif callable(registered_constructor):
+        constructed_item = functools.partial(registered_constructor, **kwargs)
+    else:
+        raise ValueError(
+            f'Expected {name} to be a class or function, but got {type(registered_constructor)}',
+        )
+
+    if post_validation_function is not None:
+        post_validation_function(constructed_item)
+
+    return constructed_item
+

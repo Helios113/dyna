@@ -74,15 +74,15 @@ class ShannonEntropyCallback(Callback):
         model: DynaLM = cast(DynaLM, state.model.model)
         batch_latentes = model.transformer._latent_vectors
 
-        # Keep everything on GPU
+        # Process data on CPU (already moved to CPU in gather_stats_func)
         batch_entropy = []
         for elem in batch_latentes:
             for i, sample in enumerate(elem):
                 if i == len(batch_entropy):
                     batch_entropy.append(sample)
-
                 else:
                     batch_entropy[i] = torch.cat((batch_entropy[i], sample))
+        
         if batch_entropy:
             metrics_dict["metrics/shanon_entropy"] = batch_entropy[-1].mean().item()
             try:
@@ -132,9 +132,9 @@ class ShannonEntropyCallback(Callback):
             ax.set_title("Entropy Trend (no data)", fontsize=14)
             return fig
 
-        # Only move to CPU when necessary for plotting, keep computation on GPU
-        means = [d.mean().cpu().item() for d in data]
-        stds = [d.std().cpu().item() for d in data]
+        # Data is already on CPU
+        means = [d.mean().item() for d in data]
+        stds = [d.std().item() for d in data]
         maxs = [mean + std for mean, std in zip(means, stds, strict=False)]
         mins = [mean - std for mean, std in zip(means, stds, strict=False)]
         # x = np.arange(len(means))

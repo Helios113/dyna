@@ -1,33 +1,64 @@
-# Minimal evaluation configuration for quick testing
-# Usage: python eval.py --config-name=eval_minimal
+# Minimal evaluation configuration for eval_l.py
+# Usage: python eval_l.py --config-name=eval_minimal
 
-seed: 42
-precision: fp32
-device: cpu
-python_log_level: INFO
+eval_config:
+  seed: 42
+  precision: fp32
+  device: cpu
+  run_name: eval_minimal
+  batch_size: 1
+  eval_batch_size: 32
+  tokenizer: gpt2
+  tokenizer_kwargs:
+    use_fast: true
+  tasks:
+    - lambada_openai
+  max_samples: 32
+  output_dir: ./lighteval_minimal_results
+  save_details: false
+  push_to_hub: false
+  parallelism:
+    dp_size: 1
+    pp_size: 1
+    tp_size: 1
+  launcher_type: default
+  override_batch_size: null
+  num_fewshot_seeds: 1
+  wandb:
+    enabled: false
 
-model:
-  dim: 256
+  # Optional: streaming perplexity evaluation
+  # eval_loader:
+  #   name: text
+  #   dataset:
+  #     local: /path/to/local/cache
+  #     remote: s3://bucket/dataset
+  #     split: val
+  #     shuffle: false
+  #     max_seq_len: 512
+  #     shuffle_seed: ${eval_config.seed}
+
+model_config:
+  execution_mode: transformer
+  transformer_type: dyna
+  d_model: 256
   d_ffn: 1024
   n_layers: 4
   n_heads: 4
   d_head: 64
   vocab_size: 49152
   max_seq_len: 512
-  mode: transformer
+  n_repeats: 1
+  n_expert_shared_attn: 0
+  n_expert_shared_ffn: 0
+  collect_reg_loss: false
   enable_early_exit: false
-  norm_type: pre
-  rescale_type: none
+  norm_structure: pre
+  rescaling_method: none
   base_depth: 4
   current_depth: 4
   base_width: 256
   current_width: 256
   cp_alpha: 1.0
-
-tokenizer:
-  name: HuggingFaceTB/SmolLM2-1.7B
-  kwargs:
-    trust_remote_code: true
-
-# Optional checkpoint path
-# load_path: /path/to/checkpoint.pt
+  use_embedding_norm: false
+  init_sigma: 0.02

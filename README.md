@@ -23,5 +23,3 @@ Framework and implementation of dynamic path iterative transformer models.
     *
 
 
-
-I am developing sweeps

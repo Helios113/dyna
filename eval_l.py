@@ -1,374 +1,199 @@
-"""Evaluation script for Dyna models using Lighteval from Hugging Face.
+"""Run Lighteval evaluations plus streaming perplexity for Dyna checkpoints."""
 
-This script provides functionality to load and evaluate Dyna models using the
-lighteval library from Hugging Face, which offers a lightweight and flexible
-evaluation framework.
-
-Usage with Hydra:
-    python eval_l.py                                    # Uses default config
-    python eval_l.py --config-name=eval_lighteval       # Uses specific config
-    python eval_l.py device=cpu precision=fp32          # Override parameters
-
-Lighteval supports many standard benchmarks including:
-    - MMLU (Massive Multitask Language Understanding)
-    - HellaSwag
-    - ARC (AI2 Reasoning Challenge)
-    - TruthfulQA
-    - GSM8K
-    - PIQA
-    - WinoGrande
-    and many more...
-"""
-
+import ast
+import json
 import logging
+import math
 import os
-from typing import Any
+from contextlib import nullcontext
+from typing import Any, cast
 
+import datasets
 import hydra
 import torch
+from composer.utils import maybe_create_object_store_from_uri, parse_uri
+from composer.utils.checkpoint import download_checkpoint, safe_torch_load
 from lighteval.logging.evaluation_tracker import EvaluationTracker
-from lighteval.models.base_model import BaseModel
-from lighteval.models.model_output import (
-    GenerativeTaskOutput,
-    LoglikelihoodOutput,
-    LoglikelihoodSingleTokenOutput,
-)
+from lighteval.models.abstract_model import LightevalModel, ModelConfig
+from lighteval.models.model_output import ModelResponse
 from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
-from lighteval.tasks.lighteval_task import LightevalTask
-from lighteval.tasks.registry import Registry, taskinfo_selector
-from omegaconf import DictConfig, OmegaConf
-from torch.nn.functional import log_softmax
+from lighteval.tasks import lighteval_task as lighteval_task_module
+from lighteval.tasks.prompt_manager import PromptManager
+from lighteval.tasks.requests import Doc, SamplingMethod
+from lighteval.utils.cache_management import SampleCache, cached
+from lighteval.models.utils import uses_chat_template
+from lighteval.utils.utils import EnvConfig
+from omegaconf import DictConfig, ListConfig, OmegaConf
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from tqdm.auto import tqdm
 
 from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
+from dyna.utils import get_data_loader
+from dyna.utils.utils import load_and_concat_yamls
+DEFAULT_S3_ENDPOINT = "http://128.232.115.19:9000"
+DEFAULT_CONVERTED_DATASET_REVISION = "refs/convert/parquet"
+CONVERTED_DATASET_REVISION_ENV = "DYNA_DATASET_CONVERT_REVISION"
+DISABLE_CONVERTED_DATASET_FALLBACK_ENV = "DYNA_DISABLE_DATASET_CONVERT_FALLBACK"
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_dataset_max_seq_len(cfg: DictConfig) -> int | None:
+    loader_cfg = cfg.eval_config.get("perplexity_loader") or cfg.eval_config.get("eval_loader")
+    if loader_cfg is None:
+        return None
+
+    dataset_cfg: Any = None
+    if isinstance(loader_cfg, DictConfig):
+        dataset_cfg = loader_cfg.get("dataset")
+    elif isinstance(loader_cfg, dict):
+        dataset_cfg = loader_cfg.get("dataset")
+
+    if dataset_cfg is None:
+        return None
+    if isinstance(dataset_cfg, DictConfig):
+        max_len = dataset_cfg.get("max_seq_len")
+    elif isinstance(dataset_cfg, dict):
+        max_len = dataset_cfg.get("max_seq_len")
+    else:
+        max_len = None
+
+    return _coerce_int(max_len)
+
+
+def _resolve_max_seq_len(cfg: DictConfig, model_config: DynaConfig) -> int:
+    dataset_len = _resolve_dataset_max_seq_len(cfg)
+    if dataset_len is not None:
+        return dataset_len
+
+    eval_len = _coerce_int(cfg.eval_config.get("max_seq_len"))
+    if eval_len is not None:
+        return eval_len
+
+    model_len = _coerce_int(getattr(model_config, "max_seq_len", None))
+    if model_len is not None:
+        return model_len
+
+    raise ValueError(
+        "Unable to determine max_seq_len; set it on the eval dataset config or eval_config.max_seq_len."
+    )
+
+
+def _normalize_task_names(raw_tasks: Any) -> list[str]:
+    if isinstance(raw_tasks, ListConfig):
+        values = list(raw_tasks)
+    elif isinstance(raw_tasks, (list, tuple)):
+        values = list(raw_tasks)
+    elif raw_tasks:
+        values = [raw_tasks]
+    else:
+        values = ["lambada_openai"]
+
+    return values
+
+
+def _ensure_s3_endpoint() -> None:
+    if "S3_ENDPOINT_URL" not in os.environ:
+        os.environ["S3_ENDPOINT_URL"] = DEFAULT_S3_ENDPOINT
+
+
+def _enable_hf_converted_branch_fallback() -> None:
+    """Allow datasets that relied on scripts to fall back to converted branches/configs."""
+
+    if getattr(_enable_hf_converted_branch_fallback, "_patched", False):
+        return
+
+    if os.environ.get(DISABLE_CONVERTED_DATASET_FALLBACK_ENV):
+        log.info(
+            "Skipping HF dataset convert fallback because %s is set.",
+            DISABLE_CONVERTED_DATASET_FALLBACK_ENV,
+        )
+        return
+
+    original_load_dataset = datasets.load_dataset
+
+    def _load_dataset_with_fallbacks(path, *args, **initial_kwargs):  # type: ignore[override]
+        attempt_kwargs = initial_kwargs
+        tried_converted = False
+        tried_builder = False
+
+        while True:
+            try:
+                return original_load_dataset(path, *args, **attempt_kwargs)
+            except Exception as err:  # noqa: BLE001
+                fallback_kwargs = None
+                if (_needs_converted_revision(err) and not tried_converted) and isinstance(path, str):
+                    tried_converted = True
+                    fallback_kwargs = attempt_kwargs.copy()
+                    fallback_kwargs["revision"] = os.environ.get(
+                        CONVERTED_DATASET_REVISION_ENV,
+                        DEFAULT_CONVERTED_DATASET_REVISION,
+                    )
+                    log.warning(
+                        "Dataset %s requires a converted branch; retrying with revision '%s'.",
+                        path,
+                        fallback_kwargs["revision"],
+                    )
+                elif _needs_builder_config_retry(err, attempt_kwargs) and not tried_builder:
+                    tried_builder = True
+                    fallback_kwargs = attempt_kwargs.copy()
+                    fallback_kwargs["name"] = _pick_available_builder(str(err), fallback_kwargs.get("name"))
+                    log.warning(
+                        "Falling back to builder config '%s' for dataset %s.",
+                        fallback_kwargs["name"],
+                        path,
+                    )
+
+                if fallback_kwargs is None:
+                    raise
+                attempt_kwargs = fallback_kwargs
+
+    datasets.load_dataset = _load_dataset_with_fallbacks
+    lighteval_task_module.load_dataset = _load_dataset_with_fallbacks
+    _enable_hf_converted_branch_fallback._patched = True
+
+
+def _needs_converted_revision(err: Exception) -> bool:
+    return isinstance(err, RuntimeError) and "Dataset scripts are no longer supported" in str(err)
+
+
+def _needs_builder_config_retry(err: Exception, kwargs: dict[str, Any]) -> bool:
+    message = str(err)
+    if "BuilderConfig" not in message and "Available configs" not in message:
+        return False
+    current_name = kwargs.get("name")
+    replacement = _pick_available_builder(message, current_name)
+    if replacement is None:
+        return False
+    if current_name is None:
+        return True
+    return replacement != current_name
+
+
+def _pick_available_builder(error_msg: str, fallback: str | None = None) -> str | None:
+    start = error_msg.find("[")
+    end = error_msg.find("]", start)
+    if start == -1 or end == -1:
+        return fallback
+    try:
+        options = ast.literal_eval(error_msg[start : end + 1])
+    except (ValueError, SyntaxError):
+        return fallback
+    if not options:
+        return fallback
+    choice = str(options[0])
+    return choice or fallback
 
 log = logging.getLogger(__name__)
-
-
-class DynaLightevalModel(BaseModel):
-    """Wrapper to make Dyna models compatible with Lighteval framework.
-
-    This class adapts the Dyna model to work with Lighteval's evaluation pipeline
-    by implementing the required interface methods.
-    """
-
-    def __init__(
-        self,
-        config: DictConfig,
-        model_config: DynaConfig,
-        tokenizer: PreTrainedTokenizerBase,
-        device: str = "cuda",
-        batch_size: int = 1,
-    ):
-        """Initialize the Lighteval-compatible Dyna model.
-
-        Args:
-            config: Hydra configuration
-            model_config: Dyna model configuration
-            tokenizer: Tokenizer for the model
-            device: Device to run inference on
-            batch_size: Batch size for evaluation
-        """
-        self.config = config
-        self.model_config = model_config
-        self._tokenizer = tokenizer
-        self._device = device
-        self._batch_size = batch_size
-
-        # Initialize the Dyna model
-        log.info("Initializing Dyna model for Lighteval...")
-        self.model = ComposerDynaModel(config=model_config, tokenizer=tokenizer)
-
-        # Load checkpoint if specified
-        if config.eval_config.get("load_path"):
-            self._load_checkpoint(config.eval_config.load_path)
-
-        # Move model to device and set to eval mode
-        self.model = self.model.to(device)
-        self.model.eval()
-
-        # Set precision
-        precision = config.eval_config.get("precision", "fp32")
-        if precision == "amp_bf16":
-            self.model = self.model.to(torch.bfloat16)
-        elif precision == "fp16":
-            self.model = self.model.to(torch.float16)
-
-        log.info(f"Model loaded on {device} with precision {precision}")
-
-    def _load_checkpoint(self, checkpoint_path: str):
-        """Load model weights from checkpoint.
-
-        Args:
-            checkpoint_path: Path to the checkpoint file
-        """
-        log.info(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-
-        # Handle different checkpoint formats
-        if "state" in checkpoint:
-            # Composer checkpoint format
-            if "model" in checkpoint["state"]:
-                state_dict = checkpoint["state"]["model"]
-            else:
-                state_dict = checkpoint["state"]
-        elif "model" in checkpoint:
-            state_dict = checkpoint["model"]
-        else:
-            state_dict = checkpoint
-
-        # The ComposerDynaModel wraps a DynaLM model
-        # We need to load into self.model.model (the DynaLM instance)
-        # Remove 'model.' prefix if present in keys
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            if key.startswith("model."):
-                new_key = key[6:]  # Remove "model." prefix
-            else:
-                new_key = key
-            new_state_dict[new_key] = value
-
-        self.model.model.load_state_dict(new_state_dict, strict=False)
-        log.info("Checkpoint loaded successfully")
-
-    @property
-    def tokenizer(self) -> PreTrainedTokenizerBase:
-        """Return the tokenizer."""
-        return self._tokenizer
-
-    @property
-    def max_length(self) -> int:
-        """Return maximum sequence length."""
-        return self.model_config.max_seq_len
-
-    def greedy_until(
-        self,
-        requests: list[tuple[str, dict]],
-        override_bs: int | None = None,
-    ) -> list[GenerativeTaskOutput]:
-        """Generate text using greedy decoding until stop sequences.
-
-        Args:
-            requests: List of (context, request_args) tuples
-            override_bs: Optional batch size override
-
-        Returns:
-            List of generated outputs
-        """
-        results = []
-        batch_size = override_bs if override_bs is not None else self._batch_size
-
-        for i in range(0, len(requests), batch_size):
-            batch = requests[i : i + batch_size]
-            contexts = [req[0] for req in batch]
-            request_args = [req[1] for req in batch]
-
-            # Tokenize contexts
-            inputs = self._tokenizer(
-                contexts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-            ).to(self._device)
-
-            # Get generation settings
-            max_new_tokens = request_args[0].get("max_new_tokens", 32)
-            stop_sequences = request_args[0].get("stop_sequences", [])
-
-            # Generate using autoregressive decoding
-            # Note: Dyna model doesn't have built-in generate, so we implement greedy decoding
-            with torch.no_grad():
-                input_ids = inputs.input_ids
-
-                for _ in range(max_new_tokens):
-                    # Forward pass
-                    outputs = self.model.model(input_ids=input_ids)
-
-                    # Get next token (greedy)
-                    next_token_logits = outputs.logits[:, -1, :]
-                    next_tokens = next_token_logits.argmax(dim=-1, keepdim=True)
-
-                    # Append to sequence
-                    input_ids = torch.cat([input_ids, next_tokens], dim=-1)
-
-                    # Check for EOS
-                    if (next_tokens == self._tokenizer.eos_token_id).all():
-                        break
-
-                    # Check max length
-                    if input_ids.shape[1] >= self.max_length:
-                        break
-
-                outputs = input_ids
-
-            # Decode outputs
-            for j, output in enumerate(outputs):
-                # Remove input tokens
-                generated_tokens = output[inputs.input_ids[j].shape[0] :]
-                generated_text = self._tokenizer.decode(
-                    generated_tokens, skip_special_tokens=True
-                )
-
-                # Apply stop sequences
-                for stop_seq in stop_sequences:
-                    if stop_seq in generated_text:
-                        generated_text = generated_text.split(stop_seq)[0]
-
-                results.append(
-                    GenerativeTaskOutput(
-                        result=generated_text,
-                        logits=None,
-                        generated_tokens=generated_tokens.tolist(),
-                        input_tokens=inputs.input_ids[j].tolist(),
-                    )
-                )
-
-        return results
-
-    def loglikelihood(
-        self,
-        requests: list[tuple[str, str]],
-        override_bs: int | None = None,
-    ) -> list[LoglikelihoodOutput]:
-        """Compute log-likelihood for (context, continuation) pairs.
-
-        Args:
-            requests: List of (context, continuation) tuples
-            override_bs: Optional batch size override
-
-        Returns:
-            List of log-likelihood outputs
-        """
-        results = []
-        batch_size = override_bs if override_bs is not None else self._batch_size
-
-        for i in range(0, len(requests), batch_size):
-            batch = requests[i : i + batch_size]
-
-            # Process each request in the batch
-            batch_results = []
-            for context, continuation in batch:
-                # Tokenize context and continuation separately
-                full_text = context + continuation
-
-                context_tokens = self._tokenizer.encode(
-                    context, add_special_tokens=False
-                )
-                full_tokens = self._tokenizer.encode(
-                    full_text, add_special_tokens=False
-                )
-                continuation_tokens = full_tokens[len(context_tokens) :]
-
-                # Prepare input
-                input_ids = torch.tensor([full_tokens], device=self._device)
-
-                # Get logits
-                with torch.no_grad():
-                    outputs = self.model(input_ids=input_ids)
-                    logits = outputs.logits
-
-                # Compute log probabilities
-                log_probs = log_softmax(logits, dim=-1)
-
-                # Get log-likelihood for continuation tokens
-                cont_start_idx = len(context_tokens) - 1
-                cont_end_idx = cont_start_idx + len(continuation_tokens)
-
-                # Sum log probabilities for continuation tokens
-                loglikelihood = 0.0
-                for idx, token_id in enumerate(continuation_tokens):
-                    pos = cont_start_idx + idx
-                    if pos < log_probs.shape[1]:
-                        loglikelihood += log_probs[0, pos, token_id].item()
-
-                # Check if the continuation is greedy (most likely)
-                is_greedy = True
-                for idx, token_id in enumerate(continuation_tokens):
-                    pos = cont_start_idx + idx
-                    if pos < logits.shape[1]:
-                        predicted_token = logits[0, pos].argmax().item()
-                        if predicted_token != token_id:
-                            is_greedy = False
-                            break
-
-                batch_results.append(
-                    LoglikelihoodOutput(
-                        result=(loglikelihood, is_greedy),
-                        input_tokens=context_tokens,
-                        generated_tokens=continuation_tokens,
-                        truncated_tokens_count=0,
-                    )
-                )
-
-            results.extend(batch_results)
-
-        return results
-
-    def loglikelihood_single_token(
-        self,
-        requests: list[tuple[str, str]],
-        override_bs: int | None = None,
-    ) -> list[LoglikelihoodSingleTokenOutput]:
-        """Compute log-likelihood for single token continuations.
-
-        Args:
-            requests: List of (context, continuation) tuples where continuation is a single token
-            override_bs: Optional batch size override
-
-        Returns:
-            List of single-token log-likelihood outputs
-        """
-        results = []
-        batch_size = override_bs if override_bs is not None else self._batch_size
-
-        for i in range(0, len(requests), batch_size):
-            batch = requests[i : i + batch_size]
-            contexts = [req[0] for req in batch]
-            continuations = [req[1] for req in batch]
-
-            # Tokenize contexts
-            inputs = self._tokenizer(
-                contexts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-            ).to(self._device)
-
-            # Get logits
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                logits = outputs.logits
-
-            # Get log probabilities for each continuation
-            for j, continuation in enumerate(continuations):
-                # Get token for continuation
-                cont_token_id = self._tokenizer.encode(
-                    continuation, add_special_tokens=False
-                )[0]
-
-                # Get log probability at last position
-                last_token_logits = logits[j, -1, :]
-                log_probs = log_softmax(last_token_logits, dim=-1)
-                loglikelihood = log_probs[cont_token_id].item()
-
-                # Check if greedy
-                predicted_token = last_token_logits.argmax().item()
-                is_greedy = predicted_token == cont_token_id
-
-                results.append(
-                    LoglikelihoodSingleTokenOutput(
-                        result=(loglikelihood, is_greedy),
-                        input_tokens=inputs.input_ids[j].tolist(),
-                        generated_tokens=[cont_token_id],
-                        truncated_tokens_count=0,
-                    )
-                )
-
-        return results
-
 
 def build_tokenizer(
     tokenizer_name: str,
@@ -393,35 +218,205 @@ def build_tokenizer(
     return tokenizer
 
 
-def setup_lighteval_tasks(
-    task_names: list[str],
-    custom_tasks: str | None = None,
-) -> tuple[Registry, list[LightevalTask]]:
-    """Setup Lighteval tasks from task names.
+def _build_perplexity_dataloader(
+    tokenizer: PreTrainedTokenizerBase,
+    loader_cfg: DictConfig | dict[str, Any] | None,
+    eval_batch_size: int,
+) -> DataLoader | None:
+    if not loader_cfg:
+        return None
 
-    Args:
-        task_names: List of task names (e.g., "mmlu", "hellaswag:5")
-        custom_tasks: Optional path to custom tasks file
+    if not isinstance(loader_cfg, DictConfig):
+        loader_cfg = cast(DictConfig, OmegaConf.create(loader_cfg))
 
-    Returns:
-        Tuple of (registry, list of tasks)
-    """
-    log.info(f"Setting up Lighteval tasks: {task_names}")
+    loader_dict = cast(dict[str, Any], OmegaConf.to_container(loader_cfg, resolve=True))
+    dataset_cfg = cast(dict[str, Any], loader_dict.get("dataset", {}))
+    streams_path = dataset_cfg.pop("streams_path", None)
+    if streams_path:
+        dataset_cfg["streams"] = load_and_concat_yamls(streams_path)
+    split_override = dataset_cfg.pop("split_override", None)
+    if split_override and isinstance(dataset_cfg.get("streams"), dict):
+        for stream in dataset_cfg["streams"].values():
+            stream["split"] = split_override
 
-    # Create registry
-    registry = Registry()
+    loader_dict["dataset"] = dataset_cfg
+    loader_copy = cast(DictConfig, OmegaConf.create(loader_dict))
 
-    # Load custom tasks if specified
-    if custom_tasks and os.path.exists(custom_tasks):
-        log.info(f"Loading custom tasks from {custom_tasks}")
-        # Custom task loading would go here
-        # registry.register_custom_tasks(custom_tasks)
+    data_spec = get_data_loader(loader_copy, tokenizer, eval_batch_size)
+    return data_spec.dataloader
 
-    # Select tasks from registry
-    tasks = taskinfo_selector(task_names)
 
-    log.info(f"Selected {len(tasks)} tasks for evaluation")
-    return registry, tasks
+def _precision_context(device: torch.device, precision: str):
+    precision = (precision or "").lower()
+    if precision in {"amp_bf16", "bf16", "bfloat16"}:
+        dtype = torch.bfloat16
+    elif precision in {"amp_fp16", "fp16", "half"}:
+        dtype = torch.float16
+    else:
+        return nullcontext()
+
+    if device.type == "cpu" and dtype == torch.float16:
+        log.warning("FP16 autocast is not supported on CPU; falling back to fp32")
+        return nullcontext()
+
+    device_type = "cuda" if device.type == "cuda" else "cpu"
+    return torch.autocast(device_type=device_type, dtype=dtype)
+
+
+def _progress_bar(iterable, max_batches: int | None):
+    total = None
+    try:
+        total = len(iterable)
+    except (TypeError, AttributeError):
+        total = None
+
+    if max_batches is not None:
+        total = min(max_batches, total) if total is not None else max_batches
+
+    return tqdm(iterable, total=total, desc="Streaming Perplexity", dynamic_ncols=True)
+
+
+def _compute_perplexity_metrics(
+    base_model: torch.nn.Module,
+    dataloader: DataLoader,
+    tokenizer: PreTrainedTokenizerBase,
+    precision: str,
+    microbatch_size: int,
+    max_batches: int | None = None,
+) -> dict[str, float]:
+    base_model.eval()
+    device = next(base_model.parameters()).device
+    microbatch_size = max(1, int(microbatch_size))
+
+    total_loss = 0.0
+    total_tokens = 0
+    total_correct = 0
+    total_batches = 0
+
+    progress = _progress_bar(dataloader, max_batches)
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(progress):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            tensor_batch = {
+                key: value
+                for key, value in batch.items()
+                if isinstance(value, torch.Tensor)
+            }
+
+            full_input_ids = tensor_batch["input_ids"]
+            if full_input_ids.size(1) < 2:
+                continue
+
+            step = min(microbatch_size, full_input_ids.size(0))
+
+            for start in range(0, full_input_ids.size(0), step):
+                end = min(start + step, full_input_ids.size(0))
+                micro_tensors = {
+                    key: value[start:end].to(device, non_blocking=True)
+                    for key, value in tensor_batch.items()
+                }
+
+                input_ids = micro_tensors["input_ids"]
+                if input_ids.size(1) < 2:
+                    continue
+
+                attention_mask = micro_tensors.get("attention_mask")
+                if attention_mask is None:
+                    if tokenizer.pad_token_id is None:
+                        raise ValueError(
+                            "tokenizer.pad_token_id must be set for perplexity evaluation"
+                        )
+                    attention_mask = (input_ids != tokenizer.pad_token_id).long()
+                labels = micro_tensors.get("labels", input_ids)
+
+                with _precision_context(device, precision):
+                    outputs = base_model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                    )
+
+                logits = outputs.logits.float()
+                shift_logits = logits[:, :-1, :]
+                shift_labels = labels[:, 1:]
+                shift_mask = attention_mask[:, 1:].to(dtype=torch.bool)
+
+                if shift_logits.numel() == 0:
+                    continue
+
+                vocab_size = shift_logits.size(-1)
+                losses = torch.nn.functional.cross_entropy(
+                    shift_logits.reshape(-1, vocab_size),
+                    shift_labels.reshape(-1),
+                    reduction="none",
+                )
+
+                mask = shift_mask.reshape(-1)
+                active_tokens = mask.sum().item()
+                if active_tokens == 0:
+                    continue
+
+                total_loss += (losses * mask.float()).sum().item()
+                total_tokens += active_tokens
+
+                preds = shift_logits.argmax(dim=-1)
+                total_correct += ((preds == shift_labels) & shift_mask).sum().item()
+
+                total_batches += 1
+
+            progress.close()
+
+    if total_tokens == 0:
+        raise RuntimeError("Evaluation dataloader produced zero valid tokens")
+
+    avg_nll = total_loss / total_tokens
+    perplexity = math.exp(avg_nll)
+    token_accuracy = total_correct / total_tokens
+
+    return {
+        "avg_nll": avg_nll,
+        "perplexity": perplexity,
+        "token_accuracy": token_accuracy,
+        "num_tokens": float(total_tokens),
+        "num_batches": float(total_batches),
+    }
+
+
+def run_perplexity_evaluation(
+    model: ComposerDynaModel,
+    tokenizer: PreTrainedTokenizerBase,
+    dataloader: DataLoader | None,
+    precision: str,
+    microbatch_size: int,
+    max_batches: int | None = None,
+) -> dict[str, float] | None:
+    if dataloader is None:
+        return None
+
+    base_model = model.model
+    return _compute_perplexity_metrics(
+        base_model=base_model,
+        dataloader=dataloader,
+        tokenizer=tokenizer,
+        precision=precision,
+        microbatch_size=microbatch_size,
+        max_batches=max_batches,
+    )
+
+
+def _resolve_launcher_type(value: str | ParallelismManager | None) -> ParallelismManager:
+    """Map user-provided launcher config to a ParallelismManager enum."""
+    if isinstance(value, ParallelismManager):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        alias_map = {"DEFAULT": "NONE"}
+        normalized = alias_map.get(normalized, normalized)
+        if normalized in ParallelismManager.__members__:
+            return ParallelismManager[normalized]
+    return ParallelismManager.NONE
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="eval_lighteval")
@@ -439,6 +434,8 @@ def main(cfg: DictConfig):
 
     log.info("Starting Lighteval evaluation")
     log.info(f"Config:\n{OmegaConf.to_yaml(cfg)}")
+
+    _enable_hf_converted_branch_fallback()
 
     # Set random seed
     seed = cfg.eval_config.get("seed", 42)
@@ -463,19 +460,115 @@ def main(cfg: DictConfig):
     model_config = DynaConfig(**cfg.model_config)
 
     # Create Lighteval-compatible model
-    batch_size = cfg.eval_config.get("batch_size", 1)
-    model = DynaLightevalModel(
-        config=cfg,
-        model_config=model_config,
+    log.info("Initializing ComposerDynaModel")
+    model = ComposerDynaModel(
+        config=model_config,
         tokenizer=tokenizer,
-        device=device,
-        batch_size=batch_size,
     )
 
-    # Setup tasks
-    task_names = cfg.eval_config.get("tasks", ["lambada_openai"])
-    custom_tasks = cfg.eval_config.get("custom_tasks_file", None)
-    registry, tasks = setup_lighteval_tasks(task_names, custom_tasks)
+    # Load checkpoint if specified
+    checkpoint_path = cfg.eval_config.get("checkpoint_path")
+    if checkpoint_path:
+        log.info(f"Loading checkpoint from {checkpoint_path}")
+        _ensure_s3_endpoint()
+        load_object_store = maybe_create_object_store_from_uri(checkpoint_path)
+        _, _, parsed_load_path = parse_uri(checkpoint_path)
+        
+        composer_states_filepath, _, _ = download_checkpoint(
+            path=parsed_load_path,
+            node_checkpoint_folder="",
+            object_store=load_object_store,
+            progress_bar=True,
+        )
+        
+        state_dict = safe_torch_load(
+            composer_states_filepath=composer_states_filepath,
+            load_monolith_rank0_only=True,
+        )
+        
+        model_state = state_dict["state"]["model"]
+        model.load_state_dict(model_state, strict=False)
+        log.info("Checkpoint loaded successfully")
+        
+        # Clean up temporary checkpoint file
+        if os.path.exists(composer_states_filepath):
+            os.remove(composer_states_filepath)
+    else:
+        log.warning("No checkpoint specified, using randomly initialized model")
+
+    # Move model to device
+    model = model.to(device)
+    model.eval()
+
+    # Configure eval helpers for the model
+    max_seq_len = _resolve_max_seq_len(cfg, model_config)
+    add_special_tokens = cfg.eval_config.get("add_special_tokens", True)
+    default_generation_size = cfg.eval_config.get("default_generation_size", 64)
+    
+    model.configure_eval_helpers(
+        max_length=max_seq_len,
+        add_special_tokens=add_special_tokens,
+        default_generation_size=default_generation_size,
+    )
+    log.info(
+        f"Configured eval helpers: max_length={max_seq_len}, "
+        f"add_special_tokens={add_special_tokens}, "
+        f"default_generation_size={default_generation_size}"
+    )
+
+    precision = cfg.eval_config.get("precision", "fp32")
+    perplexity_results: dict[str, float] | None = None
+    
+    
+    
+    # perplexity_results = None
+    # perplexity_cfg = cfg.eval_config.get("perplexity_loader") or cfg.eval_config.get("eval_loader")
+    # max_batches = None
+    # if isinstance(perplexity_cfg, DictConfig) and "max_batches" in perplexity_cfg:
+    #     max_batches = int(perplexity_cfg.max_batches)
+    # elif isinstance(perplexity_cfg, dict) and "max_batches" in perplexity_cfg:
+    #     max_batches = int(perplexity_cfg["max_batches"])
+
+    # eval_batch_size = int(cfg.eval_config.get("eval_batch_size", 1024))
+    # eval_microbatch_size = int(
+    #     cfg.eval_config.get("eval_microbatch_size", min(eval_batch_size, 32))
+    # )
+    # eval_microbatch_size = max(1, min(eval_microbatch_size, eval_batch_size))
+
+    # perplexity_loader = _build_perplexity_dataloader(
+    #     tokenizer=tokenizer,
+    #     loader_cfg=perplexity_cfg,
+    #     eval_batch_size=eval_batch_size,
+    # )
+    # if perplexity_loader is not None:
+    #     log.info(
+    #         "Running streaming perplexity evaluation (total batch=%d, microbatch=%d)",
+    #         eval_batch_size,
+    #         eval_microbatch_size,
+    #     )
+    #     try:
+    #         perplexity_results = run_perplexity_evaluation(
+    #             model=model,
+    #             tokenizer=tokenizer,
+    #             dataloader=perplexity_loader,
+    #             precision=precision,
+    #             microbatch_size=eval_microbatch_size,
+    #             max_batches=max_batches,
+    #         )
+    #         if perplexity_results:
+    #             log.info(
+    #                 "Perplexity eval complete | ppl=%.3f | loss=%.4f | token_acc=%.4f | tokens=%d | batches=%d",
+    #                 perplexity_results["perplexity"],
+    #                 perplexity_results["avg_nll"],
+    #                 perplexity_results["token_accuracy"],
+    #                 int(perplexity_results["num_tokens"]),
+    #                 int(perplexity_results["num_batches"]),
+    #             )
+    #     except Exception:  # noqa: BLE001
+    #         log.exception("Perplexity evaluation failed")
+
+    task_names = _normalize_task_names(cfg.eval_config.get("tasks"))
+    tasks_argument = ",".join(task_names)
 
     # Setup evaluation tracker (for logging results)
     output_dir = cfg.eval_config.get("output_dir", "./lighteval_results")
@@ -487,27 +580,62 @@ def main(cfg: DictConfig):
         push_to_hub=cfg.eval_config.get("push_to_hub", False),
         public=cfg.eval_config.get("public", False),
     )
-
-    # Setup parallelism manager
-    parallelism_config = cfg.eval_config.get("parallelism", {})
-    parallelism = ParallelismManager(
-        dp_size=parallelism_config.get("dp_size", 1),
-        pp_size=parallelism_config.get("pp_size", 1),
-        tp_size=parallelism_config.get("tp_size", 1),
-    )
-
     # Create pipeline parameters
+    custom_tasks_file = cfg.eval_config.get("custom_tasks_file")
+    custom_tasks_dir = os.path.dirname(custom_tasks_file) if custom_tasks_file else None
+    launcher_setting = cfg.eval_config.get("launcher_type", "none")
     pipeline_params = PipelineParameters(
-        launcher_type=cfg.eval_config.get("launcher_type", "default"),
-        override_batch_size=cfg.eval_config.get("override_batch_size", None),
-        max_samples=cfg.eval_config.get("max_samples", None),
-        num_fewshot_seeds=cfg.eval_config.get("num_fewshot_seeds", 1),
+        launcher_type=_resolve_launcher_type(launcher_setting),
+        num_fewshot_seeds=int(cfg.eval_config.get("num_fewshot_seeds", 1)),
+        max_samples=cfg.eval_config.get("max_samples"),
+        custom_tasks_directory=custom_tasks_dir,
     )
+
+    # Attach LightEval interfaces with helper functions
+    env_config = EnvConfig(token=None, cache_dir=None)
+    
+    def tok_encode_pair(context: str, continuations: list[str], pairwise: bool = True) -> tuple[list[list[int]], list[list[int]]]:
+        """Encode context-continuation pairs for loglikelihood evaluation."""
+        context_encodings = []
+        continuation_encodings = []
+        
+        for continuation in continuations:
+            # Encode context
+            ctx_tokens = tokenizer.encode(context, add_special_tokens=model.add_special_tokens)
+            # Encode continuation
+            cont_tokens = tokenizer.encode(continuation, add_special_tokens=False)
+            
+            context_encodings.append(ctx_tokens)
+            continuation_encodings.append(cont_tokens)
+        
+        return context_encodings, continuation_encodings
+    
+    def tok_encode(text: str, add_special_tokens: bool = True) -> list[int]:
+        """Encode text to tokens."""
+        return tokenizer.encode(text, add_special_tokens=add_special_tokens)
+    
+    # Create prompt manager for the model
+    from lighteval.tasks.registry import Registry, taskinfo_selector
+    registry = Registry(cache_dir=env_config.cache_dir)
+    task_dict = registry.get_task_dict(tasks_argument.split(","))
+    prompt_manager = PromptManager(
+        tokenizer=tokenizer,
+        task_dict=task_dict,
+        truncate_few_shots=True,
+        max_length=max_seq_len,
+    )
+    
+    model.attach_lighteval_interfaces(
+        prompt_manager=prompt_manager,
+        tok_encode_pair=tok_encode_pair,
+        tok_encode=tok_encode,
+    )
+    log.info("Attached LightEval interfaces to model")
 
     # Create and run pipeline
     log.info("Creating evaluation pipeline")
     pipeline = Pipeline(
-        tasks=task_names,
+        tasks=tasks_argument,
         pipeline_parameters=pipeline_params,
         evaluation_tracker=tracker,
         model=model,
@@ -516,16 +644,27 @@ def main(cfg: DictConfig):
     log.info("Running evaluation...")
     results = pipeline.evaluate()
 
+    if perplexity_results is not None:
+        results["perplexity_eval"] = perplexity_results
+
     # Log results
     log.info("Evaluation complete!")
     log.info("Results:")
     for task_name, task_results in results.items():
         log.info(f"\n{task_name}:")
-        for metric_name, metric_value in task_results.items():
-            log.info(f"  {metric_name}: {metric_value:.4f}")
+        if isinstance(task_results, dict):
+            for metric_name, metric_value in task_results.items():
+                if isinstance(metric_value, (int, float)):
+                    log.info(f"  {metric_name}: {metric_value:.4f}")
+                else:
+                    log.info(f"  {metric_name}: {metric_value}")
+        else:
+            log.info(f"  {task_results}")
 
     # Save results
     results_file = os.path.join(output_dir, "results.json")
+    with open(results_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
     log.info(f"Results saved to {results_file}")
 
     # Optional: Upload to wandb if configured

@@ -45,7 +45,7 @@ execute_config:
         run_name: "base_comp"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
-        device_train_microbatch_size: 32
+        device_train_microbatch_size: auto
         precision: "amp_bf16"
         device: "gpu"
         save_folder: "s3://loop-llm/dyna/"

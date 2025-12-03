@@ -1,21 +1,25 @@
+import logging
 import math
-from typing import cast
+from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
 
+from composer import ComposerModel
 import torch
 from composer.models.huggingface import HuggingFaceModel
-
 # from composer.callbacks
 # Add jaxtyping imports
 from jaxtyping import Bool, Float, Int
-from llmfoundry.models.layers.layer_builders import build_norm
-from llmfoundry.utils.builders import build_metric
 from torch import Tensor
 from torch.nn import Module
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
+from torch.nn.functional import log_softmax
+from transformers import (
+    PreTrainedTokenizer,
+    PreTrainedTokenizerBase,
+    PreTrainedTokenizerFast,
+)
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-
+from dyna.model.huggingface_eval_model import HuggingFaceEvalModel
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
     DEFAULT_CAUSAL_LM_TRAIN_METRICS,
@@ -28,6 +32,14 @@ from dyna.model.pass_through import PassThroughTransformer
 # Import directly from specific modules to avoid circular imports
 from dyna.model.transformer import DynaFormer
 from dyna.modules import LayerModule
+from dyna.utils.builders import build_metric, build_norm
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from lighteval.models.model_output import ModelResponse
+    from lighteval.tasks.prompt_manager import PromptManager
+    from lighteval.tasks.requests import Doc
+
+log = logging.getLogger(__name__)
 
 
 def _generate_attention_mask(
@@ -77,17 +89,55 @@ def _generate_attention_mask(
     return final_mask.unsqueeze(1)
 
 
+def _condition_attention_mask(
+    attention_mask: Tensor,
+) -> Bool[Tensor, "batch 1 seq seq"]:
+    """Normalize incoming masks to the causal 4D format expected by Dyna."""
+
+    if attention_mask.dtype != torch.bool:
+        attention_mask = attention_mask != 0
+
+    if attention_mask.ndim == 4:
+        if attention_mask.shape[1] != 1:
+            raise ValueError(
+                "attention_mask with 4 dims must have a singleton axis at dim=1"
+            )
+        return attention_mask
+
+    if attention_mask.ndim == 3:
+        return attention_mask.unsqueeze(1)
+
+    if attention_mask.ndim == 2:
+        pad_mask = attention_mask
+        batch_size, seq_len = pad_mask.shape
+        device = pad_mask.device
+        causal = torch.tril(
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
+        )
+        expanded = pad_mask[:, :, None] & pad_mask[:, None, :]
+        causal_mask = (expanded & causal).unsqueeze(1)
+        return causal_mask
+
+    raise ValueError(
+        f"Unsupported attention_mask dimensions: {attention_mask.shape}"
+    )
+
+
 def _generate_source_len_mask(
     attention_mask: Bool[Tensor, "batch 1 seq seq"],
 ) -> Int[Tensor, "batch seq"]:
     """Generate source length mask with position indices for each sequence."""
-    print("attention_mask.shape:", attention_mask.shape, flush=True)
-
     # if we are in eval mode, we mihgt not have batches?
     if attention_mask.ndim == 4:
         batch_size, _, seq_len, _ = attention_mask.shape
     elif attention_mask.ndim == 2:
         batch_size, seq_len = attention_mask.shape
+    elif attention_mask.ndim == 3:
+        batch_size, seq_len, _ = attention_mask.shape
+    else:
+        raise ValueError(
+            f"Unsupported attention_mask dimensions for source mask: {attention_mask.shape}"
+        )
     device = attention_mask.device
 
     pos_range = torch.arange(seq_len, device=device, dtype=torch.long)
@@ -260,16 +310,31 @@ class DynaLM(DynaPretrainedModel):
         )
 
     def embedding_stage(self, input_ids, inputs_embeds, attention_mask, src_len_mask):
+        seq_len = None
         if input_ids is not None:
             x = self.embedding(input_ids)
-            if attention_mask is None:
-                attention_mask = _generate_attention_mask(input_ids, self.eos_token_id)
-            if src_len_mask is None:
-                src_len_mask = _generate_source_len_mask(attention_mask)
-            if self.embedding_norm is not None:
-                x = self.embedding_norm(x)
+            seq_len = input_ids.shape[1]
         elif isinstance(inputs_embeds, torch.Tensor):
             x = inputs_embeds
+            seq_len = inputs_embeds.shape[1]
+        else:
+            raise ValueError("embedding_stage requires input_ids or inputs_embeds")
+
+        if attention_mask is None:
+            if input_ids is None:
+                raise ValueError(
+                    "attention_mask must be provided when input_ids are absent"
+                )
+            attention_mask = _generate_attention_mask(input_ids, self.eos_token_id)
+        else:
+            attention_mask = _condition_attention_mask(attention_mask)
+
+        if src_len_mask is None:
+            src_len_mask = _generate_source_len_mask(attention_mask)
+
+        if self.embedding_norm is not None:
+            x = self.embedding_norm(x)
+
         return x, attention_mask, src_len_mask
 
     @staticmethod
@@ -286,7 +351,7 @@ class DynaLM(DynaPretrainedModel):
         return isinstance(module, LayerModule)
 
 
-class ComposerDynaModel(HuggingFaceModel):
+class ComposerDynaModel(HuggingFaceEvalModel):
     """Composer-compatible language model wrapper."""
 
     model: DynaLM
@@ -322,6 +387,12 @@ class ComposerDynaModel(HuggingFaceModel):
         )
 
         self.model.reset_parameters()
+        self._eval_max_length: int | None = None
+        self._eval_add_special_tokens = True
+        self._default_generation_size = 64
+        self._prompt_manager: "PromptManager" | None = None
+        self._tok_encode_pair: Callable[..., Any] | None = None
+        self._tok_encode: Callable[..., Any] | None = None
 
     def forward(self, batch) -> CausalLMOutputWithPast:
         return self.model(
@@ -343,3 +414,5 @@ class ComposerDynaModel(HuggingFaceModel):
         loss = loss.flatten()
 
         return loss
+
+

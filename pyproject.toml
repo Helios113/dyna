@@ -3,21 +3,18 @@ name = "dyna"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
-    "mosaicml[streaming, wandb]==0.32.1",
+    "mosaicml[streaming, wandb] @ git+https://github.com/Helios113/composer.git",
     # "flash-attn==2.8.1",  # Commented out due to GLIBC compatibility issues
     "matplotlib==3.10.3",
     "tqdm==4.67.1",
-    "transformers==4.51.3",
+    "transformers>=4.51.3",
     "beartype==0.22.2",
-    "hydra-core>=1.3.2",
-    "llm-foundry==0.22.0",
+    "hydra-core>=1.4.0.dev1",
     "setuptools==80",
-    "pyinstrument>=5.0.3",
     "pandas>=2.3.1",
     "seaborn>=0.13.2",
-    "ipykernel>=6.30.0",
     "jaxtyping==0.3.3",
     "triton>=3.3.0",
     "torch>=2.7.0",
@@ -28,9 +25,12 @@ dependencies = [
     "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
     "basedpyright>=1.31.7",
-    "lighteval>=0.4.0",
+    "lighteval[math]==0.13.*",
+    "antlr4-python3-runtime==4.13.2",
+    "catalogue>=2.0.10",
 ]
-
+[tool.uv]
+prerelease = "allow"
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"

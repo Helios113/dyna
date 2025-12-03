@@ -195,7 +195,7 @@ def train_with_wandb_sweep(cfg):
     wandb.finish()
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="MoA_moeut_160M")
+@hydra.main(version_base=None, config_path="configs", config_name="transformer_160M_basey")
 def main(cfg: DictConfig):
     # Check if this is a wandb sweep run
     if cfg.get("sweep_config", False):

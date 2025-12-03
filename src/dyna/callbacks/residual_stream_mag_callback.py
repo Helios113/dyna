@@ -64,6 +64,8 @@ class ResidualMagnitudeCallback(Callback):
         step = str(state.timestamp.batch)
         model: DynaLM = cast(DynaLM, state.model.model)
         tmp = model.transformer._residual_magnitudes
+        
+        # Process data on CPU (already moved to CPU in gather_stats_func)
         residual_magnitudes = []
         for elem in tmp:
             for i, sample in enumerate(elem):
@@ -115,9 +117,9 @@ class ResidualMagnitudeCallback(Callback):
             ax.set_title("Entropy Trend (no data)", fontsize=14)
             return fig
 
-        # Only move to CPU when necessary for plotting, keep computation on GPU
-        means = [d.mean().cpu().item() for d in data]
-        stds = [d.std().cpu().item() for d in data]
+        # Data is already on CPU
+        means = [d.mean().item() for d in data]
+        stds = [d.std().item() for d in data]
         maxs = [mean + std for mean, std in zip(means, stds, strict=False)]
         mins = [mean - std for mean, std in zip(means, stds, strict=False)]
         # x = np.arange(len(means))

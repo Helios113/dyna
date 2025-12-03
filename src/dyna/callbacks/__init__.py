@@ -1,4 +1,12 @@
-from llmfoundry.registry import callbacks
+from composer.callbacks import (
+    LRMonitor,
+    MemoryMonitor,
+    OptimizerMonitor,
+    RuntimeEstimator,
+    SpeedMonitor,
+)
+
+from dyna.registry import callbacks
 
 from dyna.callbacks.abbie_number import AbbieNumberCallback
 from dyna.callbacks.clean_stats import CleanMetrics
@@ -21,6 +29,13 @@ __all__ = [
     "LrScaleCallback",
     "GradientNoiseScaleMonitor",
 ]
+
+# Composer built-ins
+callbacks.register("lr_monitor", LRMonitor)
+callbacks.register("speed_monitor", SpeedMonitor)
+callbacks.register("memory_monitor", MemoryMonitor)
+callbacks.register("runtime_estimator", RuntimeEstimator)
+callbacks.register("optimizer_monitor", OptimizerMonitor)
 
 
 callbacks.register(

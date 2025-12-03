@@ -1,3 +1,0 @@
-[submodule "llm-foundry"]
-	path = llm-foundry
-	url = https://github.com/mosaicml/llm-foundry.git

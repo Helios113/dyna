@@ -27,7 +27,8 @@ eval_config:
   run_name: dyna_lighteval
 
   # Model checkpoint (optional)
-  # load_path: /path/to/checkpoint.pt
+  # checkpoint_path: /path/to/checkpoint.pt
+  # checkpoint_path: s3://bucket-name/path/to/checkpoint.pt
 
   # Tokenizer settings
   tokenizer: HuggingFaceTB/SmolLM2-1.7B
@@ -35,8 +36,15 @@ eval_config:
     trust_remote_code: false
     use_fast: true
 
-  # Batch size for evaluation
-  batch_size: 8
+  # Batch sizes
+  batch_size: 8              # Lighteval task batch size
+  eval_batch_size: 512       # Total batch size for streaming perplexity
+  eval_microbatch_size: 32   # Microbatch used per forward pass during perplexity
+
+  # Generation settings
+  max_seq_len: 2048          # Maximum sequence length for evaluation
+  add_special_tokens: true   # Whether to add special tokens during tokenization
+  default_generation_size: 64  # Default number of tokens to generate
 
   # Tasks to evaluate
   # Format: "task_name" or "task_name:num_shots"

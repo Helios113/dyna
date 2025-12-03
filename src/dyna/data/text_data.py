@@ -3,29 +3,23 @@
 """Build a StreamingTextDataset dataset and dataloader for training."""
 
 import inspect
-from collections.abc import Callable, Mapping, Sequence
-from typing import (
-    Any,
-    cast,
-)
+from itertools import islice
+from typing import Any, Callable, Mapping, Optional, Sequence, Union, cast
 
 import numpy as np
 import torch
 from composer.core.data_spec import DataSpec
-from llmfoundry import registry
-from llmfoundry.data.data import (
-    SUPPORTED_MDS_ENCODING_TYPES,
-    stream_remote_local_validate,
-)
-from llmfoundry.utils.registry_utils import construct_from_registry
 from streaming import Stream, StreamingDataset
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 
+from dyna import registry
+from dyna.data.mds import SUPPORTED_MDS_ENCODING_TYPES, stream_remote_local_validate
+
 __all__ = [
-    "StreamingTextDataset",
-    "build_text_dataloader",
-    "ConcatenatedSequenceCollatorWrapper",
+    'StreamingTextDataset',
+    'build_text_dataloader',
+    'ConcatenatedSequenceCollatorWrapper',
 ]
 
 
@@ -98,46 +92,42 @@ class StreamingTextDataset(StreamingDataset):
         replication (int, optional): Determines how many consecutive devices will receive the same
             samples. Useful for training with tensor or sequence parallelism, where multiple
             devices need to see the same partition of the dataset. Defaults to ``None``.
-        stream_name (str): The name of the Stream to use which is registered in
-            streaming.base.stream.streams_registry. Defaults to ``stream``.
-        stream_config (dict[str, Any]): Additional arguments to pass to the Stream constructor.
     """
 
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
         max_seq_len: int,
-        token_encoding_type: str = "int64",
-        streams: Sequence[Stream] | None = None,
-        remote: str | None = None,
-        local: str | None = None,
-        split: str | None = None,
+        token_encoding_type: str = 'int64',
+        streams: Optional[Sequence[Stream]] = None,
+        remote: Optional[str] = None,
+        local: Optional[str] = None,
+        split: Optional[str] = None,
         download_retry: int = 2,
         download_timeout: float = 60,
-        validate_hash: str | None = None,
+        validate_hash: Optional[str] = None,
         keep_zip: bool = False,
-        epoch_size: int | str | None = None,
-        predownload: int | None = None,
-        cache_limit: int | str | None = None,
-        partition_algo: str = "relaxed",
-        num_canonical_nodes: int | None = None,
-        batch_size: int | None = None,
+        epoch_size: Optional[Union[int, str]] = None,
+        predownload: Optional[int] = None,
+        cache_limit: Optional[Union[int, str]] = None,
+        partition_algo: str = 'relaxed',
+        num_canonical_nodes: Optional[int] = None,
+        batch_size: Optional[int] = None,
         shuffle: bool = False,
-        shuffle_algo: str = "py1e",
+        shuffle_algo: str = 'py1e',
         shuffle_seed: int = 9176,
-        shuffle_block_size: int | None = None,
-        sampling_method: str = "balanced",
+        shuffle_block_size: Optional[int] = None,
+        sampling_method: str = 'balanced',
         sampling_granularity: int = 1,
-        batching_method: str = "random",
+        batching_method: str = 'random',
         allow_unsafe_types: bool = False,
-        replication: int | None = None,
-        stream_name: str = "stream",
-        stream_config: dict[str, Any] | None = None,
+        replication: Optional[int] = None,
         **kwargs: Any,
     ):
+
         if token_encoding_type not in SUPPORTED_MDS_ENCODING_TYPES:
             raise ValueError(
-                f"The token_encoding_type must be one of {SUPPORTED_MDS_ENCODING_TYPES}, but got {token_encoding_type}",
+                f'The token_encoding_type must be one of {SUPPORTED_MDS_ENCODING_TYPES}, but got {token_encoding_type}',
             )
         self.token_encoding_type = token_encoding_type
 
@@ -180,8 +170,6 @@ class StreamingTextDataset(StreamingDataset):
             batching_method=batching_method,
             allow_unsafe_types=allow_unsafe_types,
             replication=replication,
-            stream_name=stream_name,
-            stream_config=stream_config,
             **kwargs,
         )
         self.tokenizer = tokenizer
@@ -192,13 +180,13 @@ class StreamingTextDataset(StreamingDataset):
         if self.tokenizer.pad_token is None:
             # Some tokenizers (e.g. GPT2 tokenizer) have no padding token which causes bugs
             raise RuntimeError(
-                "If tokenizing on-the-fly, tokenizer must have a pad_token_id",
+                'If tokenizing on-the-fly, tokenizer must have a pad_token_id',
             )
 
         return self.tokenizer(  # type: ignore
-            text_sample["text"],
+            text_sample['text'],
             truncation=True,
-            padding="max_length",
+            padding='max_length',
             max_length=self.max_seq_len,
         )
 
@@ -207,28 +195,29 @@ class StreamingTextDataset(StreamingDataset):
         sample: dict[str, Any],
     ) -> torch.Tensor:
         # Modeling code still expects int64 tensors.
-        if isinstance(sample["tokens"], np.ndarray):
+        if isinstance(sample['tokens'], np.ndarray):
             return torch.from_numpy(
-                sample["tokens"][: self.max_seq_len].copy(),
+                sample['tokens'][:self.max_seq_len].copy(),
             ).to(torch.int64)
         else:
             return torch.from_numpy(
                 np.frombuffer(
-                    sample["tokens"],
+                    sample['tokens'],
                     dtype=getattr(np, self.token_encoding_type),
-                )[: self.max_seq_len].copy(),
+                )[:self.max_seq_len].copy(),
             ).to(torch.int64)
 
     # How to process a sample
-    def __getitem__(self, idx: int) -> dict[str, list[int]] | torch.Tensor:
+    def __getitem__(self,
+                    idx: int) -> Union[dict[str, list[int]], torch.Tensor]:
         sample = super().__getitem__(idx)
-        if "text" in sample:
+        if 'text' in sample:
             token_sample = self._tokenize(sample)
-        elif "tokens" in sample:
+        elif 'tokens' in sample:
             token_sample = self._read_binary_tokenized_sample(sample)
         else:
             raise RuntimeError(
-                "StreamingTextDataset needs samples to have a `text` or `tokens` column",
+                'StreamingTextDataset needs samples to have a `text` or `tokens` column',
             )
         return token_sample
 
@@ -239,19 +228,19 @@ class ConcatenatedSequenceCollatorWrapper:
     def __init__(
         self,
         base_collator: Callable,
-        eos_token_id: int | None = None,
-        bos_token_id: int | None = None,
+        eos_token_id: Optional[int] = None,
+        bos_token_id: Optional[int] = None,
     ):
         self.base_collator = base_collator
         if (eos_token_id is None) and (bos_token_id is None):
             raise ValueError(
-                "Must supply a value for either eos_token_id or bos_token_id, but got None for both.",
+                'Must supply a value for either eos_token_id or bos_token_id, but got None for both.',
             )
         if (eos_token_id is not None) and (bos_token_id is not None):
             raise ValueError(
-                "Cannot use *both* EOS and BOS tokens for detecting sequence boundaries. "
-                + "Please supply `eos_token_id` if sequences end with an EOS token, or use "
-                + "`bos_token_id` if sequences start with a BOS token.",
+                'Cannot use *both* EOS and BOS tokens for detecting sequence boundaries. ' +\
+                'Please supply `eos_token_id` if sequences end with an EOS token, or use ' +\
+                '`bos_token_id` if sequences start with a BOS token.',
             )
 
         if eos_token_id is None:
@@ -263,15 +252,16 @@ class ConcatenatedSequenceCollatorWrapper:
 
     def __call__(self, examples: list[Any]) -> dict[str, torch.Tensor]:
         batch = self.base_collator(examples)
-        batch["sequence_id"] = self.get_sequence_id_from_batch(batch)
+        batch['sequence_id'] = self.get_sequence_id_from_batch(batch)
         return batch
 
     def get_sequence_id_from_batch(
         self,
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        is_separator = torch.eq(batch["input_ids"], self.split_token_id)
-        cumulative_sep = torch.cumsum(is_separator, dim=1).to(batch["input_ids"].dtype)
+        is_separator = torch.eq(batch['input_ids'], self.split_token_id)
+        cumulative_sep = torch.cumsum(is_separator,
+                                      dim=1).to(batch['input_ids'].dtype)
         # If separator token is bos, we're already done
         if self.bos_mode:
             return cumulative_sep
@@ -282,7 +272,7 @@ class ConcatenatedSequenceCollatorWrapper:
 
 
 def build_streams(
-    streams: dict[str, Any] | None = None,
+    streams: Optional[dict[str, Any]] = None,
 ):
     streams_dict = streams
     # build streams
@@ -293,35 +283,38 @@ def build_streams(
 
 
 def build_text_dataloader(
-    tokenizer: PreTrainedTokenizerBase | None,
-    device_batch_size: int | float,
+    tokenizer: Optional[PreTrainedTokenizerBase],
+    device_batch_size: Union[int, float],
     dataset: dict[str, Any],
     drop_last: bool,
     num_workers: int,
     pin_memory: bool = True,
     prefetch_factor: int = 2,
-    persistent_workers: bool = False,
+    persistent_workers: bool = True,
     timeout: int = 0,
 ) -> DataSpec:
+    from dyna.utils.utils import construct_from_registry
+
     if tokenizer is None:
-        raise ValueError("Tokenizer is required for text dataloader")
+        raise ValueError('Tokenizer is required for text dataloader')
 
     dataset_cfg = dataset
 
     # get kwargs
-    dataset_cfg["replication"], dataset_batch_size = construct_from_registry(
-        name="dataset_replication_validator",
+    dataset_cfg['replication'], dataset_batch_size = construct_from_registry(
+        name='dataset_replication_validator',
         registry=registry.dataset_replication_validators,
         partial_function=False,
         kwargs={
-            "dataset_cfg": dataset_cfg,
-            "tokenizer": tokenizer,
-            "device_batch_size": device_batch_size,
+            'dataset_cfg': dataset_cfg,
+            'tokenizer': tokenizer,
+            'device_batch_size': device_batch_size,
         },
     )
 
     streams = build_streams(
-        streams=dataset_cfg.pop("streams") if "streams" in dataset_cfg else None,
+        streams=dataset_cfg.pop('streams')
+        if 'streams' in dataset_cfg else None,
     )
 
     valid_streaming_text_dataset_parameters = inspect.signature(
@@ -335,8 +328,8 @@ def build_text_dataloader(
     dataset_config_subset_for_streaming_text_dataset = {
         k: v
         for k, v in dataset_cfg.items()
-        if k in valid_streaming_text_dataset_parameters
-        or k in valid_base_dataset_params
+        if k in valid_streaming_text_dataset_parameters or
+        k in valid_base_dataset_params
     }
 
     # build dataset potentially with streams
@@ -348,24 +341,24 @@ def build_text_dataloader(
     )
 
     dataloader_cfg = {
-        "name": "text",
-        "dataset": dataset_cfg,
-        "drop_last": drop_last,
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
-        "prefetch_factor": prefetch_factor,
-        "persistent_workers": persistent_workers,
-        "timeout": timeout,
+        'name': 'text',
+        'dataset': dataset_cfg,
+        'drop_last': drop_last,
+        'num_workers': num_workers,
+        'pin_memory': pin_memory,
+        'prefetch_factor': prefetch_factor,
+        'persistent_workers': persistent_workers,
+        'timeout': timeout,
     }
 
     collate_fn, dataloader_batch_size = construct_from_registry(
-        name="text_collator",
+        name='text_collator',
         registry=registry.collators,
         partial_function=False,
         kwargs={
-            "dataloader_cfg": dataloader_cfg,
-            "tokenizer": tokenizer,
-            "dataset_batch_size": dataset_batch_size,
+            'dataloader_cfg': dataloader_cfg,
+            'tokenizer': tokenizer,
+            'dataset_batch_size': dataset_batch_size,
         },
     )
 
@@ -376,17 +369,17 @@ def build_text_dataloader(
         drop_last=drop_last,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        prefetch_factor=None,
+        prefetch_factor=prefetch_factor,
         persistent_workers=persistent_workers,
         timeout=timeout,
     )
 
     return construct_from_registry(
-        name="data_spec",
+        name='data_spec',
         registry=registry.data_specs,
         partial_function=False,
         kwargs={
-            "dl": dl,
-            "dataset_cfg": dataset_cfg,
+            'dl': dl,
+            'dataset_cfg': dataset_cfg,
         },
     )

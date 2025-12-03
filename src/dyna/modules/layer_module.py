@@ -2,11 +2,11 @@ from abc import ABC, abstractmethod
 
 import torch
 from jaxtyping import Float, Int
-from llmfoundry.models.layers.layer_builders import build_norm
 from torch import Tensor
 from torch.nn import Module
 
 from dyna.config import DynaConfig, NormStructure, RescaleMethod
+from dyna.utils.builders import build_norm
 
 from .attention_module import AttentionModule
 from .dyna_module import DynaModule

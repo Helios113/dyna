@@ -9,15 +9,12 @@
 !tests/
 !tests/**
 !main_sweep.py
-!eval.py
 !.pre-commit-config.yaml
 !pyproject.toml
 !README.md
 !LICENSE
 !.python-version
 !.gitignore
-!llm-foundry
-!.gitmodules
 !eval_l.py
 
 # 2. Now, re-ignore build/cache artifacts

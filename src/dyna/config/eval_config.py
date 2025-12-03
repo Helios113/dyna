@@ -65,7 +65,8 @@ class EvalConfig:
 
     # Batch sizes
     device_eval_batch_size: int = 8  # For ICL evaluation
-    eval_batch_size: int = 1024  # For single-batch perplexity evaluation
+    eval_batch_size: int = 1024  # Total batch size for streaming perplexity
+    eval_microbatch_size: int = 32  # Per-device microbatch size for perplexity
 
     # Sequence length
     icl_seq_len: int = 1024
