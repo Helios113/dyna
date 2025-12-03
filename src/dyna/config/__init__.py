@@ -26,11 +26,6 @@ GEIPING_METHODS = [
     ExecutionMode.arbit,
 ]
 
-DEFAULT_CAUSAL_LM_TRAIN_METRICS = [
-    "language_cross_entropy",
-    "language_perplexity",
-    "token_accuracy",
-]
 PROT_EMB_RESCALING_METHODS = [
     RescaleMethod.cum_avg_prot_emb,
     RescaleMethod.sqrt_prot_emb,

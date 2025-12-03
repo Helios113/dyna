@@ -1,0 +1,119 @@
+# Single model evaluation configuration
+# Composer-based evaluation without lighteval
+
+model_name: dyna_160M_base
+load_path: s3://loop-llm/dyna/1__loop_sig__23nov25__nzlT91-ba3171.pt
+load_weights_only: true
+
+# Tokenizer configuration
+tokenizer:
+  name: "HuggingFaceTB/SmolLM2-1.7B"
+  kwargs:
+    padding_side: left
+
+# Model architecture configuration
+model:
+  execution_mode: transformer
+  d_model: 768
+  d_ffn: 3072
+  n_repeats: 1
+  n_heads: 12
+  d_head: 64
+  n_layers: 6
+  vocab_size: 50368
+  max_seq_len: 1024
+  n_expert_shared_attn: 0
+  n_expert_shared_ffn: 0
+  collect_reg_loss: false
+  enable_early_exit: false
+  norm_structure: pre
+  rescaling_method: complete_p
+  loop_normalization: false
+  repeat_residual: false
+  sample_iterations: false
+  loop_rope_theta_rebase: false
+  transformer_type: dyna
+  layer_type: simple
+  base_depth: 2
+  current_depth: 12
+  base_width: 256
+  current_width: 1024
+  cp_alpha: 1
+  sqrt_attention_scale: false
+  use_embedding_norm: false
+  init_sigma: 0.02
+
+# Evaluation configuration
+eval_config:
+  # Basic settings
+  seed: 42
+  run_name: ${model_name}_eval
+  
+  # Device and precision
+  device: cuda
+  precision: amp_bf16
+  
+  # Distributed settings
+  dist_timeout: 600
+  
+  # Sequence length
+  max_seq_len: 1024
+  
+  # Batch sizes
+  device_eval_batch_size: 8
+  
+  # ICL tasks (in-context learning tasks)
+  # Format: list of task configurations
+  # icl_tasks: []
+  # Example:
+  icl_tasks:
+    - label: hellaswag
+      dataset_uri: /nfs-share/pa511/code_bases/dyna_project/dyna/icl_evals/language_understanding/hellaswag.jsonl
+      num_fewshot: [0]
+      icl_task_type: multiple_choice
+  
+  # Eval loader (for custom eval datasets)
+  eval_loader: null
+  # Example:
+  # eval_loader:
+  #   name: eval
+  #   dataset:
+  #     local: /path/to/data
+  #     split: validation
+  
+  # Eval gauntlet (benchmark suite)
+  eval_gauntlet: null
+  # Example:
+  # eval_gauntlet: mmlu
+  
+  # Subset evaluation (for quick testing)
+  eval_subset_num_batches: -1  # -1 means use all batches
+  icl_subset_num_batches: null
+  
+  # Callbacks
+  callbacks: {}
+  # Example:
+  # callbacks:
+  #   speed_monitor:
+  #     window_size: 100
+  
+  # Loggers
+  loggers: {}
+  # Example:
+  # loggers:
+  #   wandb:
+  #     project: dyna-eval
+  #     entity: my-team
+  #   file:
+  #     filename: eval_log.txt
+  
+  # FSDP config (if using)
+  fsdp_config: null
+  
+  # Logging
+  python_log_level: info
+  log_config: true
+  
+  # Metadata
+  metadata: null
+

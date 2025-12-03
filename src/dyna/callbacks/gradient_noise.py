@@ -9,7 +9,6 @@ import io
 from PIL import Image
 import numpy as np
 import wandb
-from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from composer.core import Callback, State
@@ -58,7 +57,7 @@ class GradientNoiseMonitor(Callback):
         self,
         microbatch_size: int,
         log_interval: int = 1,
-        track_layers: Optional[List[str]] = None
+        track_layers: list[str] | None = None
     ):
         self.microbatch_size = microbatch_size
         self.log_interval = log_interval
@@ -70,7 +69,7 @@ class GradientNoiseMonitor(Callback):
         
     def reset_accumulation(self):
         """Reset accumulated gradient statistics."""
-        self.gradient_stats: Dict[str, List[Tuple[float, float, int]]] = defaultdict(list)
+        self.gradient_stats: dict[str, list[tuple[float, float, int]]] = defaultdict(list)
         self.current_batch_size = 0
         
     def _should_track_layer(self, name: str) -> bool:
@@ -176,7 +175,7 @@ class GradientNoiseMonitor(Callback):
         # Reset for next minibatch
         self.reset_accumulation()
     
-    def _create_and_log_plots(self, layer_data: Dict, global_data: Dict, logger: Logger, state: State):
+    def _create_and_log_plots(self, layer_data: dict, global_data: dict, logger: Logger, state: State):
         """Create matplotlib plots and log to wandb."""
         
         metrics_dict = {}

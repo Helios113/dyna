@@ -1,0 +1,120 @@
+# Multi-model evaluation configuration
+# This config demonstrates how to evaluate multiple models in a single run
+
+eval_config:
+  # Random seed
+  seed: 42
+  
+  # Device configuration
+  device: cuda  # or 'cpu'
+  precision: amp_bf16
+  
+  # Distributed training settings
+  dist_timeout: 600
+  
+  # Default tokenizer (can be overridden per model)
+  tokenizer: "gpt2"
+  tokenizer_kwargs: {}
+  
+  # Evaluation settings
+  max_seq_len: 1024
+  add_special_tokens: true
+  
+  # Tasks to evaluate (can be overridden per model)
+  tasks:
+    - lambada_openai
+    - hellaswag
+    - winogrande
+    - piqa
+  
+  # Lighteval settings
+  num_fewshot_seeds: 1
+  max_samples: null  # Set to integer to limit samples per task
+  save_details: true
+  
+  # Custom tasks
+  custom_tasks_file: null  # Path to custom tasks file
+  
+  # Output settings
+  output_dir: ./eval_results
+  run_name: multi_model_eval
+  
+  # Publishing (optional)
+  push_to_hub: false
+  public: false
+  
+  # Launcher type for parallel evaluation
+  launcher_type: none  # Options: none, accelerate, slurm, etc.
+  
+  # WandB logging (optional)
+  wandb:
+    enabled: false
+    project: dyna-evaluation
+    entity: null  # Your wandb entity
+
+# List of models to evaluate
+models:
+  # Model 1
+  - model_name: dyna_model_160M_checkpoint1
+    load_path: s3://bucket/path/to/checkpoint1.pt
+    load_weights_only: true
+    tokenizer: "gpt2"
+    max_seq_len: 1024
+    
+    # Model configuration
+    model:
+      d_model: 768
+      n_heads: 12
+      n_layers: 12
+      vocab_size: 50257
+      max_seq_len: 1024
+      transformer_type: "default"
+    
+    # Override tasks for this specific model (optional)
+    # tasks:
+    #   - lambada_openai
+  
+  # Model 2
+  - model_name: dyna_model_160M_checkpoint2
+    load_path: s3://bucket/path/to/checkpoint2.pt
+    load_weights_only: true
+    tokenizer: "gpt2"
+    max_seq_len: 1024
+    
+    model:
+      d_model: 768
+      n_heads: 12
+      n_layers: 12
+      vocab_size: 50257
+      max_seq_len: 1024
+      transformer_type: "default"
+  
+  # Model 3 - Different architecture
+  - model_name: dyna_model_360M
+    load_path: s3://bucket/path/to/checkpoint3.pt
+    load_weights_only: true
+    tokenizer: "gpt2"
+    max_seq_len: 2048
+    
+    model:
+      d_model: 1024
+      n_heads: 16
+      n_layers: 24
+      vocab_size: 50257
+      max_seq_len: 2048
+      transformer_type: "default"
+    
+    # Different tasks for larger model
+    tasks:
+      - lambada_openai
+      - hellaswag
+      - winogrande
+      - piqa
+      - arc_easy
+      - arc_challenge
+
+# Alternative: Single model evaluation
+# Just remove the 'models' list and put config at top level
+# model_name: single_model
+# load_path: s3://bucket/path/to/checkpoint.pt
+# ...

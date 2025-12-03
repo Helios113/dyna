@@ -45,7 +45,12 @@ class PassThroughTransformer(DynaPretrainedModel):
         # entropy calculation head
         self._temp_lm_head: Callable[[torch.Tensor], torch.Tensor] | None = None
 
-    def reset_parameters(self) -> None:
+    def reset_parameters(self, scale: float) -> None:
+        """Reset parameters for PassThroughTransformer.
+        
+        Args:
+            scale (float): Scale parameter for initialization (not used but required for compatibility).
+        """
         self._seq_len = []
         self._latent_vectors = []
         self._residual_magnitudes = []

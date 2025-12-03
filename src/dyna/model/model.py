@@ -19,12 +19,15 @@ from transformers import (
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
-from dyna.model.huggingface_eval_model import HuggingFaceEvalModel
+from composer.models.huggingface import HuggingFaceModel
 from dyna.config import (
     CROSS_ENTROPY_IGNORE_INDEX,
-    DEFAULT_CAUSAL_LM_TRAIN_METRICS,
     PROT_EMB_RESCALING_METHODS,
     DynaConfig,
+)
+from dyna.utils.builders import (
+    DEFAULT_CAUSAL_LM_EVAL_METRICS,
+    DEFAULT_CAUSAL_LM_TRAIN_METRICS,
 )
 from dyna.model.base import DynaPretrainedModel
 from dyna.model.pass_through import PassThroughTransformer
@@ -336,7 +339,35 @@ class DynaLM(DynaPretrainedModel):
             x = self.embedding_norm(x)
 
         return x, attention_mask, src_len_mask
+    def generate(
+        self,
+        input_ids: Int[Tensor, "batch seq"],
+        attention_mask: Bool[Tensor, "batch 1 seq seq"] | None = None,
+        max_new_tokens: int = 20,
+        **generate_kwargs: Any,
+    ) -> Int[Tensor, "batch gen_seq"]:
+        """Generate sequences using greedy decoding."""
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+        print("Generating with DynaLM...", flush=True)
+        generated = input_ids
 
+        for _ in range(max_new_tokens):
+            # Prepare attention mask
+            if attention_mask is None:
+                attn_mask = _generate_attention_mask(generated, self.eos_token_id)
+            else:
+                attn_mask = _condition_attention_mask(attention_mask)
+
+            # Forward pass
+            outputs = self.forward(
+                input_ids=generated, attention_mask=attn_mask
+            )
+            logits = outputs.logits  # [batch, seq, vocab_size]
+            next_token_logits = logits[:, -1, :]  # [batch, vocab_size]
+            next_tokens = torch.argmax(next_token_logits, dim=-1, keepdim=True)  # [batch, 1]
+            generated = torch.cat([generated, next_tokens], dim=-1)  # [batch, seq+1]
+        return generated
     @staticmethod
     def fsdp_wrap_fn(module: Module) -> bool:
         """Determines whether a module should be wrapped with FSDP."""
@@ -351,7 +382,7 @@ class DynaLM(DynaPretrainedModel):
         return isinstance(module, LayerModule)
 
 
-class ComposerDynaModel(HuggingFaceEvalModel):
+class ComposerDynaModel(HuggingFaceModel):
     """Composer-compatible language model wrapper."""
 
     model: DynaLM
@@ -375,13 +406,16 @@ class ComposerDynaModel(HuggingFaceEvalModel):
         train_metrics = [
             build_metric(metric, {}) for metric in DEFAULT_CAUSAL_LM_TRAIN_METRICS
         ]
+        eval_metrics = [
+            build_metric(metric, {}) for metric in DEFAULT_CAUSAL_LM_EVAL_METRICS
+        ]
 
         super().__init__(
             model=DynaLM(config, cast(int, tokenizer.eos_token_id)),
             tokenizer=tokenizer,
             use_logits=True,
             metrics=train_metrics,
-            eval_metrics=None,
+            eval_metrics=eval_metrics,
             shift_labels=config.shift_labels,
             allow_embedding_resizing=True,
         )

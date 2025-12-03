@@ -47,6 +47,9 @@ schedulers = Registry("schedulers")
 dataset_replication_validators = Registry("dataset_replication_validators")
 collators = Registry("collators")
 data_specs = Registry("data_specs")
+icl_datasets = Registry("icl_datasets")
+metrics = Registry("metrics")
+
 
 __all__ = [
     "Registry",
@@ -56,4 +59,5 @@ __all__ = [
     "dataset_replication_validators",
     "collators",
     "data_specs",
+    "icl_datasets",
 ]

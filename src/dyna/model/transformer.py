@@ -35,7 +35,7 @@ def calc_entropy(
     """
     # entropy = 0
     # for logits in chunks:
-    logits = chunks.detach().to("cpu")
+    logits = chunks.detach()
     probs = torch.softmax(logits / temperature, dim=-1)
     log_probs = torch.log(probs + 1e-8)
     return -torch.sum(probs * log_probs, dim=-1)
@@ -491,4 +491,4 @@ class DynaFormer(DynaPretrainedModel):
         if expert_sel[0] is not None:
             self._expert_sel[-1].append(expert_sel)
             
-        self._residual_magnitudes[-1].append(torch.norm(x.detach().to("cpu"), dim=-1))
+        self._residual_magnitudes[-1].append(torch.norm(x.detach(), dim=-1))

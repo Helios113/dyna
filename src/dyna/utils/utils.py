@@ -13,16 +13,15 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar, cast
 
+
 import catalogue
 import yaml
 from composer import DataSpec
 from composer.core import Callback
 from composer.optim.scheduler import ComposerScheduler
-from omegaconf import DictConfig, OmegaConf
+import omegaconf as om
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-
-import dyna.callbacks  # noqa: F401
-import dyna.schedulers  # noqa: F401
 
 from dyna.config import (
     DataConfig,
@@ -34,7 +33,6 @@ from dyna.config import (
     TrainerConfig,
 )
 from dyna.data.text_data import build_text_dataloader
-from dyna.utils.builders import build_callback, build_scheduler
 
 T = TypeVar("T")
 TypeBoundT = TypeVar("TypeBoundT", bound=type[Any])
@@ -198,27 +196,7 @@ def _add_index_prefix(name: str) -> str:
         return f"1__{name}"
 
 
-def get_callbacks(cfg: DictConfig | dict[str, Any] | None) -> list[Callback]:
-    if cfg is None:
-        return []
 
-    callbacks: list[Callback] = []
-    for name, callback_cfg in cfg.items():
-        if isinstance(callback_cfg, DictConfig):
-            callback_kwargs = cast(
-                dict[str, Any], OmegaConf.to_container(callback_cfg, resolve=True)
-            )
-        else:
-            callback_kwargs = cast(dict[str, Any], callback_cfg) if callback_cfg else {}
-
-        callbacks.append(
-            build_callback(
-                name=str(name),
-                kwargs=callback_kwargs,
-            )
-        )
-
-    return callbacks
 
 
 def load_and_concat_yamls(directory):
@@ -262,10 +240,7 @@ def get_data_loader(
     )
 
 
-def get_scheduler(cfg: DictConfig) -> ComposerScheduler:
-    cfg_dict = cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
-    scheduler_name = cfg_dict.pop("name")
-    return build_scheduler(name=scheduler_name, scheduler_config=cfg_dict)
+
 
 
 def check_duplicate_keys(cfg, value_map=None, exceptions=None, path=""):
@@ -635,11 +610,11 @@ def construct_from_registry(
         name (str): The name of the registered item
         registry (catalogue.Registry): The registry to fetch the item from
         partial_function (bool, optional): Whether to return a partial function for registered callables. Defaults to True.
-        pre_validation_function (Optional[Union[Callable[[Any], None], type]], optional): An optional validation function called
+        pre_validation_function (Callable[[Any], None] | type | None, optional): An optional validation function called
             before constructing the item to return. This should throw an exception if validation fails. Defaults to None.
-        post_validation_function (Optional[Callable[[Any], None]], optional): An optional validation function called after
+        post_validation_function (Callable[[Any], None] | None, optional): An optional validation function called after
             constructing the item to return. This should throw an exception if validation fails. Defaults to None.
-        kwargs (Optional[Dict[str, Any]]): Other relevant keyword arguments.
+        kwargs (dict[str, Any] | None): Other relevant keyword arguments.
 
     Raises:
         ValueError: If the validation functions failed or the registered item is invalid
@@ -684,3 +659,40 @@ def construct_from_registry(
 
     return constructed_item
 
+
+def to_dict_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
+    maybe_dict = to_container(cfg)
+    if isinstance(maybe_dict, dict):
+        return maybe_dict
+    else:
+        raise ValueError(f'Expected a dict-like type, got {type(maybe_dict)}')
+
+
+def to_list_container(
+    cfg: ListConfig | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    maybe_list = to_container(cfg)
+    if isinstance(maybe_list, list):
+        return maybe_list
+    else:
+        raise ValueError(f'Expected a list-like type, got {type(maybe_list)}')
+
+
+def to_container(
+    cfg: DictConfig | ListConfig | dict[str, Any] | list[dict[str, Any]] | None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Converts a DictConfig or ListConfig to a dict or list.
+
+    `omegaconf.to_container` does not handle nested DictConfig or ListConfig
+    objects, so this function is used to convert them to dicts or lists.
+    """
+    if isinstance(cfg, DictConfig):
+        ret = om.to_container(cfg, resolve=True)
+        assert isinstance(ret, dict)
+        return ret  # type: ignore (return type is correct and converting all keys to str would be unnecessarily costly)
+    elif isinstance(cfg, ListConfig):
+        ret = om.to_container(cfg, resolve=True)
+        assert isinstance(ret, list)
+        return ret  # type: ignore (see above)
+    else:
+        return cfg  # type: ignore (dicts and lists are already in the correct format)

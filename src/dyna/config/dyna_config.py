@@ -19,7 +19,7 @@ class DynaConfig(PretrainedConfig):
             **kwargs: Keyword arguments for configuration parameters.
         """
         super().__init__(**{"model_type": self.model_type})
-
+        self.model_name = kwargs.pop("model_name", "dyna-model")
         # Required parameters with defaults from model_config
         self.vocab_size = kwargs.pop("vocab_size", 49152)
         self.init_sigma = kwargs.pop("init_sigma", 0.02)

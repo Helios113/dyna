@@ -17,7 +17,7 @@ from dyna.callbacks.layer_usage_monitor import LayerUsageMonitor
 from dyna.callbacks.loop_number_callback import LoopNumberCallback
 from dyna.callbacks.lr_scale import LrScaleCallback
 from dyna.callbacks.residual_stream_mag_callback import ResidualMagnitudeCallback
-
+from dyna.callbacks.eval_gauntlet import EvalGauntlet
 __all__ = [
     "LayerUsageMonitor",
     "ShannonEntropyCallback",
@@ -28,6 +28,7 @@ __all__ = [
     "AbbieNumberCallback",
     "LrScaleCallback",
     "GradientNoiseScaleMonitor",
+    "EvalGauntlet"
 ]
 
 # Composer built-ins
@@ -36,6 +37,8 @@ callbacks.register("speed_monitor", SpeedMonitor)
 callbacks.register("memory_monitor", MemoryMonitor)
 callbacks.register("runtime_estimator", RuntimeEstimator)
 callbacks.register("optimizer_monitor", OptimizerMonitor)
+callbacks.register("eval_gauntlet", EvalGauntlet)
+
 
 
 callbacks.register(

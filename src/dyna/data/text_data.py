@@ -4,7 +4,7 @@
 
 import inspect
 from itertools import islice
-from typing import Any, Callable, Mapping, Optional, Sequence, Union, cast
+from typing import Any, Callable, Mapping, Sequence, cast
 
 import numpy as np
 import torch
@@ -99,29 +99,29 @@ class StreamingTextDataset(StreamingDataset):
         tokenizer: PreTrainedTokenizerBase,
         max_seq_len: int,
         token_encoding_type: str = 'int64',
-        streams: Optional[Sequence[Stream]] = None,
-        remote: Optional[str] = None,
-        local: Optional[str] = None,
-        split: Optional[str] = None,
+        streams: Sequence[Stream] | None = None,
+        remote: str | None = None,
+        local: str | None = None,
+        split: str | None = None,
         download_retry: int = 2,
         download_timeout: float = 60,
-        validate_hash: Optional[str] = None,
+        validate_hash: str | None = None,
         keep_zip: bool = False,
-        epoch_size: Optional[Union[int, str]] = None,
-        predownload: Optional[int] = None,
-        cache_limit: Optional[Union[int, str]] = None,
+        epoch_size: int | str | None = None,
+        predownload: int | None = None,
+        cache_limit: int | str | None = None,
         partition_algo: str = 'relaxed',
-        num_canonical_nodes: Optional[int] = None,
-        batch_size: Optional[int] = None,
+        num_canonical_nodes: int | None = None,
+        batch_size: int | None = None,
         shuffle: bool = False,
         shuffle_algo: str = 'py1e',
         shuffle_seed: int = 9176,
-        shuffle_block_size: Optional[int] = None,
+        shuffle_block_size: int | None = None,
         sampling_method: str = 'balanced',
         sampling_granularity: int = 1,
         batching_method: str = 'random',
         allow_unsafe_types: bool = False,
-        replication: Optional[int] = None,
+        replication: int | None = None,
         **kwargs: Any,
     ):
 
@@ -209,7 +209,7 @@ class StreamingTextDataset(StreamingDataset):
 
     # How to process a sample
     def __getitem__(self,
-                    idx: int) -> Union[dict[str, list[int]], torch.Tensor]:
+                    idx: int) -> dict[str, list[int]] | torch.Tensor:
         sample = super().__getitem__(idx)
         if 'text' in sample:
             token_sample = self._tokenize(sample)
@@ -228,8 +228,8 @@ class ConcatenatedSequenceCollatorWrapper:
     def __init__(
         self,
         base_collator: Callable,
-        eos_token_id: Optional[int] = None,
-        bos_token_id: Optional[int] = None,
+        eos_token_id: int | None = None,
+        bos_token_id: int | None = None,
     ):
         self.base_collator = base_collator
         if (eos_token_id is None) and (bos_token_id is None):
@@ -272,7 +272,7 @@ class ConcatenatedSequenceCollatorWrapper:
 
 
 def build_streams(
-    streams: Optional[dict[str, Any]] = None,
+    streams: dict[str, Any] | None = None,
 ):
     streams_dict = streams
     # build streams
@@ -283,8 +283,8 @@ def build_streams(
 
 
 def build_text_dataloader(
-    tokenizer: Optional[PreTrainedTokenizerBase],
-    device_batch_size: Union[int, float],
+    tokenizer: PreTrainedTokenizerBase | None,
+    device_batch_size: int | float,
     dataset: dict[str, Any],
     drop_last: bool,
     num_workers: int,

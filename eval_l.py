@@ -14,15 +14,9 @@ import torch
 from composer.utils import maybe_create_object_store_from_uri, parse_uri
 from composer.utils.checkpoint import download_checkpoint, safe_torch_load
 from lighteval.logging.evaluation_tracker import EvaluationTracker
-from lighteval.models.abstract_model import LightevalModel, ModelConfig
-from lighteval.models.model_output import ModelResponse
 from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 from lighteval.tasks import lighteval_task as lighteval_task_module
 from lighteval.tasks.prompt_manager import PromptManager
-from lighteval.tasks.requests import Doc, SamplingMethod
-from lighteval.utils.cache_management import SampleCache, cached
-from lighteval.models.utils import uses_chat_template
-from lighteval.utils.utils import EnvConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
@@ -32,7 +26,6 @@ from dyna.config import DynaConfig
 from dyna.model import ComposerDynaModel
 from dyna.utils import get_data_loader
 from dyna.utils.utils import load_and_concat_yamls
-DEFAULT_S3_ENDPOINT = "http://128.232.115.19:9000"
 DEFAULT_CONVERTED_DATASET_REVISION = "refs/convert/parquet"
 CONVERTED_DATASET_REVISION_ENV = "DYNA_DATASET_CONVERT_REVISION"
 DISABLE_CONVERTED_DATASET_FALLBACK_ENV = "DYNA_DISABLE_DATASET_CONVERT_FALLBACK"
@@ -467,7 +460,7 @@ def main(cfg: DictConfig):
     )
 
     # Load checkpoint if specified
-    checkpoint_path = cfg.eval_config.get("checkpoint_path")
+    checkpoint_path = cfg.eval_config.get("load_path")
     if checkpoint_path:
         log.info(f"Loading checkpoint from {checkpoint_path}")
         _ensure_s3_endpoint()
@@ -503,72 +496,20 @@ def main(cfg: DictConfig):
     # Configure eval helpers for the model
     max_seq_len = _resolve_max_seq_len(cfg, model_config)
     add_special_tokens = cfg.eval_config.get("add_special_tokens", True)
-    default_generation_size = cfg.eval_config.get("default_generation_size", 64)
     
     model.configure_eval_helpers(
         max_length=max_seq_len,
         add_special_tokens=add_special_tokens,
-        default_generation_size=default_generation_size,
     )
     log.info(
         f"Configured eval helpers: max_length={max_seq_len}, "
-        f"add_special_tokens={add_special_tokens}, "
-        f"default_generation_size={default_generation_size}"
+        f"add_special_tokens={add_special_tokens}"
     )
 
-    precision = cfg.eval_config.get("precision", "fp32")
-    perplexity_results: dict[str, float] | None = None
-    
-    
-    
-    # perplexity_results = None
-    # perplexity_cfg = cfg.eval_config.get("perplexity_loader") or cfg.eval_config.get("eval_loader")
-    # max_batches = None
-    # if isinstance(perplexity_cfg, DictConfig) and "max_batches" in perplexity_cfg:
-    #     max_batches = int(perplexity_cfg.max_batches)
-    # elif isinstance(perplexity_cfg, dict) and "max_batches" in perplexity_cfg:
-    #     max_batches = int(perplexity_cfg["max_batches"])
-
-    # eval_batch_size = int(cfg.eval_config.get("eval_batch_size", 1024))
-    # eval_microbatch_size = int(
-    #     cfg.eval_config.get("eval_microbatch_size", min(eval_batch_size, 32))
-    # )
-    # eval_microbatch_size = max(1, min(eval_microbatch_size, eval_batch_size))
-
-    # perplexity_loader = _build_perplexity_dataloader(
-    #     tokenizer=tokenizer,
-    #     loader_cfg=perplexity_cfg,
-    #     eval_batch_size=eval_batch_size,
-    # )
-    # if perplexity_loader is not None:
-    #     log.info(
-    #         "Running streaming perplexity evaluation (total batch=%d, microbatch=%d)",
-    #         eval_batch_size,
-    #         eval_microbatch_size,
-    #     )
-    #     try:
-    #         perplexity_results = run_perplexity_evaluation(
-    #             model=model,
-    #             tokenizer=tokenizer,
-    #             dataloader=perplexity_loader,
-    #             precision=precision,
-    #             microbatch_size=eval_microbatch_size,
-    #             max_batches=max_batches,
-    #         )
-    #         if perplexity_results:
-    #             log.info(
-    #                 "Perplexity eval complete | ppl=%.3f | loss=%.4f | token_acc=%.4f | tokens=%d | batches=%d",
-    #                 perplexity_results["perplexity"],
-    #                 perplexity_results["avg_nll"],
-    #                 perplexity_results["token_accuracy"],
-    #                 int(perplexity_results["num_tokens"]),
-    #                 int(perplexity_results["num_batches"]),
-    #             )
-    #     except Exception:  # noqa: BLE001
-    #         log.exception("Perplexity evaluation failed")
-
+    # Get task names and prepare for evaluation
     task_names = _normalize_task_names(cfg.eval_config.get("tasks"))
     tasks_argument = ",".join(task_names)
+    log.info(f"Running evaluation on tasks: {tasks_argument}")
 
     # Setup evaluation tracker (for logging results)
     output_dir = cfg.eval_config.get("output_dir", "./lighteval_results")
@@ -580,6 +521,7 @@ def main(cfg: DictConfig):
         push_to_hub=cfg.eval_config.get("push_to_hub", False),
         public=cfg.eval_config.get("public", False),
     )
+    
     # Create pipeline parameters
     custom_tasks_file = cfg.eval_config.get("custom_tasks_file")
     custom_tasks_dir = os.path.dirname(custom_tasks_file) if custom_tasks_file else None
@@ -591,46 +533,6 @@ def main(cfg: DictConfig):
         custom_tasks_directory=custom_tasks_dir,
     )
 
-    # Attach LightEval interfaces with helper functions
-    env_config = EnvConfig(token=None, cache_dir=None)
-    
-    def tok_encode_pair(context: str, continuations: list[str], pairwise: bool = True) -> tuple[list[list[int]], list[list[int]]]:
-        """Encode context-continuation pairs for loglikelihood evaluation."""
-        context_encodings = []
-        continuation_encodings = []
-        
-        for continuation in continuations:
-            # Encode context
-            ctx_tokens = tokenizer.encode(context, add_special_tokens=model.add_special_tokens)
-            # Encode continuation
-            cont_tokens = tokenizer.encode(continuation, add_special_tokens=False)
-            
-            context_encodings.append(ctx_tokens)
-            continuation_encodings.append(cont_tokens)
-        
-        return context_encodings, continuation_encodings
-    
-    def tok_encode(text: str, add_special_tokens: bool = True) -> list[int]:
-        """Encode text to tokens."""
-        return tokenizer.encode(text, add_special_tokens=add_special_tokens)
-    
-    # Create prompt manager for the model
-    from lighteval.tasks.registry import Registry, taskinfo_selector
-    registry = Registry(cache_dir=env_config.cache_dir)
-    task_dict = registry.get_task_dict(tasks_argument.split(","))
-    prompt_manager = PromptManager(
-        tokenizer=tokenizer,
-        task_dict=task_dict,
-        truncate_few_shots=True,
-        max_length=max_seq_len,
-    )
-    
-    model.attach_lighteval_interfaces(
-        prompt_manager=prompt_manager,
-        tok_encode_pair=tok_encode_pair,
-        tok_encode=tok_encode,
-    )
-    log.info("Attached LightEval interfaces to model")
 
     # Create and run pipeline
     log.info("Creating evaluation pipeline")
@@ -643,9 +545,6 @@ def main(cfg: DictConfig):
 
     log.info("Running evaluation...")
     results = pipeline.evaluate()
-
-    if perplexity_results is not None:
-        results["perplexity_eval"] = perplexity_results
 
     # Log results
     log.info("Evaluation complete!")

@@ -18,12 +18,12 @@ from dyna.model import ComposerDynaModel
 from dyna.utils import (
     build_full_concrete_config,
     create_param_groups,
-    get_callbacks,
     get_current_git_short_hash,
     get_data_loader,
-    get_scheduler,
+    
     make_wandb_run_name,
 )
+from dyna.utils.builders import get_scheduler, get_callbacks
 
 
 def safe_clean_stale_shared_memory():

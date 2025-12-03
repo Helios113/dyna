@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 SUPPORTED_MDS_ENCODING_TYPES = [
     "int8",
@@ -16,9 +15,9 @@ SUPPORTED_MDS_ENCODING_TYPES = [
 
 
 def stream_remote_local_validate(
-    remote: Optional[str],
-    local: Optional[str],
-    split: Optional[str],
+    remote: str | None,
+    local: str | None,
+    split: str | None,
 ) -> None:
     """Ensure local dataset directories exist when streaming without remote."""
 

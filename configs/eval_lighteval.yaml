@@ -1,98 +1,72 @@
-# Lighteval Evaluation Configuration for Dyna Models
-# This configuration file is used with eval_l.py script
+# Default evaluation configuration for the 400M transformer model.
+# Combines Lighteval benchmarks with streaming perplexity evaluation.
 #
 # Usage:
-#   python eval_l.py                                          # Uses this default config
-#   python eval_l.py --config-name=eval_lighteval            # Explicitly use this config
-#   python eval_l.py eval_config.device=cpu                  # Override device parameter
-#   python eval_l.py eval_config.load_path=/path/to/ckpt.pt  # Load checkpoint
-#
-# Supported tasks include:
-#   - mmlu (with variants like mmlu:5 for 5-shot)
-#   - hellaswag
-#   - arc_easy, arc_challenge
-#   - truthfulqa_mc
-#   - gsm8k
-#   - piqa
-#   - winogrande
-#   - lambada_openai
-#   - and many more from the Lighteval task registry
+#   python eval_l.py --config-name=eval_lighteval_400M \
+#       eval_config.load_path=/path/to/ckpt.pt
 
-# Evaluation Configuration
+# Lighteval + perplexity settings
 eval_config:
-  # Basic settings
   seed: 42
-  precision: amp_bf16  # Options: fp32, fp16, amp_bf16
-  device: gpu          # Options: gpu, cpu
-  run_name: dyna_lighteval
+  precision: amp_bf16
+  device: gpu
+  run_name: transformer_400M_eval
+  batch_size: 8                # Used by Lighteval tasks
+  eval_batch_size: 512         # Total batch size for streaming perplexity
+  eval_microbatch_size: 32     # Per-forward-pass microbatch for perplexity
+  max_samples: null
+  load_path: s3://loop-llm/dyna/1__re_create_160M__27nov25__GwwXUl-ba3171.pt
 
-  # Model checkpoint (optional)
-  # checkpoint_path: /path/to/checkpoint.pt
-  # checkpoint_path: s3://bucket-name/path/to/checkpoint.pt
+  # Optional checkpoint to load
+  # load_path: s3://loop-llm/dyna/transformer_400M/latest.pt
 
-  # Tokenizer settings
+  # Tokenizer parameters
   tokenizer: HuggingFaceTB/SmolLM2-1.7B
   tokenizer_kwargs:
-    trust_remote_code: false
+    padding_side: left
     use_fast: true
 
-  # Batch sizes
-  batch_size: 8              # Lighteval task batch size
-  eval_batch_size: 512       # Total batch size for streaming perplexity
-  eval_microbatch_size: 32   # Microbatch used per forward pass during perplexity
-
-  # Generation settings
-  max_seq_len: 2048          # Maximum sequence length for evaluation
-  add_special_tokens: true   # Whether to add special tokens during tokenization
-  default_generation_size: 64  # Default number of tokens to generate
-
-  # Tasks to evaluate
-  # Format: "task_name" or "task_name:num_shots"
-  # Examples:
-  #   - "mmlu" - MMLU with default shots
-  #   - "mmlu:5" - MMLU with 5-shot
-  #   - "hellaswag:10" - HellaSwag with 10-shot
+  # Lighteval task list (edit as needed)
   tasks:
-    - lambada_openai
+    - lambada:standard
     - piqa
     - hellaswag
     - winogrande
-    - arc_easy
-    - arc_challenge
+    - arc:easy
+    - arc:challenge
 
-  # Optional: Path to custom tasks file
-  # custom_tasks_file: /path/to/custom_tasks.py
+  # Streaming perplexity evaluation config (uses training stream mix)
+  eval_loader:
+    name: text
+    dataset:
+      streams_path: ${hydra:runtime.cwd}/configs/execute_config/streams
+      max_seq_len: ${model_config.max_seq_len}
+      shuffle: false
+      shuffle_seed: ${eval_config.seed}
+    drop_last: false
+    num_workers: 4
+    pin_memory: true
+    prefetch_factor: 2
+    persistent_workers: false
+    timeout: 0
+    # max_batches: 200  # Uncomment to cap perplexity runtime
 
-  # Output settings
-  output_dir: ./lighteval_results
-  save_details: true  # Save detailed per-sample results
-
-  # Hub settings (for pushing results to HuggingFace Hub)
+  # Output logging
+  output_dir: ./lighteval_transformer_400M
+  save_details: true
   push_to_hub: false
   public: false
-  # hub_repo_id: username/repo-name  # Required if push_to_hub is true
-
-  # Parallelism settings (for multi-GPU evaluation)
   parallelism:
-    dp_size: 1  # Data parallelism
-    pp_size: 1  # Pipeline parallelism
-    tp_size: 1  # Tensor parallelism
-
-  # Pipeline parameters
+    dp_size: 1
+    pp_size: 1
+    tp_size: 1
   launcher_type: default
-  override_batch_size: null  # Override batch size for specific needs
-  max_samples: null          # Limit number of samples (useful for debugging)
-  num_fewshot_seeds: 1       # Number of different fewshot seeds to try
-
-  # Weights & Biases logging (optional)
+  override_batch_size: null
+  num_fewshot_seeds: 1
   wandb:
     enabled: false
-    project: dyna-lighteval
-    entity: null  # Your wandb entity/team name
-    tags: []
 
-# Model Configuration
-# This should match your model architecture
+# Model definition copied from configs/transformer_400M.yaml
 model_config:
   execution_mode: transformer
   d_model: 768
@@ -101,25 +75,25 @@ model_config:
   n_heads: 12
   d_head: 64
   n_layers: 12
-  vocab_size: 49152
-  max_seq_len: 2048
+  vocab_size: 50368
+  max_seq_len: 1024
   n_expert_shared_attn: 0
   n_expert_shared_ffn: 0
   collect_reg_loss: false
-
-  # Additional model settings
-  attn_config:
-    attn_impl: torch  # Options: torch, flash, triton
-    alibi: false
-    rope: true
-    rope_theta: 10000
-
-  # Initialization settings
-  init_config:
-    name: kaiming_normal_
-    fan_mode: fan_in
-    init_nonlinearity: relu
-
-  # Normalization
-  norm_type: layernorm
-  no_bias: false
+  enable_early_exit: false
+  norm_structure: pre
+  rescaling_method: complete_p
+  loop_normalization: false
+  repeat_residual: false
+  sample_iterations: false
+  loop_rope_theta_rebase: false
+  transformer_type: dyna
+  layer_type: simple
+  base_depth: 2
+  current_depth: 12
+  base_width: 256
+  current_width: 1024
+  cp_alpha: 1
+  sqrt_attention_scale: false
+  use_embedding_norm: false
+  init_sigma: 0.02
