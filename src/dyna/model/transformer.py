@@ -97,6 +97,22 @@ class DynaFormer(DynaPretrainedModel):
 
         self._construct_layers(config)
         # self.gate = torch.nn.Linear(config.d_model, 1)
+        
+        self.gate_linear = torch.nn.Linear(config.d_model, config.d_model)
+        
+        
+        # self.A = torch.nn.Linear(config.d_model, config.d_model)
+        # self.B = torch.nn.Linear(config.d_model, config.d_model)
+        # self.C = torch.nn.Linear(config.d_model, config.d_model)
+        
+        
+        # self.A = torch.nn.Parameter(torch.randn(config.d_model, config.d_model, 4))
+        # self.B = torch.nn.Parameter(torch.randn(config.d_model, config.d_model))
+        # self.C = torch.nn.Parameter(torch.randn(config.d_model, config.d_model))
+        
+        
+        # self.B = torch.nn.Linear(config.d_model, config.d_model)
+        # self.C = torch.nn.Linear(config.d_model, config.d_model)
         # self.c_proj = torch.nn.Linear(config.d_model, config.d_model)
         # Use the the inint block length for this value
 
@@ -228,8 +244,6 @@ class DynaFormer(DynaPretrainedModel):
         e: Float[Tensor, "batch seq d_model"] | None = None,
         input_ids: Int[Tensor, "batch seq"] | None = None,
     ) -> tuple[Float[Tensor, "batch seq d_model"], Float[Tensor, "batch seq 1"] | None]:
-        # logging data containers
-        # !!! if we provide and e, we expect that x is zeros
 
         self._expert_sel.append([])
         self._exit_logits.append([])
@@ -328,8 +342,15 @@ class DynaFormer(DynaPretrainedModel):
         for i in range(self.active_repeats):
             if self.non_lin:
                 x = self.non_lin_fn(x)
-            # ht = x
-
+            
+            ############ SSM IDEA1 + Gate
+            ht = x
+            
+            ############ SSM IDEA2
+            # if i == 0:
+            #     ht = torch.zeros_like(x)
+                
+            # print(f"total_depth: {self.n_layers * self.active_repeats}", flush=True)
             for layer in self.body_layers:
                 x_out, expert_sel, saturation_event, layer_index = layer(
                     x=x,
@@ -340,6 +361,7 @@ class DynaFormer(DynaPretrainedModel):
                     sequence_length=sequence_length,
                     continue_mask=continue_mask,
                     total_depth=self.n_layers * self.active_repeats,
+                    # total_depth=None,
                 )
                 x, continue_mask, continue_processing, energy_per_sample = (
                     self._apply_early_exit(
@@ -357,7 +379,27 @@ class DynaFormer(DynaPretrainedModel):
 
             # g = torch.sigmoid(self.gate(ht))
             # x = g * ht + (1 - g) * x
-            # x = self.c_proj(x)
+            # # x = self.c_proj(x)
+            
+            x = self.gate_linear(ht) + x
+            
+            
+            ############ SSM IDEA1
+            # x = self.A(ht) + (self.B(x) * x)
+            # x = self.C(ht)
+            
+            
+            ############ SSM IDEA2
+            # ht = self.A(ht) + (self.B(x) * x)
+            # x = self.C(ht)
+            
+            
+            ############ SSM IDEA3
+            # ht = torch.einsum("bldf,ddf->bldf", ht, self.A) + (torch.einsum("bld,dg->blg", x, self.B) * x.unsqueeze(-1))
+            # x = torch.einsum("blg,gd->bld", ht, self.C)
+            # ht = self.A(ht) + (self.B(x) * x)
+            # x = self.C(ht)
+            
 
             if self.loop_normalization:
                 x = self.loop_norm(x)

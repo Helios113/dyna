@@ -151,14 +151,16 @@ def build_evaluators(
 ) -> tuple[list[Evaluator], list[str], EvalGauntlet | None]:
 
     evaluators = []
+    logger_keys = []
+    
     if eval_loader_config is not None:
-        evaluators = build_eval_loaders(
+        evaluators,logger_keys_eval = build_eval_loaders(
             eval_loader_config,
             tokenizer,
             device_eval_batch_size,
         )
+        logger_keys.extend(logger_keys_eval)
 
-    logger_keys = []
     eval_gauntlet_callback = None
     if icl_tasks_config is not None:
         if tokenizer is None:
@@ -168,7 +170,7 @@ def build_evaluators(
                 'device_eval_batch_size should be an int for icl tasks.',
             )
 
-        icl_evaluators, logger_keys, eval_gauntlet_callback = build_icl_data_and_gauntlet(
+        icl_evaluators, logger_keys_icl, eval_gauntlet_callback = build_icl_data_and_gauntlet(
             icl_tasks_config,
             eval_gauntlet_config,
             tokenizer,
@@ -177,6 +179,7 @@ def build_evaluators(
             icl_subset_num_batches,
         )
         evaluators.extend(icl_evaluators)
+        logger_keys.extend(logger_keys_icl)
 
     return evaluators, logger_keys, eval_gauntlet_callback
 
@@ -214,7 +217,7 @@ def build_eval_loaders(
             device_eval_microbatch_size=device_eval_batch_size,
         )
         evaluators.append(eval_loader)
-    return evaluators
+    return evaluators, ["eval/LanguagePerplexity", "eval/MaskedAccuracy"]
 
 
 def add_metrics_to_eval_loaders(
@@ -285,6 +288,7 @@ def build_dataloader(
             that the dataloader will produce.
     """
     name = cfg.pop('name')
+    print("LOOK HERE",name, flush=True)
     kwargs: dict[str, Any] = {
         **cfg,
         'tokenizer': tokenizer,
@@ -456,8 +460,6 @@ def build_icl_evaluators(
                         subset_num_batches=icl_subset_num_batches,
                     ),
                 )
-    print("Logger keys:", logger_keys, flush=True)
-    print("Evaluators:", evaluators, flush=True)
     return evaluators, logger_keys
 
 def get_icl_task_dataloader(

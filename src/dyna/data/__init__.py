@@ -13,7 +13,8 @@ from dyna.registry import (
     collators,
     data_specs,
     dataset_replication_validators,
-    icl_datasets
+    icl_datasets,
+    dataloaders
 )
 from .icl_dataset import (
     InContextLearningGenerationTaskWithAnswersDataset,
@@ -45,7 +46,7 @@ icl_datasets.register(
     'generation_task_with_answers',
     func=InContextLearningGenerationTaskWithAnswersDataset,
 )
-
+dataloaders.register('text', func=build_text_dataloader)
 __all__ = [
     "ConcatenatedSequenceCollatorWrapper",
     "LossGeneratingTokensCollatorWrapper",

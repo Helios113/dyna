@@ -11,7 +11,7 @@ execute_config:
         execution_mode: transformer
         d_model: 768
         d_ffn: 3072
-        n_repeats: 2
+        n_repeats: 3
         n_heads: 12
         d_head: 64
         n_layers: 6
@@ -25,7 +25,7 @@ execute_config:
         rescaling_method: complete_p_dyn
         loop_normalization: False
         repeat_residual: False
-        sample_iterations: False
+        sample_iterations: True
         loop_rope_theta_rebase: False
         transformer_type: dyna
         layer_type: simple
@@ -43,10 +43,10 @@ execute_config:
         cooldown: "634ba"
         device_train_batch_size: 1024
     trainer_config:
-        run_name: "rescale_c_proj"
+        run_name: "SSM_with_C"
         max_duration: ${train.max_duration}
         train_dataloader_label: "train"
-        device_train_microbatch_size: 32
+        device_train_microbatch_size: auto
         precision: "amp_bf16"
         device: "gpu"
         save_folder: "s3://loop-llm/dyna/"

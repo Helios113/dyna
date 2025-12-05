@@ -83,7 +83,7 @@ class LayerModule(Module, ABC):
         self.current_width = config.current_width
         self.loop_hyper_params = config.loop_hyper_params
         self.cp_alpha = config.cp_alpha
-        self.target_residual_magnitude = torch.nn.Parameter(torch.tensor(1.0))
+        # self.target_residual_magnitude = torch.nn.Parameter(torch.tensor(1.0))
 
     def update_inv_freq(self, base: int):
         self.attention.update_inv_freq(base)

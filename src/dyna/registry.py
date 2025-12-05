@@ -49,6 +49,8 @@ collators = Registry("collators")
 data_specs = Registry("data_specs")
 icl_datasets = Registry("icl_datasets")
 metrics = Registry("metrics")
+dataloaders = Registry("dataloaders")
+
 
 
 __all__ = [
@@ -60,4 +62,5 @@ __all__ = [
     "collators",
     "data_specs",
     "icl_datasets",
+    "dataloaders"
 ]

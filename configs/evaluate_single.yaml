@@ -2,7 +2,7 @@
 # Composer-based evaluation without lighteval
 
 model_name: dyna_160M_base
-load_path: s3://loop-llm/dyna/1__loop_sig__23nov25__nzlT91-ba3171.pt
+load_path: s3://loop-llm/dyna/1__gating__27nov25__v5Vi6G-ba3100.pt
 load_weights_only: true
 
 # Tokenizer configuration
@@ -16,7 +16,7 @@ model:
   execution_mode: transformer
   d_model: 768
   d_ffn: 3072
-  n_repeats: 1
+  n_repeats: 2
   n_heads: 12
   d_head: 64
   n_layers: 6
@@ -28,7 +28,7 @@ model:
   enable_early_exit: false
   norm_structure: pre
   rescaling_method: complete_p
-  loop_normalization: false
+  loop_normalization: False
   repeat_residual: false
   sample_iterations: false
   loop_rope_theta_rebase: false
@@ -37,7 +37,7 @@ model:
   base_depth: 2
   current_depth: 12
   base_width: 256
-  current_width: 1024
+  current_width: 768
   cp_alpha: 1
   sqrt_attention_scale: false
   use_embedding_norm: false
@@ -66,38 +66,30 @@ eval_config:
   # Format: list of task configurations
   # icl_tasks: []
   # Example:
-  icl_tasks:
-    - label: hellaswag
-      dataset_uri: /nfs-share/pa511/code_bases/dyna_project/dyna/icl_evals/language_understanding/hellaswag.jsonl
-      num_fewshot: [0]
-      icl_task_type: multiple_choice
+  # icl_tasks:
+  #   - label: hellaswag
+  #     dataset_uri: /nfs-share/pa511/code_bases/dyna_project/dyna/icl_evals/language_understanding/hellaswag.jsonl
+  #     num_fewshot: [0]
+  #     icl_task_type: multiple_choice
   
   # Eval loader (for custom eval datasets)
-  eval_loader: null
-  # Example:
-  # eval_loader:
-  #   name: eval
-  #   dataset:
-  #     local: /path/to/data
-  #     split: validation
+  eval_loader: 
+    path: "/nfs-share/pa511/code_bases/dyna_project/dyna/configs/execute_config/streams_fastest"
+    dataset:
+        max_seq_len: ${eval_config.max_seq_len}
+    num_workers: 8
   
-  # Eval gauntlet (benchmark suite)
-  eval_gauntlet: null
-  # Example:
-  # eval_gauntlet: mmlu
+  # # Eval gauntlet (benchmark suite)
+  # eval_gauntlet: null
+  # # Example:
+  # # eval_gauntlet: mmlu
   
   # Subset evaluation (for quick testing)
-  eval_subset_num_batches: -1  # -1 means use all batches
-  icl_subset_num_batches: null
+  eval_subset_num_batches: 128  
+  icl_subset_num_batches: -1
   
   # Callbacks
   callbacks: {}
-  # Example:
-  # callbacks:
-  #   speed_monitor:
-  #     window_size: 100
-  
-  # Loggers
   loggers: {}
   # Example:
   # loggers:
